@@ -66,7 +66,13 @@ Module EVM_opcode.
     | GAS
     | JUMPI. (* This is implemented with a different semantics!! It does not really jump. We need it to handle blocks that end with JUMPI but their corresponding optimized one ends with JMP *)
 
+    Definition eq_dec : forall (a b : t), {a = b} + {a <> b}.
+      Proof. decide equality. Defined.
 
+    Definition eqb (a b : t) : bool :=
+      if eq_dec a b then true else false.
+
+    (*
     Definition eqb (a b: EVM_opcode.t) : bool :=
         match a,b with
         | ADD,ADD => true
@@ -119,54 +125,26 @@ Module EVM_opcode.
         | JUMPI, JUMPI => true
         | _,_ => false
         end.
-
-    (* Lemma eqb_stack_op_instr_eq:
-    forall (a b: stack_op_instr),
-        eqb_stack_op_instr a b = true -> a = b.
-    Proof.
-    intros a b H.
-    unfold eqb_stack_op_instr in H. 
-    destruct a; destruct b; try reflexivity || discriminate.
-    Qed.
-
-    Definition stack_op_eq_dec : forall (a b : stack_op_instr), { a = b } + { a <> b }.
-    Proof.
-    decide equality.
-    Defined.
     *)
 End EVM_opcode.
 
-(*
+
 Module Type DIALECT.
-  Parameter value_t : Set.
-  Parameter opcode_t : Set.
-End DIALECT.
-*)
-
-(*
-Class Dialect : Type :=
-  { value_t : Set
-  ; opcode_t : Set
-  }.
-
-Instance EVMDialect : Dialect :=
-  {| value_t := U256.t
-   ; opcode_t :=  EVM_opcode.t |}.
-*)
-
-(*
-Module EVMDialect.
-  Definition value_t := U256.t.
-  Definition opcode_t := EVM_opcode.t.
-End EVMDialect.
-*)
-
-Module Type Dialect.
   Parameter value_t : Type.
   Parameter opcode_t : Type.
-End Dialect.
+  Parameter is_true_value: value_t -> bool.
+  Parameter is_false_value: value_t -> bool.
+  Parameter equal_values: value_t -> value_t -> bool.
+End DIALECT.
 
-Module EVMDialect <: Dialect.
+
+Module EVMDialect <: DIALECT.
   Definition value_t := U256.t.
   Definition opcode_t := EVM_opcode.t.
+  Definition is_true_value (v: value_t) : bool :=
+    v =? 0.
+  Definition is_false_value (v: value_t) : bool :=
+    negb (is_true_value v).
+  Definition equal_values (v1 v2: value_t) : bool :=
+    v1 =? v2.
 End EVMDialect.
