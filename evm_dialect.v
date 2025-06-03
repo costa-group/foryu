@@ -135,3 +135,38 @@ Module EVM_opcode.
     Defined.
     *)
 End EVM_opcode.
+
+(*
+Module Type DIALECT.
+  Parameter value_t : Set.
+  Parameter opcode_t : Set.
+End DIALECT.
+*)
+
+(*
+Class Dialect : Type :=
+  { value_t : Set
+  ; opcode_t : Set
+  }.
+
+Instance EVMDialect : Dialect :=
+  {| value_t := U256.t
+   ; opcode_t :=  EVM_opcode.t |}.
+*)
+
+(*
+Module EVMDialect.
+  Definition value_t := U256.t.
+  Definition opcode_t := EVM_opcode.t.
+End EVMDialect.
+*)
+
+Module Type Dialect.
+  Parameter value_t : Type.
+  Parameter opcode_t : Type.
+End Dialect.
+
+Module EVMDialect <: Dialect.
+  Definition value_t := U256.t.
+  Definition opcode_t := EVM_opcode.t.
+End EVMDialect.

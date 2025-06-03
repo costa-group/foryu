@@ -63,12 +63,12 @@ Module PhiInfo.
 End PhiInfo.
 
 
-Module Instruction.
-  (* An instruction is a pair of a block ID and a YUL variable. *)
-  Record t : Set := {
-    input : list (YULVariable.t + U256.t); (* Either a variable or a value *)
+Module Instruction (D: Dialect).
+(* An instruction is a pair of a block ID and a YUL variable. *)
+  Record t : Type := {
+    input : list (YULVariable.t + D.value_t); (* Either a variable or a value *)
     output : list YULVariable.t; (* Output variables *)
-    op : FunctionName.t + EVM_opcode.t;
+    op : FunctionName.t + D.opcode_t;
   }.
 
   Lemma eq_split: forall i1 i2 : Instruction.t, 
@@ -91,6 +91,15 @@ Module Instruction.
 End Instruction.
 (* ____TO_SAMIR____ How can we parameterize Instructions with the dialect ?*)
 
+Module EVMInstruction := Instruction(EVMDialect). 
+
+Definition test : EVMInstruction.t :=
+  {| EVMInstruction.input := nil;
+     EVMInstruction.output := nil;
+     EVMInstruction.op := inr EVM_opcode.ADD |}.
+
+Check test.
+
 (*
 How to access the entries of an Instruction i of type Instruction.t? 
 - i.(Instruction.input) to access the input
@@ -99,13 +108,13 @@ How to access the entries of an Instruction i of type Instruction.t?
 *)
 
  
-Module Block.
+Module Block (D: Dialect).
   (* Block of code of CFG-YUL *)
   Record t : Set := {
     bid : BlockID.t;
     phi_function : PhiInfo.t;
     exit_info : ExitInfo.t;
-    instructions : list Instruction.t;
+    instructions : list Instruction(D);
   }.
 End Block.
 
