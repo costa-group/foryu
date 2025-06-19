@@ -23,7 +23,10 @@ End BlockID.
 Module YULVariable.
   (* YUL variables are represented as natural numbers. *)
   Definition t := nat.
-End YULVariable. 
+
+  Definition eqb (v1 v2 : t) : bool :=
+    Nat.eqb v1 v2.
+End YULVariable.
 
 
 Module FunctionName.

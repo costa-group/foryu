@@ -1,5 +1,8 @@
 -R . FORYU
 
+dialect.v
 evm_dialect.v
 program.v
 state.v
+
+semantics.v
