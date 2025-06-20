@@ -207,6 +207,7 @@ Module EVMDialect <: DIALECT.
   Definition opcode_t := EVM_opcode.t.
   Definition dialect_state := EVMState.t.
 
+  Definition default_value : value_t := 0.
   Definition is_true_value (v: value_t) : bool :=
     v =? 0.
   Definition is_false_value (v: value_t) : bool :=
@@ -219,4 +220,7 @@ Module EVMDialect <: DIALECT.
 
   Definition empty_dialect_state : dialect_state :=
     EVMState.empty.
+
+  Definition revert_state (old_state new_state: dialect_state) : dialect_state :=
+    old_state.
 End EVMDialect.

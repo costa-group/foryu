@@ -50,6 +50,7 @@ End ExitInfo.
 
 
 Module YULVariableMap.
+  (* Map between YUL variables to apply renamings in phi functions *)
   Definition t := YULVariable.t -> YULVariable.t.
   
   (* The empty map is the identity function. *)
@@ -115,7 +116,8 @@ End Block.
 
 Module Function (D: DIALECT).
   Module BlockD := Block(D). (* Required to access Block(D) *)
-  (* A function is a collection of blocks, an entry block ID, and a name. *)
+  
+    (* A function is a collection of blocks, an entry block ID, and a name. *)
   Record t : Type := {
     name : FunctionName.t;
     arguments : list YULVariable.t; (* Input parameters *)
@@ -123,17 +125,39 @@ Module Function (D: DIALECT).
     blocks : list BlockD.t; (* List of blocks *)
     entry_block_id : BlockID.t; (* The ID of the entry block. *)
   }.
+
+  Definition get_block (f: t) (bid: BlockID.t) : option BlockD.t :=
+    match List.find (fun b => Nat.eqb b.(BlockD.bid) bid) f.(blocks) with
+    | Some block => Some block
+    | None => None
+    end.
 End Function.
 
 
 Module SmartContract (D: DIALECT).
   Module FunctionD := Function(D). (* Required to access Function(D) *)
+  Module BlockD := FunctionD.BlockD.
+  
   (* A smart contract is a collection of functions and a main function. *)
   Record t : Type := {
     name : string; (* Name of the smart contract *)
     functions : list FunctionD.t; (* List of functions in the smart contract *)
     main: FunctionName.t; (* The main function of the smart contract *)
   }.
+
+  
+  Definition get_function (sc: t) (fname: FunctionName.t) : option FunctionD.t :=
+    match List.find (fun f => FunctionName.eqb f.(FunctionD.name) fname) sc.(functions) with
+    | Some func => Some func
+    | None => None
+    end.
+
+  Definition get_block (sc: t) (fname: FunctionName.t) (bid: BlockID.t) : option BlockD.t :=
+    match get_function sc fname with
+    | Some func => FunctionD.get_block func bid
+    | None => None
+    end.
+  
 End SmartContract.
 
 
