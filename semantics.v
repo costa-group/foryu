@@ -2,6 +2,12 @@ Require Export FORYU.state.
 Require Export FORYU.program.
 Open Scope string_scope.
 
+(* 
+** TODO: handle phi-function information **
+- both in handle_block_finish and execute call (define function part)
+- Create function to create/adapt variable assignment with phi-info
+*)
+
 
 Module SmallStep (D: DIALECT).
     Module StateD := State(D).
