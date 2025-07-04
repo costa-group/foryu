@@ -21,7 +21,7 @@ Module Type DIALECT.
   Parameter is_false_value: value_t -> bool.
   Parameter equal_values: value_t -> value_t -> bool.
 
-  Parameter execute_op_code : dialect_state -> opcode_t -> list (value_t) -> (dialect_state * Status.t).
+  Parameter execute_op_code : dialect_state -> opcode_t -> list (value_t) -> (list value_t * dialect_state * Status.t).
   Parameter empty_dialect_state : dialect_state.
 
   Parameter revert_state : dialect_state -> dialect_state -> dialect_state.

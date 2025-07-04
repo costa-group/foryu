@@ -20,6 +20,8 @@ Module VariableAssignment(D: DIALECT).
   Definition get_all (assignments : t) (vars : list YULVariable.t) : list D.value_t :=
     List.map (fun v => assignments v) vars.
 
+  (* Takes a list of variables and a list of values and updates the assignment. If the list have 
+     different lengths, returns None  *)
   Fixpoint assign_all (assignments : t) (vars : list YULVariable.t) (vals : list D.value_t) : option t :=
     match vars, vals with
     | nil, nil => Some assignments
@@ -38,15 +40,28 @@ End VariableAssignment.
 Module StackFrame(D: DIALECT).
   (* Stack frame for a function call *)
   Module VariableAssignmentD := VariableAssignment(D).
-  Module BlockD := Block(D).
+  Module SmartContractD := SmartContract(D).
+  
   
   Record t : Type := {
     function_name : FunctionName.t;
     variable_assignments : VariableAssignmentD.t;
-    curr_block : BlockD.t; (* current block in execution, the list of instructions is consumed *)
+    (* curr_block : BlockD.t; (* current block in execution, the list of instructions is consumed *) *)
+    (*curr_block : SmartContractD.BlockD.t; (* current block in execution, the list of instructions is consumed *)*)
+    curr_block_id: BlockID.t; (* id of the current block *)
+    pc : nat; (* position of the next instructions in the curr_block *)
     return_variables : list YULVariable.t; (* variables of the previous frame that will receive the 
                                               return values *)
   }.
+
+  Definition increase_pc (sf: t) : t :=
+    {| 
+      function_name := sf.(function_name);
+      variable_assignments := sf.(variable_assignments);
+      curr_block_id := sf.(curr_block_id);
+      pc := sf.(pc) + 1;
+      return_variables := sf.(return_variables)
+    |}.
 End StackFrame.
 
 
@@ -69,6 +84,7 @@ End CallStack.
 Module State(D: DIALECT).
   (* State of the program *)
   Module CallStackD := CallStack(D).
+  Module SmartContractD := SmartContract(D).
     
   Record t : Type := {
     call_stack : CallStackD.t;
@@ -81,4 +97,12 @@ Module State(D: DIALECT).
     status := Status.Running;
     dialect_state := D.empty_dialect_state;
   |}.
+
+  Definition set_status (s: t) (new_status: Status.t) : t :=
+    {| 
+      call_stack := s.(call_stack);
+      status := new_status;
+      dialect_state := s.(dialect_state)
+    |}.
+
 End State.

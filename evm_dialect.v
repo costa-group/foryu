@@ -215,8 +215,8 @@ Module EVMDialect <: DIALECT.
   Definition equal_values (v1 v2: value_t) : bool :=
     v1 =? v2.
 
-  Definition execute_op_code (state: dialect_state) (op: opcode_t) (inputs: list value_t) : (dialect_state * Status.t) :=
-    (state, Status.Running). (* Placeholder for actual implementation *)
+  Definition execute_op_code (state: dialect_state) (op: opcode_t) (inputs: list value_t) : (list value_t * dialect_state * Status.t) :=
+    ([default_value], state, Status.Running). (* Placeholder for actual implementation *)
 
   Definition empty_dialect_state : dialect_state :=
     EVMState.empty.

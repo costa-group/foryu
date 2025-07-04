@@ -17,6 +17,9 @@ Global Open Scope Z_scope.
 Module BlockID.
   (* A block ID is a natural number. *)
   Definition t := nat.
+
+  Definition eqb (b1 b2 : t) : bool :=
+    Nat.eqb b1 b2.
 End BlockID.
 
 
@@ -77,9 +80,9 @@ Module Instruction (D: DIALECT).
   }.
 
   Lemma eq_split: forall i1 i2 : Instruction.t, 
-    i1.(Instruction.input) = i2.(Instruction.input) ->
-    i1.(Instruction.output) = i2.(Instruction.output) ->
-    i1.(Instruction.op) = i2.(Instruction.op) ->
+    i1.(input) = i2.(input) ->
+    i1.(output) = i2.(output) ->
+    i1.(op) = i2.(op) ->
     i1 = i2.
   Proof.
     intros i1 i2 eq_input eq_output eq_op.
@@ -111,6 +114,7 @@ Module Block (D: DIALECT).
     exit_info : ExitInfo.t;
     instructions : list (InstructionD.t); (* List of instructions in the block *)
   }.
+  
 End Block.
 
 
@@ -127,7 +131,7 @@ Module Function (D: DIALECT).
   }.
 
   Definition get_block (f: t) (bid: BlockID.t) : option BlockD.t :=
-    match List.find (fun b => Nat.eqb b.(BlockD.bid) bid) f.(blocks) with
+    match List.find (fun b => BlockID.eqb b.(BlockD.bid) bid) f.(blocks) with
     | Some block => Some block
     | None => None
     end.
@@ -155,6 +159,19 @@ Module SmartContract (D: DIALECT).
   Definition get_block (sc: t) (fname: FunctionName.t) (bid: BlockID.t) : option BlockD.t :=
     match get_function sc fname with
     | Some func => FunctionD.get_block func bid
+    | None => None
+    end.
+
+  Definition get_instruction (sc: t) (fname: FunctionName.t) (bid: BlockID.t) (index: nat) : option BlockD.InstructionD.t :=
+    match get_block sc fname bid with
+    | Some block =>
+        List.nth_error block.(BlockD.instructions) index 
+    | None => None
+    end.
+
+  Definition get_first_block_id (sc: t) (fname: FunctionName.t) : option BlockID.t :=
+    match get_function sc fname with
+    | Some func => Some func.(FunctionD.entry_block_id)
     | None => None
     end.
   
