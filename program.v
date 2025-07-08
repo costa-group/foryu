@@ -54,10 +54,11 @@ End ExitInfo.
 
 Module YULVariableMap.
   (* Map between YUL variables to apply renamings in phi functions *)
-  Definition t := YULVariable.t -> YULVariable.t.
-  
-  (* The empty map is the identity function. *)
-  Definition empty : t := fun x => x.
+  (* Definition t := YULVariable.t -> YULVariable.t. *)
+  Definition t := list (YULVariable.t * YULVariable.t).
+  (* A pair (dest, origin) means that variable 'x' must take the value of the variable 'origin' *)
+ 
+  Definition empty : t := [].
 End YULVariableMap.
 
 

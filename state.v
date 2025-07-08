@@ -34,6 +34,15 @@ Module VariableAssignment(D: DIALECT).
         end
     end.
 
+  (* Applies a list of renamings to the assignments. Each renaming is a pair (dest, origin) where 
+     dest is the variable that will take the value of origin. *)
+  Fixpoint apply_renamings (assignments : t) (renamings : YULVariableMap.t) : t :=
+    match renamings with
+    | nil => assignments
+    | (dest, origin) :: rest =>
+        apply_renamings (assign assignments dest (get assignments origin)) rest
+    end.
+
 End VariableAssignment.
 
 

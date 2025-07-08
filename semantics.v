@@ -132,40 +132,62 @@ Module SmallStep (D: DIALECT).
 
 
                 | ExitInfo.Jump target_block =>
-                    let sf' := {| 
-                        StackFrameD.function_name := function_name;
-                        StackFrameD.variable_assignments := sf.(StackFrameD.variable_assignments);
-                        StackFrameD.curr_block_id := target_block; 
-                        StackFrameD.pc := 0; (* Reset the program counter to the start of the target block *)
-                        StackFrameD.return_variables := sf.(StackFrameD.return_variables) |} in
-                    let call_stack' := sf' :: rsf in
-                    let s' : StateD.t := {|
-                        StateD.call_stack := call_stack';
-                        (* StateD.status := s.(StateD.status); (* Keep the previous status *) *)
-                        StateD.status := Status.Running;
-                        StateD.dialect_state := s.(StateD.dialect_state) |} in
-                    s'
+                    (* Jump to the target block, resetting the program counter *)
+                    let var_assignments := sf.(StackFrameD.variable_assignments) in
+                    match SmartContractD.get_block p function_name target_block with
+                    | None => let s' := StateD.set_status s (Status.Error "Target block not found in the smart contract") in
+                              s'
+
+                    | Some target_block_data =>
+                        let phi_function := SmartContractD.BlockD.phi_function target_block_data in
+                        let phi_renamings := phi_function curr_block_id in
+                        let var_assignments' := VariableAssignmentD.apply_renamings var_assignments phi_renamings in  
+                    
+                        let sf' := {| 
+                            StackFrameD.function_name := function_name;
+                            StackFrameD.variable_assignments := var_assignments';
+                            StackFrameD.curr_block_id := target_block; 
+                            StackFrameD.pc := 0; (* Reset the program counter to the start of the target block *)
+                            StackFrameD.return_variables := sf.(StackFrameD.return_variables) |} in
+                        let call_stack' := sf' :: rsf in
+                        let s' : StateD.t := {|
+                            StateD.call_stack := call_stack';
+                            StateD.status := Status.Running;
+                            StateD.dialect_state := s.(StateD.dialect_state) |} in
+                        s'
+                    end 
 
 
                 | ExitInfo.ConditionalJump cond_var target_if_true target_if_false =>
                     let cond_val := VariableAssignmentD.get sf.(StackFrameD.variable_assignments) cond_var in
                     let target_block := if D.is_true_value cond_val then target_if_true else target_if_false in
-                    let sf' := {| 
-                        StackFrameD.function_name := function_name;
-                        StackFrameD.variable_assignments := sf.(StackFrameD.variable_assignments);
-                        StackFrameD.curr_block_id := target_block; 
-                        StackFrameD.pc := 0; (* Reset the program counter to the start of the target block *)
-                        StackFrameD.return_variables := sf.(StackFrameD.return_variables) |} in
-                    let call_stack' := sf' :: rsf in
-                    let s' : StateD.t := {|
-                        StateD.call_stack := call_stack';
-                        (* StateD.status := s.(StateD.status); (* Keep the previous status *) *)
-                        StateD.status := Status.Running;
-                        StateD.dialect_state := s.(StateD.dialect_state) |} in
-                    s'
+                    let var_assignments := sf.(StackFrameD.variable_assignments) in
+                    match SmartContractD.get_block p function_name target_block with
+                    | None => let s' := StateD.set_status s (Status.Error "Target block not found in the smart contract") in
+                              s'
+
+                    | Some target_block_data =>
+                        let phi_function := SmartContractD.BlockD.phi_function target_block_data in
+                        let phi_renamings := phi_function curr_block_id in
+                        let var_assignments' := VariableAssignmentD.apply_renamings var_assignments phi_renamings in  
+                    
+                        let sf' := {| 
+                            StackFrameD.function_name := function_name;
+                            StackFrameD.variable_assignments := var_assignments';
+                            StackFrameD.curr_block_id := target_block; 
+                            StackFrameD.pc := 0; (* Reset the program counter to the start of the target block *)
+                            StackFrameD.return_variables := sf.(StackFrameD.return_variables) |} in
+                        let call_stack' := sf' :: rsf in
+                        let s' : StateD.t := {|
+                            StateD.call_stack := call_stack';
+                            StateD.status := Status.Running;
+                            StateD.dialect_state := s.(StateD.dialect_state) |} in
+                        s'
+                    end
                 end
             end
         end.
+
 
     (* Generates a list of values from a list of variables/values and a stack frame *)
     Fixpoint eval_input (input: list (YULVariable.t + D.value_t)) (sf: StackFrameD.t) : list D.value_t :=
@@ -225,6 +247,7 @@ Module SmallStep (D: DIALECT).
                         let s' := StateD.set_status s (Status.Error "Function not found in call") in
                         s'
                     | Some func =>
+                        (* TODO: CHECK WITH SAMIR: The entry block of a function cannot have phi information to rename variables *)
                         let first_block_id := func.(SmartContractD.FunctionD.entry_block_id) in
                         let opt_var_assignments := 
                             CallStackD.StackFrameD.VariableAssignmentD.assign_all 
@@ -268,6 +291,7 @@ Module SmallStep (D: DIALECT).
             end
         | _ => s (* If the status is not running, return the state as is *)
         end.
+
 
     Fixpoint eval (steps: nat) (s: StateD.t) (p: SmartContractD.t) : StateD.t :=
         match steps with
