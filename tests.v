@@ -1,4 +1,5 @@
 Require Export FORYU.program.
+Require Export FORYU.semantics.
 Import ListNotations.
 
 (******** Tests ********)
@@ -13,10 +14,13 @@ Import ListNotations.
    
       EVMInstruction.t =/= EVMBlock.InstructionD.t
    *)
-Module EVMSmartContract := SmartContract(EVMDialect).
+Module EVMSmallStep := SmallStep(EVMDialect).
+Module EVMSmartContract := EVMSmallStep.SmartContractD.
 Module EVMFunction := EVMSmartContract.FunctionD.
 Module EVMBlock := EVMFunction.BlockD.
 Module EVMInstruction := EVMBlock.InstructionD.
+Module EVMState := EVMSmallStep.StateD.
+
 
 Definition i1 : EVMInstruction.t := (* v2 := ADD v0 555 *)
   {| EVMInstruction.input := [inl 0%nat; inr 555];
@@ -71,6 +75,105 @@ Definition sc1 : EVMSmartContract.t :=
      EVMSmartContract.main := "myfunc" |}.  
 
 Print sc1.
+
+
+
+Section RunningExample.
+
+(* Original Yul program 
+
+{
+    function f() -> v1 {
+        v0 := 0x0202
+        v1 := mul(v0, 0x2)
+    }
+    
+   let v0 := f()
+	sstore(0x01, v0)
+}
+
+*)
+
+(* Main function *)
+Definition instr_call_f : EVMInstruction.t :=
+   (* let v0 := f() *)
+   {| EVMInstruction.input := [];
+      EVMInstruction.output := [0%nat];
+      EVMInstruction.op := inl "f" |}.
+
+Definition instr_sstore : EVMInstruction.t :=
+   (* sstore(0x01, v0) *)
+   {| EVMInstruction.input := [inl 0%nat; inr 1];
+      EVMInstruction.output := [];
+      EVMInstruction.op := inr EVM_opcode.SSTORE |}.
+
+Definition main_block_0 : EVMBlock.t :=
+   {| EVMBlock.bid := 0%nat;
+      EVMBlock.phi_function := PhiInfo.empty;
+      EVMBlock.exit_info := ExitInfo.Terminated;
+      EVMBlock.instructions := [ instr_call_f ; instr_sstore ]
+   |}.
+
+Definition func_main : EVMFunction.t :=
+   {| EVMFunction.name := "main";
+      EVMFunction.arguments := [];
+      EVMFunction.num_outputs := 0;
+      EVMFunction.blocks := [ main_block_0 ];
+      EVMFunction.entry_block_id := 0%nat
+   |}.
+
+
+(* "f" function *)
+Definition instr_mul : EVMInstruction.t :=
+   (* v1 := mul(v0, 0x2) simplified wrt. v0 -> 0x0202 *)
+   {| EVMInstruction.input := [inr 0x2; inr 0x0202];
+      EVMInstruction.output := [ 1%nat ];
+      EVMInstruction.op := inr EVM_opcode.MUL |}.
+
+Definition f_block_0 : EVMBlock.t :=
+   {| EVMBlock.bid := 0%nat;
+      EVMBlock.phi_function := PhiInfo.empty;
+      EVMBlock.exit_info := ExitInfo.ReturnBlock [1%nat];
+      EVMBlock.instructions := [ instr_mul ]
+   |}.
+
+Definition func_f : EVMFunction.t :=
+   {| EVMFunction.name := "f";
+      EVMFunction.arguments := [];
+      EVMFunction.num_outputs := 1;
+      EVMFunction.blocks := [ f_block_0 ];
+      EVMFunction.entry_block_id := 0%nat
+   |}.   
+
+Definition smart_contract : EVMSmartContract.t :=
+   {| EVMSmartContract.name := "test";
+      EVMSmartContract.functions := [ func_f ; func_main ];
+      EVMSmartContract.main := "main" |}. 
+
+Print smart_contract.
+
+Definition initial_state : EVMState.t :=
+  EVMState.empty.
+
+Check EVMSmallStep.step.
+
+Compute (
+   let s0 := EVMState.initial_main in
+   let s1 := EVMSmallStep.step s0 smart_contract in
+   let s2 := EVMSmallStep.step s1 smart_contract in
+   let s3 := EVMSmallStep.step s2 smart_contract in
+   (s0, s1, s2, s3)).
+   (* FIXME: "Failed to assign return values" in s3 *)
+
+
+
+End RunningExample.
+
+
+(******** End of tests ********)      
+
+
+
 
 
 

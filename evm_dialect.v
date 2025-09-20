@@ -22,66 +22,6 @@ Module U256.
 End U256.
 
 
-Module EVM_opcode.
-  Inductive t :=
-    | ADD
-    | MUL
-    | SUB
-    | DIV
-    | SDIV
-    | MOD
-    | SMOD
-    | ADDMOD
-    | MULMOD
-    | EXP
-    | SIGNEXTEND
-    | LT
-    | GT
-    | SLT
-    | SGT
-    | EQ
-    | ISZERO
-    | AND
-    | OR
-    | XOR
-    | NOT
-    | BYTE
-    | SHL
-    | SHR
-    | SAR
-    | ADDRESS
-    | BALANCE
-    | ORIGIN
-    | CALLER
-    | CALLVALUE
-    | CALLDATALOAD
-    | CALLDATASIZE
-    | CODESIZE
-    | GASPRICE
-    | EXTCODESIZE
-    | RETURNDATASIZE
-    | EXTCODEHASH
-    | BLOCKHASH
-    | COINBASE
-    | TIMESTAMP
-    | NUMBER
-    | DIFFICULTY
-    | GASLIMIT
-    | CHAINID
-    | SELFBALANCE
-    | BASEFEE
-    | GAS
-    | JUMPI. (* This is implemented with a different semantics!! It does not really jump. We need it to handle blocks that end with JUMPI but their corresponding optimized one ends with JMP *)
-
-    Definition eq_dec : forall (a b : t), {a = b} + {a <> b}.
-      Proof. decide equality. Defined.
-
-    Definition eqb (a b : t) : bool :=
-      if eq_dec a b then true else false.
-
-End EVM_opcode.
-
-
 Module EVMStorage.
   (* From github.com/formal-land/coq-of-solidity/blob/develop/coq/CoqOfSolidity/simulations/CoqOfSolidity.v 
   *)
@@ -199,7 +139,72 @@ Module EVMState.
 End EVMState.
 
 
+Module EVM_opcode.
+  Inductive t :=
+    | SSTORE
+    | SLOAD
+    | MLOAD
+    | MSTORE
+    | MSTORE8
+    | ADD
+    | MUL
+    | SUB
+    | DIV
+    | SDIV
+    | MOD
+    | SMOD
+    | ADDMOD
+    | MULMOD
+    | EXP
+    | SIGNEXTEND
+    | LT
+    | GT
+    | SLT
+    | SGT
+    | EQ
+    | ISZERO
+    | AND
+    | OR
+    | XOR
+    | NOT
+    | BYTE
+    | SHL
+    | SHR
+    | SAR
+    | ADDRESS
+    | BALANCE
+    | ORIGIN
+    | CALLER
+    | CALLVALUE
+    | CALLDATALOAD
+    | CALLDATASIZE
+    | CODESIZE
+    | GASPRICE
+    | EXTCODESIZE
+    | RETURNDATASIZE
+    | EXTCODEHASH
+    | BLOCKHASH
+    | COINBASE
+    | TIMESTAMP
+    | NUMBER
+    | DIFFICULTY
+    | GASLIMIT
+    | CHAINID
+    | SELFBALANCE
+    | BASEFEE
+    | GAS
+    | JUMPI. (* This is implemented with a different semantics!! It does not really jump. We need it to handle blocks that end with JUMPI but their corresponding optimized one ends with JMP *)
 
+    Definition eq_dec : forall (a b : t), {a = b} + {a <> b}.
+      Proof. decide equality. Defined.
+
+    Definition eqb (a b : t) : bool :=
+      if eq_dec a b then true else false.
+
+    Definition execute (state: EVMState.t) (op: t) (inputs: list U256.t) : (list U256.t * EVMState.t * Status.t) :=
+      ([0], state, Status.Running). (* Placeholder for actual implementation *)
+
+End EVM_opcode.
 
 
 Module EVMDialect <: DIALECT.
@@ -216,7 +221,7 @@ Module EVMDialect <: DIALECT.
     v1 =? v2.
 
   Definition execute_op_code (state: dialect_state) (op: opcode_t) (inputs: list value_t) : (list value_t * dialect_state * Status.t) :=
-    ([default_value], state, Status.Running). (* Placeholder for actual implementation *)
+    EVM_opcode.execute state op inputs.
 
   Definition empty_dialect_state : dialect_state :=
     EVMState.empty.

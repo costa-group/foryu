@@ -93,6 +93,8 @@ End CallStack.
 Module State(D: DIALECT).
   (* State of the program *)
   Module CallStackD := CallStack(D).
+  Module StackFrameD := CallStackD.StackFrameD.
+  Module VariableAssignmentD := StackFrameD.VariableAssignmentD.
   Module SmartContractD := SmartContract(D).
     
   Record t : Type := {
@@ -107,11 +109,22 @@ Module State(D: DIALECT).
     dialect_state := D.empty_dialect_state;
   |}.
 
+  (* State with with a stack frame to start block #0 of the "main" function, with pc=0 *)
+  Definition initial_main : t := {|
+    call_stack := ({| StackFrameD.function_name := "main"%string;
+                      StackFrameD.variable_assignments := VariableAssignmentD.empty;
+                      StackFrameD.curr_block_id := 0%nat;
+                      StackFrameD.pc := 0%nat;
+                      StackFrameD.return_variables := nil; |} ) :: nil;
+    status := Status.Running;
+    dialect_state := D.empty_dialect_state;
+  |}.
+
   Definition set_status (s: t) (new_status: Status.t) : t :=
     {| 
       call_stack := s.(call_stack);
       status := new_status;
-      dialect_state := s.(dialect_state)
+      dialect_state := s.(dialect_state);
     |}.
 
 End State.
