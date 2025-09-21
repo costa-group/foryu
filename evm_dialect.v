@@ -202,7 +202,22 @@ Module EVM_opcode.
       if eq_dec a b then true else false.
 
     Definition execute (state: EVMState.t) (op: t) (inputs: list U256.t) : (list U256.t * EVMState.t * Status.t) :=
-      ([0], state, Status.Running). (* Placeholder for actual implementation *)
+      match op with
+      | MUL => ([Z.mul (List.nth 0 inputs 0) (List.nth 1 inputs 0)], state, Status.Running) (* FIXME: check overflow *)
+      | ADD => ([Z.add (List.nth 0 inputs 0) (List.nth 1 inputs 0)], state, Status.Running) (* FIXME: check overflow *)
+      | SSTORE => 
+          match inputs with
+          | value ::addr :: nil =>
+              let new_storage := EVMStorage.update state.(EVMState.storage) addr value in
+              let new_state := {| EVMState.storage := new_storage;
+                                  EVMState.memory := state.(EVMState.memory);
+                                  EVMState.call_data_seg := state.(EVMState.call_data_seg);
+                                  EVMState.return_data_seg := state.(EVMState.return_data_seg) |} in
+              ([], new_state, Status.Running)
+          | _ => ([], state, Status.Error "SSTORE expects 2 inputs")
+          end
+      | _  =>  ([42], state, Status.Running) (* FIXME: organize and complete *)
+      end. 
 
 End EVM_opcode.
 

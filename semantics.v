@@ -2,6 +2,8 @@ Require Export FORYU.state.
 Require Export FORYU.program.
 Open Scope string_scope.
 
+From ReductionEffect Require Import PrintingEffect.
+
 (* 
 ** TODO: handle phi-function information **
 - both in handle_block_finish and execute call (define function part)
@@ -108,7 +110,7 @@ Module SmallStep (D: DIALECT).
                         s'
                     | prev_sf :: rsf2 => 
                         let prev_sf_var_assignment := prev_sf.(StackFrameD.variable_assignments) in
-                        let vars := prev_sf.(StackFrameD.return_variables) in
+                        let vars := sf.(StackFrameD.return_variables) in
                         let opt_prev_sf_var_assignment' := VariableAssignmentD.assign_all prev_sf_var_assignment vars return_values in
                         match opt_prev_sf_var_assignment' with
                         | None => let s' := StateD.set_status s (Status.Error "Failed to assign return values") in

@@ -2,6 +2,12 @@ Require Export FORYU.program.
 Require Export FORYU.semantics.
 Import ListNotations.
 
+(* Needed for print-debugging with Reduction Effects 
+   (https://github.com/coq-community/reduction-effects)
+   even if the print/print_id are in other files
+*)
+From ReductionEffect Require Import PrintingEffect.
+
 (******** Tests ********)
 
 (* Note how EVM definitions are defined from the top-most 
@@ -47,8 +53,10 @@ Fixpoint has_input_vars_list (l: list (YULVariable.t + EVMDialect.value_t)) :=
 Definition has_input_vars (ins: EVMInstruction.t) : bool :=
   has_input_vars_list ins.(EVMInstruction.input).
 
+(* 
 Compute (has_input_vars i1). (* Should return true *)  
 Compute (has_input_vars i3). (* Should return false *)
+*)
 
 Definition b1 : EVMBlock.t :=
   {| EVMBlock.bid := 1%nat;
@@ -74,7 +82,7 @@ Definition sc1 : EVMSmartContract.t :=
      EVMSmartContract.functions := [f1];
      EVMSmartContract.main := "myfunc" |}.  
 
-Print sc1.
+(* Print sc1. *)
 
 
 
@@ -150,20 +158,31 @@ Definition smart_contract : EVMSmartContract.t :=
       EVMSmartContract.functions := [ func_f ; func_main ];
       EVMSmartContract.main := "main" |}. 
 
-Print smart_contract.
+(* Print smart_contract. *)
 
 Definition initial_state : EVMState.t :=
   EVMState.empty.
 
-Check EVMSmallStep.step.
 
-Compute (
+Eval cbv in (
    let s0 := EVMState.initial_main in
    let s1 := EVMSmallStep.step s0 smart_contract in
+   print (s0, s1)
+   (* 
    let s2 := EVMSmallStep.step s1 smart_contract in
    let s3 := EVMSmallStep.step s2 smart_contract in
-   (s0, s1, s2, s3)).
-   (* FIXME: "Failed to assign return values" in s3 *)
+   let s4 := EVMSmallStep.step s3 smart_contract in
+   let s5 := EVMSmallStep.step s4 smart_contract in
+   (s2, s3, s4, s5)
+   *)
+   ).
+
+
+Eval cbv in (
+   let s  := EVMState.initial_main in
+   let s' := EVMSmallStep.eval 10 s smart_contract in
+   print s'
+).
 
 
 
