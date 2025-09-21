@@ -98,7 +98,7 @@ Module SmallStep (D: DIALECT).
 
                 match exit_info with
                 | ExitInfo.Terminated => let s' := StateD.set_status s (Status.Terminated) in
-                                         s'
+                                         s' (* Should we clear the stack frame? *)
 
 
                 | ExitInfo.ReturnBlock l =>
