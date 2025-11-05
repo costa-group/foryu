@@ -3,6 +3,10 @@ Require Export FORYU.program.
 
 
 Module VariableAssignment(D: DIALECT).
+
+  Module YULVariableMapD := YULVariableMap(D).
+  Module SimpleExprD := SimpleExpr(D).
+
   (* Assignment from YUL variables to dialect values *)
   Definition t := YULVariable.t -> D.value_t.
   (* Variables not initialized return the default value of the dialect *)
@@ -15,10 +19,20 @@ Module VariableAssignment(D: DIALECT).
   Definition get (assignments : t) (var : YULVariable.t) : D.value_t :=
     assignments var.
 
+  (* This get recieves a list of simple expressions *)
+  Definition get_se (assignments : t) (e : SimpleExprD.t) : D.value_t :=
+    match e with
+    | inl var => assignments var
+    | inr val => val
+    end.
+
   (* Returns a list of values for the given variables, if all variables are assigned. *)
   (* If any variable is not assigned, returns None. *)
   Definition get_all (assignments : t) (vars : list YULVariable.t) : list D.value_t :=
-    List.map (fun v => assignments v) vars.
+    List.map (fun v => get assignments v) vars.
+
+  Definition get_all_se (assignments : t) (es : list SimpleExprD.t) : list D.value_t :=
+    List.map (fun e => get_se assignments e) es.
 
   (* Takes a list of variables and a list of values and updates the assignment. If the list have 
      different lengths, returns None  *)
@@ -36,11 +50,11 @@ Module VariableAssignment(D: DIALECT).
 
   (* Applies a list of renamings to the assignments. Each renaming is a pair (dest, origin) where 
      dest is the variable that will take the value of origin. *)
-  Fixpoint apply_renamings (assignments : t) (renamings : YULVariableMap.t) : t :=
+  Fixpoint apply_renamings (assignments : t) (renamings : YULVariableMapD.t) : t :=
     match renamings with
     | nil => assignments
     | (dest, origin) :: rest =>
-        apply_renamings (assign assignments dest (get assignments origin)) rest
+        apply_renamings (assign assignments dest (get_se assignments origin)) rest
     end.
 
 End VariableAssignment.
@@ -49,7 +63,7 @@ End VariableAssignment.
 Module StackFrame(D: DIALECT).
   (* Stack frame for a function call *)
   Module VariableAssignmentD := VariableAssignment(D).
-  Module SmartContractD := SmartContract(D).
+  (* Module SmartContractD := SmartContract(D). *)
   
   
   Record t : Type := {
@@ -95,7 +109,7 @@ Module State(D: DIALECT).
   Module CallStackD := CallStack(D).
   Module StackFrameD := CallStackD.StackFrameD.
   Module VariableAssignmentD := StackFrameD.VariableAssignmentD.
-  Module SmartContractD := SmartContract(D).
+(*  Module SmartContractD := SmartContract(D). *)
     
   Record t : Type := {
     call_stack : CallStackD.t;

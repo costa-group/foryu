@@ -22,7 +22,6 @@ Module BlockID.
     Nat.eqb b1 b2.
 End BlockID.
 
-
 Module YULVariable.
   (* YUL variables are represented as natural numbers. *)
   Definition t := nat.
@@ -31,6 +30,9 @@ Module YULVariable.
     Nat.eqb v1 v2.
 End YULVariable.
 
+Module SimpleExpr (D: DIALECT).
+  Definition t : Type := YULVariable.t + D.value_t.
+End SimpleExpr.
 
 Module FunctionName.
   (* YUL Function names represented as strings. *)
@@ -41,43 +43,53 @@ Module FunctionName.
 End FunctionName.
 
 
-Module ExitInfo.
-  Inductive t : Set := 
+Module ExitInfo (D: DIALECT).
+  Definition tt := D.value_t.
+  Module SimpleExprD := SimpleExpr(D).
+  
+  Inductive t : Type := 
   | ConditionalJump (cond_var : YULVariable.t) 
                     (target_if_true : BlockID.t) 
                     (target_if_false : BlockID.t)
   | Jump (target : BlockID.t)
-  | ReturnBlock (return_values : list YULVariable.t) (* I believe they are always vars *)
+  | ReturnBlock (return_values : list SimpleExprD.t) (* I believe they are always vars *)
   | Terminated.
 End ExitInfo.
 
 
-Module YULVariableMap.
+Module YULVariableMap (D: DIALECT).
+  Module SimpleExprD := SimpleExpr(D).
+
   (* Map between YUL variables to apply renamings in phi functions *)
   (* Definition t := YULVariable.t -> YULVariable.t. *)
-  Definition t := list (YULVariable.t * YULVariable.t).
+  Definition t := list (YULVariable.t * SimpleExprD.t).
   (* A pair (dest, origin) means that variable 'x' must take the value of the variable 'origin' *)
  
   Definition empty : t := [].
 End YULVariableMap.
 
 
-Module PhiInfo.
+Module PhiInfo (D: DIALECT).
+  Module YULVariableMapD := YULVariableMap(D).
   (* A phi function is a mapping from an entry BlockID to the mapping of YULVariables to
      apply *)
-  Definition t := BlockID.t -> YULVariableMap.t.
+  Definition t := BlockID.t -> YULVariableMapD.t.
 
   (* The empty phi function maps every block ID to the empty map. *)
-  Definition empty : t := fun _ => YULVariableMap.empty.
+  Definition empty : t := fun _ => YULVariableMapD.empty.
 End PhiInfo.
 
 
 Module Instruction (D: DIALECT).
-(* An instruction is a pair of a block ID and a YUL variable. *)
+
+  Inductive aux_inst_t : Type :=
+    | ASSIGN. (* This is to allow a simple assignment of the form [v1...vk] := [exp1...expk] at the level of YUL *)
+  
+  (* An instruction is a pair of a block ID and a YUL variable. *)
    Record t : Type := {
     input : list (YULVariable.t + D.value_t); (* Either a variable or a value *)
     output : list YULVariable.t; (* Output variables *)
-    op : FunctionName.t + D.opcode_t;
+    op : FunctionName.t + D.opcode_t + aux_inst_t;
   }.
 
   Lemma eq_split: forall i1 i2 : Instruction.t, 
@@ -108,14 +120,35 @@ How to access the entries of an Instruction i of type Instruction(D).t?
 
 Module Block (D: DIALECT).
   Module InstructionD := Instruction(D). (* Required to access Instruction(D) *)
+  Module PhiInfoD := PhiInfo(D).
+  Module ExitInfoD := ExitInfo(D).
+  
   (* Block of code of CFG-YUL *)
   Record t : Type := {
     bid : BlockID.t;
-    phi_function : PhiInfo.t;
-    exit_info : ExitInfo.t;
+    phi_function : PhiInfoD.t;
+    exit_info : ExitInfoD.t;
     instructions : list (InstructionD.t); (* List of instructions in the block *)
-  }.
-  
+    }.
+
+  Definition is_exit_block (b : t) :=
+    match b.(exit_info) with
+    | ExitInfoD.ReturnBlock rs => Some rs
+    | _ => None
+    end.
+
+  Definition is_jump_block (b : t) :=
+    match b.(exit_info) with
+    | ExitInfoD.Jump bid => Some bid
+    | _ => None
+    end.
+
+  Definition is_cond_jump_block (b : t) :=
+    match b.(exit_info) with
+    | ExitInfoD.ConditionalJump v bid1 bid2 => Some (v,bid1,bid2)
+    | _ => None
+    end.
+
 End Block.
 
 
@@ -136,6 +169,7 @@ Module Function (D: DIALECT).
     | Some block => Some block
     | None => None
     end.
+  
 End Function.
 
 
