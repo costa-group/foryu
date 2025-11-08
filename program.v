@@ -131,7 +131,7 @@ Module Block (D: DIALECT).
     instructions : list (InstructionD.t); (* List of instructions in the block *)
     }.
 
-  Definition is_exit_block (b : t) :=
+  Definition is_return_block (b : t) :=
     match b.(exit_info) with
     | ExitInfoD.ReturnBlock rs => Some rs
     | _ => None
@@ -147,6 +147,12 @@ Module Block (D: DIALECT).
     match b.(exit_info) with
     | ExitInfoD.ConditionalJump v bid1 bid2 => Some (v,bid1,bid2)
     | _ => None
+    end.
+
+  Definition is_terminated_block (b : t) :=
+    match b.(exit_info) with
+    | ExitInfoD.Terminated => true
+    | _ => false
     end.
 
 End Block.

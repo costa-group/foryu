@@ -31,17 +31,17 @@ Module EVMState := EVMSmallStep.StateD.
 Definition i1 : EVMInstruction.t := (* v2 := ADD v0 555 *)
   {| EVMInstruction.input := [inl 0%nat; inr 555];
      EVMInstruction.output := [2%nat];
-     EVMInstruction.op := inr EVM_opcode.ADD |}.
+     EVMInstruction.op := inl (inr EVM_opcode.ADD) |}.
 
 Definition i2 : EVMInstruction.t := (* v1 := ISZERO v3 *)
   {| EVMInstruction.input := [inl 3%nat];
      EVMInstruction.output := [1%nat];
-     EVMInstruction.op := inr EVM_opcode.ISZERO |}.
+     EVMInstruction.op := inl (inr EVM_opcode.ISZERO) |}.
 
 Definition i3 : EVMInstruction.t := (* v0, v2 := myfunct 333 *)
   {| EVMInstruction.input := [inr 333];
      EVMInstruction.output := [0%nat; 2%nat];
-     EVMInstruction.op := inl "myfunct" |}.
+     EVMInstruction.op := inl (inl "myfunct") |}.
 
 Fixpoint has_input_vars_list (l: list (YULVariable.t + EVMDialect.value_t)) :=
   match l with
@@ -60,14 +60,14 @@ Compute (has_input_vars i3). (* Should return false *)
 
 Definition b1 : EVMBlock.t :=
   {| EVMBlock.bid := 1%nat;
-     EVMBlock.phi_function := PhiInfo.empty;
-     EVMBlock.exit_info := ExitInfo.Jump 2%nat;
+     EVMBlock.phi_function := EVMBlock.PhiInfoD.empty;
+     EVMBlock.exit_info := EVMBlock.ExitInfoD.Jump 2%nat;
      EVMBlock.instructions := [i1; i2] |}.
 
 Definition b2 : EVMBlock.t :=
   {| EVMBlock.bid := 2%nat;
-     EVMBlock.phi_function := PhiInfo.empty;
-     EVMBlock.exit_info := ExitInfo.ReturnBlock [0%nat; 1%nat];
+     EVMBlock.phi_function := EVMBlock.PhiInfoD.empty;
+     EVMBlock.exit_info := EVMBlock.ExitInfoD.ReturnBlock [inl 0%nat; inl 1%nat];
      EVMBlock.instructions := [i3] |}.
 
 Definition f1 : EVMFunction.t :=
@@ -107,18 +107,18 @@ Definition instr_call_f : EVMInstruction.t :=
    (* let v0 := f() *)
    {| EVMInstruction.input := [];
       EVMInstruction.output := [0%nat];
-      EVMInstruction.op := inl "f" |}.
+      EVMInstruction.op := inl (inl "f") |}.
 
 Definition instr_sstore : EVMInstruction.t :=
    (* sstore(0x01, v0) *)
    {| EVMInstruction.input := [inl 0%nat; inr 1];
       EVMInstruction.output := [];
-      EVMInstruction.op := inr EVM_opcode.SSTORE |}.
+      EVMInstruction.op := inl (inr EVM_opcode.SSTORE) |}.
 
 Definition main_block_0 : EVMBlock.t :=
    {| EVMBlock.bid := 0%nat;
-      EVMBlock.phi_function := PhiInfo.empty;
-      EVMBlock.exit_info := ExitInfo.Terminated;
+      EVMBlock.phi_function := EVMBlock.PhiInfoD.empty;
+      EVMBlock.exit_info := EVMBlock.ExitInfoD.Terminated;
       EVMBlock.instructions := [ instr_call_f ; instr_sstore ]
    |}.
 
@@ -136,12 +136,12 @@ Definition instr_mul : EVMInstruction.t :=
    (* v1 := mul(v0, 0x2) simplified wrt. v0 -> 0x0202 *)
    {| EVMInstruction.input := [inr 0x2; inr 0x0202];
       EVMInstruction.output := [ 1%nat ];
-      EVMInstruction.op := inr EVM_opcode.MUL |}.
+      EVMInstruction.op := inl (inr EVM_opcode.MUL) |}.
 
 Definition f_block_0 : EVMBlock.t :=
    {| EVMBlock.bid := 0%nat;
-      EVMBlock.phi_function := PhiInfo.empty;
-      EVMBlock.exit_info := ExitInfo.ReturnBlock [1%nat];
+      EVMBlock.phi_function := EVMBlock.PhiInfoD.empty;
+      EVMBlock.exit_info := EVMBlock.ExitInfoD.ReturnBlock [inl 1%nat];
       EVMBlock.instructions := [ instr_mul ]
    |}.
 
