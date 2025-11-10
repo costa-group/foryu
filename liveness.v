@@ -828,16 +828,405 @@ Lemma check_live_out_complete:
     + apply check_live_complete.
     + apply check_live_snd.
   Qed.
-      
+
+
+  Fixpoint get_all_blocks_0 (bs: list BlockD.t) (fname: FunctionName.t) :=
+    match bs with
+    | nil => nil
+    | b::bs' =>  (fname,b)::get_all_blocks_0 bs' fname
+    end.
+
+  Fixpoint get_all_blocks_1 (fs: list FunctionD.t) :=
+    match fs with
+    | nil => nil
+    | f::fs' =>
+        (get_all_blocks_0 f.(FunctionD.blocks) f.(FunctionD.name)) ++ 
+          (get_all_blocks_1 fs')
+    end.
+
   Definition get_all_blocks (p: SmartContractD.t) :=
-    fold_right (fun f accm => (map (fun (b: BlockD.t) => (f.(FunctionD.name),b)) f.(FunctionD.blocks))++accm) nil p.(SmartContractD.functions).
+    get_all_blocks_1 p.(SmartContractD.functions).
+
+  
+  Definition back_list {A B: Type} (l1 : list A) (l2 : list (B*A)) :=
+      forall i b,
+        nth_error l1 i = Some b <->
+          exists c, nth_error l2 i = Some (c,b).
+
+  Lemma get_all_blocks_0_length:
+    forall bs fname l,
+      get_all_blocks_0 bs fname = l ->
+      length bs = length l.
+  Proof.
+    induction bs as [|b bs' IHbs'].
+    - intros.
+      simpl in H.
+      rewrite <- H.
+      reflexivity.
+    - intros.
+      simpl in H.
+      rewrite <- H.
+      simpl.
+      apply eq_S.
+      destruct l as [|a l']; try discriminate.
+      injection H as _ H_l'.
+      rewrite H_l'.
+      apply (IHbs' fname l' H_l').
+  Qed.
+  
+  Lemma get_all_blocks_0_bl:
+    forall bs fname l,
+      get_all_blocks_0 bs fname = l ->
+      back_list bs l.
+  Proof.
+    induction bs as [|b bs' IHbs'].
+    - intros.
+      simpl in H.
+      rewrite <- H.
+      unfold back_list.
+      intros.
+      split.
+      + intros H_nil_i.
+        rewrite nth_error_nil in H_nil_i.
+        discriminate H_nil_i.
+      + intros H_nil_i.
+        destruct H_nil_i as [c H_nil_i].
+        rewrite nth_error_nil in H_nil_i.
+        discriminate H_nil_i.
+    - intros fname l H_get.
+      destruct l as [|a l']; try discriminate.
+      simpl in H_get.
+      injection H_get as H_fname H_b.
+      unfold back_list.
+      intros i b0.
+      destruct i as [|i'].
+      + simpl.
+        rewrite <- H_fname.
+        split.
+        * intros H_b_b0.
+          injection H_b_b0 as H_b_b0.
+          rewrite H_b_b0.
+          exists fname.
+          reflexivity.
+        * intros H_c_b_b0.
+          destruct  H_c_b_b0 as [c H_c_b_b0].
+          injection H_c_b_b0 as _ H_b_b0.
+          rewrite H_b_b0.
+          reflexivity.
+      +  simpl.
+         pose proof (IHbs' fname l' H_b) as IH.
+         apply IH.
+  Qed.
+         
+
+  Lemma get_all_blocks_0_f:
+    forall bs fname l i b a,
+      get_all_blocks_0 bs fname = l ->
+      nth_error bs i = Some b ->
+      nth_error l i = Some a ->
+      forall b'',
+        (fun b' => BlockID.eqb b'.(BlockD.bid) b''.(BlockD.bid)) b =
+          (fun b' => BlockID.eqb (snd b').(BlockD.bid) b''.(BlockD.bid)) a.
+  Proof.
+    intros bs fname l i b a H_get H_nth_bs H_nth_a.
+    intros b''.
+    pose proof (get_all_blocks_0_bl bs fname l H_get).
+    unfold back_list in H.
+    pose proof (H i b) as H.
+    rewrite H_nth_bs in H.
+    rewrite H_nth_a in H.
+    destruct H as [H_if H_fi].
+    pose proof (H_if eq_refl) as H_if.
+    destruct H_if as [c H_if].
+    injection H_if as H_a.
+    rewrite H_a.
+    simpl.
+    reflexivity.
+  Qed.
+
+  Lemma get_all_blocks_0_find:
+    forall bs fname l,
+      get_all_blocks_0 bs fname = l ->
+      forall b,
+        find (fun b' => BlockID.eqb b'.(BlockD.bid) b.(BlockD.bid)) bs = Some b <->
+          find (fun b' => BlockID.eqb (snd b').(BlockD.bid) b.(BlockD.bid)) l = Some (fname,b).
+  Proof.
+    induction bs as [|b' bs' IHbs'].
+    - intros.
+      destruct l; try discriminate.
+      simpl.
+      split; (intro; discriminate).
+    - intros fname l H_get b.
+      destruct l as [|a l']; try discriminate.
+      split.
+      + pose proof (get_all_blocks_0_f (b'::bs') fname (a::l') 0 b a H_get).
+        simpl in H.
+        simpl.
+        destruct (BlockID.eqb (BlockD.bid b') (BlockD.bid b)) eqn:E_eqb.
+        * intros H_b'_b.
+          simpl in H_get.
+          injection H_get as H_fname H_b'.
+          rewrite <- H_fname.
+          simpl.
+          rewrite E_eqb.
+          injection H_b'_b as H_b'_b.
+          rewrite H_b'_b.
+          reflexivity.
+        * intros H_b'_b.
+          injection H_get as H_fname H_b'.
+          rewrite <- H_fname.
+          simpl.
+          rewrite E_eqb.
+          apply (IHbs' fname l' H_b').
+          apply H_b'_b.
+      + pose proof (get_all_blocks_0_f (b'::bs') fname (a::l') 0 b a H_get).
+        simpl in H.
+        simpl.
+        destruct (BlockID.eqb (BlockD.bid (snd a)) (BlockD.bid b)) eqn:E_eqb.
+        * intros H_a_fname_b.
+          simpl in H_get.
+          injection H_get as H_fname H_b'.
+          rewrite <- H_fname in E_eqb.
+          simpl in E_eqb.
+          rewrite E_eqb.
+          rewrite <- H_fname in H_a_fname_b.
+          injection H_a_fname_b as H_b'_b.
+          rewrite H_b'_b.
+          reflexivity.
+        * intros H_find.
+          injection H_get as H_fname H_b'.
+          rewrite <- H_fname in E_eqb.
+          simpl in E_eqb.
+          rewrite E_eqb.
+          apply (IHbs' fname l' H_b').
+          apply H_find.
+  Qed.
+
+  Lemma get_all_blocks_0_in:
+    forall bs fname l,
+      get_all_blocks_0 bs fname = l ->
+      forall b,
+        In b bs <-> In (fname,b) l.
+  Proof.
+    induction bs as [ | b' bs' IHbs'].
+    - intros fname l H_get.
+      split.
+      + intro H_b_nil. destruct H_b_nil.
+      + intro H_in_l.
+        simpl in H_get.
+        rewrite <- H_get in H_in_l.
+        destruct H_in_l.
+    - intros fname l H_get.
+      split.
+      + destruct l as [|a l']; try discriminate.
+        simpl in H_get.
+        injection H_get as H_fname H_b'.
+        intros H_in_b.
+        simpl in H_in_b.
+        simpl.
+        destruct H_in_b as [H_in_b_l | H_in_b_r].
+        * left. rewrite <- H_in_b_l. rewrite H_fname. reflexivity.
+        * right. apply (IHbs' fname l' H_b'). apply H_in_b_r.
+      + intros H_in_fname_b.
+        destruct l as [|a l']; try discriminate.
+        simpl in H_get.
+        injection H_get as H_fname H_l'.
+        simpl in H_in_fname_b.
+        simpl.
+        destruct H_in_fname_b as [H_in_fname_b_l | H_in_fname_b_r].
+        * left. rewrite <- H_fname in H_in_fname_b_l. injection H_in_fname_b_l as H_b'_b. apply H_b'_b.
+        * right. apply (IHbs' fname l' H_l'). apply H_in_fname_b_r.
+  Qed.
+        
+
+  Lemma get_all_blocks_0_correct:
+    forall bs fname,
+      (forall b, In b bs <-> find (fun b' => BlockID.eqb b'.(BlockD.bid) b.(BlockD.bid)) bs = Some b) ->
+      forall l,
+        get_all_blocks_0 bs fname = l ->
+        (forall b, In (fname,b) l <-> find (fun b' => BlockID.eqb (snd b').(BlockD.bid) b.(BlockD.bid)) l = Some (fname,b)).
+  Proof.
+    intros bs fname H_uniq l H_get.
+    pose proof (get_all_blocks_0_find bs fname l H_get). 
+    intros b.
+    rewrite <- (get_all_blocks_0_in bs fname l H_get).
+    rewrite <- (get_all_blocks_0_find bs fname l H_get).
+    apply (H_uniq b).
+  Qed.
+
+
+    
+  Lemma get_all_blocks_1_non_nil_res:
+    forall fs l,
+      (forall f, In f fs -> ~ f.(FunctionD.blocks) = []) ->
+      get_all_blocks_1 fs = l ->
+      fs = [] <-> l = [].
+  Proof.
+    induction fs as [| f fs' IHfs'].
+    - intros.
+      simpl in H0.
+      rewrite H0.
+      split; reflexivity.
+    - intros l H_non_nil.
+      pose proof (H_non_nil f (in_eq f fs')).
+      simpl.
+      destruct (FunctionD.blocks f) as [|b bs]; try contradiction.
+      intro H_get_0.
+      simpl in H_get_0.
+      rewrite app_comm_cons in H_get_0.
+      destruct l as [|a l'] eqn:E_l; try discriminate.
+      split; intro H_eq_nil; discriminate H_eq_nil.
+  Qed.      
+  
+
+
+  Lemma get_all_blocks_1_correct:
+    forall fs,
+      (forall f, In f fs -> FunctionD.valid_function f) ->
+      (forall f, In f fs <-> List.find (fun f' => FunctionName.eqb f'.(FunctionD.name) f.(FunctionD.name)) fs = Some f) ->
+      forall l,
+        get_all_blocks_1 fs = l ->
+        forall b fname, In (fname,b) l <->
+                          exists f, In f fs /\ FunctionD.get_block f b.(BlockD.bid) = Some b /\ FunctionName.eqb f.(FunctionD.name) fname = true.
+  Proof.
+    induction fs as [| f fs' IHfs'].
+    - intros H_all_valid H_diff_name l H_get b fname.
+      simpl in H_get.
+      rewrite <- H_get.
+      split.
+      + intro H_in_nil. destruct H_in_nil.
+      + intro H_e.
+        destruct H_e as [f [H_in_nil _]].
+        destruct H_in_nil.
+    - intros H_all_valid H_diff_name l H_get b fname.
+ 
+      assert(H_all_non_empty: forall f0 : FunctionD.t, In f0 (f :: fs') ->  ~ f0.(FunctionD.blocks) = []).
+      {
+        intros f0 H_in_f0.
+        pose proof (H_all_valid f0 H_in_f0) as H_all_valid_1.
+        unfold FunctionD.valid_function in H_all_valid_1.
+        apply H_all_valid_1.
+      }.
+
+      pose proof (get_all_blocks_1_non_nil_res (f :: fs') l H_all_non_empty H_get) as H_non_nil_res.
+
+      assert (H_l: l<>[]). { intuition. discriminate. }.
+      destruct l as [|a l'] eqn:E_l; try contradiction.
+      
+      simpl in H_get.
+
+      pose proof (H_all_valid f (in_eq f fs')) as H_valid_f.
+      unfold FunctionD.valid_function in H_valid_f.
+      destruct H_valid_f as [H_valid_non_empty_f H_valid_b_exists_f].
+      destruct (FunctionD.blocks f) as [|b1 bs] eqn:H_block_f; try contradiction.
+  
+      pose proof (@app_eq_cons (FunctionName.t * BlockD.t) (get_all_blocks_0 (b1::bs) (FunctionD.name f)) (get_all_blocks_1 fs') l' a H_get) as [H_get_l | H_get_r].
+      + destruct H_get_l  as [H_get_l _]. 
+        simpl in H_get_l.
+        discriminate H_get_l.
+      + destruct H_get_r as [x' [H_get_0 H_app]].
+        split.
+        * intros H_in.
+          assert (H_get_0' := H_get_0).
+                                                   
+          simpl in H_get_0.
+          injection H_get_0 as H_a H_x'.
+          subst a.
+          simpl in H_in.
+          destruct H_in as [H_in_l|H_in_r].
+          
+          ** injection H_in_l as H_fname H_b1.
+             subst fname.
+             subst b1.
+             exists f.
+             split.
+             
+             *** apply in_eq.
+             *** 
+               
+        
+      
+        
+  Admitted.
+  
+
+
+
+  Lemma all_diff_aux:
+    forall p,
+    (forall f : SmartContractD.FunctionD.t,
+    In f (SmartContractD.functions p) <->
+    SmartContractD.get_function p (SmartContractD.FunctionD.name f) = Some f)
+    ->
+    (forall f : SmartContractD.FunctionD.t,
+    In f (SmartContractD.functions p) <->
+     find
+        (fun f0 : SmartContractD.FunctionD.t =>
+         FunctionName.eqb (SmartContractD.FunctionD.name f0)
+           (SmartContractD.FunctionD.name f)) (SmartContractD.functions p) = Some f).
+  Proof.
+    intros p.
+    intros H_all_diff.
+    intro f.
+    pose proof (H_all_diff f) as H_all_diff_f.
+    destruct H_all_diff_f as [H_all_diff_f_1 H_all_diff_f_2].
+    split.
+    * intros H_in_f.
+      pose proof (H_all_diff_f_1 H_in_f) as H_all_diff_f_1'.
+      unfold SmartContractD.get_function in H_all_diff_f_1'.
+      destruct (find (fun f0 : SmartContractD.FunctionD.t => FunctionName.eqb (SmartContractD.FunctionD.name f0) (SmartContractD.FunctionD.name f)) (SmartContractD.functions p)) as [func|]; try discriminate.
+      apply H_all_diff_f_1'.
+    * intros H_in_f.
+      unfold SmartContractD.get_function in H_all_diff_f_2.
+      rewrite H_in_f in H_all_diff_f_2.
+      apply (H_all_diff_f_2 eq_refl).
+  Qed.
+    
   
   Lemma get_all_blocks_correct:
     forall p l,
+      SmartContractD.valid_smart_contract p ->
       get_all_blocks p = l ->
-      forall fname b, In (fname,b) l <-> SmartContractD.get_block p fname b.(BlockD.bid) = Some b.
-  Admitted.
-  
+      forall b fname, In (fname,b) l <-> SmartContractD.get_block p fname b.(BlockD.bid) = Some b.
+  Proof.
+    intros p l H_valid_p H_get.
+    unfold SmartContractD.valid_smart_contract in H_valid_p.
+    destruct H_valid_p as [H_all_diff H_valid_fs].
+    unfold SmartContractD.all_function_name_are_different in H_all_diff.
+    unfold SmartContractD.all_function_are_valid in H_valid_fs.
+    pose proof (all_diff_aux p H_all_diff) as H_all_diff_find.
+    unfold get_all_blocks in H_get.
+    intros b fname.
+    pose proof (get_all_blocks_1_correct (SmartContractD.functions p) H_valid_fs H_all_diff_find l H_get b fname) as [H_block_1_correct_l H_block_1_correct_r].
+    split.
+    - intros H_in_b_l.
+      apply H_block_1_correct_l in H_in_b_l as [f0 [H_in_b_l_1 [H_in_b_l_2 H_in_b_l_3]]].
+      unfold SmartContractD.get_block.
+      unfold FunctionName.eqb in H_in_b_l_3.
+      rewrite String.eqb_eq in  H_in_b_l_3.
+      subst fname.
+      apply (H_all_diff f0) in H_in_b_l_1.
+      rewrite H_in_b_l_1.
+      apply H_in_b_l_2.
+    - intro H_get_b.
+      apply H_block_1_correct_r.
+      unfold SmartContractD.get_block in H_get_b.
+      destruct (SmartContractD.get_function p fname) as [func|] eqn:E_get_func; try discriminate.
+      exists func.
+      unfold SmartContractD.get_function in E_get_func.
+      destruct (find (fun f : SmartContractD.FunctionD.t => FunctionName.eqb (SmartContractD.FunctionD.name f) fname) (SmartContractD.functions p)) as [f0|] eqn:E_find_func; try discriminate.
+      pose proof (find_some (fun f : SmartContractD.FunctionD.t => FunctionName.eqb (SmartContractD.FunctionD.name f) fname) (SmartContractD.functions p) E_find_func) as [E_find_func_1 E_find_func_2].
+      unfold FunctionName.eqb in E_find_func_2.
+      rewrite String.eqb_eq in  E_find_func_2.
+      subst fname.
+      injection E_get_func as H_f0_func.
+      subst func.
+      repeat split.
+      + apply E_find_func_1.
+      + apply H_get_b.
+      + rewrite String.eqb_eq. reflexivity.
+  Qed.
+
   Fixpoint forallb_stop {A : Type} (test : A -> bool) (l : list A) : bool :=
     match l with
     | [] => true
@@ -888,7 +1277,7 @@ Lemma check_live_out_complete:
         rewrite H_f_z_false in E_f_z.
         discriminate E_f_z.
   Qed.
-  
+
   Definition check_live_all_functions (p: SmartContractD.t) (r: sc_live_info_t) : bool :=
     forallb_stop (fun i => check_live p r (fst i) (snd i)) (get_all_blocks p).
   
@@ -914,10 +1303,11 @@ Lemma check_live_out_complete:
   
   Lemma check_live_function_snd:
     forall p r,
+      SmartContractD.valid_smart_contract p ->
       check_live_all_functions p r = true ->
       snd_all_blocks_info p r.
   Proof.
-    intros p r H_chk.
+    intros p r H_valid H_chk.
     unfold check_live_all_functions in H_chk.
     
     pose proof (forallb_stop_if
@@ -928,26 +1318,26 @@ Lemma check_live_out_complete:
                   (aux p r)
                   H_chk).
     
-    pose proof (get_all_blocks_correct p (get_all_blocks p) eq_refl).
+    pose proof (get_all_blocks_correct p (get_all_blocks p) H_valid eq_refl).
     
-    assert(H1: forall (fname : FunctionName.t) (b : BlockD.t),
+    assert(H1: forall  (b : BlockD.t) (fname : FunctionName.t),
               SmartContractD.get_block p fname (BlockD.bid b) = Some b -> snd_block_info p r fname b).
       (*{*)
-      intros fname b.
-      pose proof (H0 fname b).
+      intros b fname.
+      pose proof (H0 b fname).
       pose proof (H (fname,b)).
       rewrite H1 in H2.
       simpl in H2.
       apply H2.
       (*}*)
-    
+
     assert(H2: forall (fname : FunctionName.t) (b : BlockD.t) (bid: BlockID.t),
               SmartContractD.get_block p fname bid = Some b -> snd_block_info p r fname b).
       (*{*)
       intros fname b bid H_exists.
       pose proof (bid_b p fname bid b H_exists).
       rewrite <- H2 in H_exists.
-      apply (H1 fname b H_exists).
+      apply (H1 b fname H_exists).
       (*}*)
     
     unfold snd_all_blocks_info.
@@ -955,21 +1345,23 @@ Lemma check_live_out_complete:
     apply (H2 f b bid).
   Qed.
 
-
+  
   Lemma check_live_function_complete:
     forall p r,
-      snd_all_blocks_info p r -> check_live_all_functions p r = true.
+      SmartContractD.valid_smart_contract p ->
+      snd_all_blocks_info p r ->
+      check_live_all_functions p r = true.
   Proof.    
-    intros p r H_snd.
+    intros p r H_valid H_snd.
     unfold snd_all_blocks_info in H_snd.
     
-    pose proof (get_all_blocks_correct p (get_all_blocks p) eq_refl).
+    pose proof (get_all_blocks_correct p (get_all_blocks p) H_valid eq_refl).
  
     assert( forall a,
               In a (get_all_blocks p) -> snd_block_info p r (fst a) (snd a)).
     (*{*)
       intros a.
-      pose proof (H (fst a) (snd a)).
+      pose proof (H (snd a) (fst a) ).
       rewrite <- surjective_pairing in H0.
       rewrite H0.
       pose proof (H_snd (fst a) (snd a).(BlockD.bid) (snd a)).
@@ -1001,12 +1393,13 @@ Lemma check_live_out_complete:
 
   Lemma check_live_function_correct:
     forall p r,
+      SmartContractD.valid_smart_contract p ->
       snd_all_blocks_info p r <-> check_live_all_functions p r = true.
   Proof.
-    intros p r.
+    intros p r H_valid.
     split.
-    - apply check_live_function_complete.
-    - apply check_live_function_snd.
+    - apply check_live_function_complete. apply H_valid.
+    - apply check_live_function_snd. apply H_valid.
   Qed.
 
 End Liveness.

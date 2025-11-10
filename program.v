@@ -176,6 +176,12 @@ Module Function (D: DIALECT).
     | None => None
     end.
   
+   Definition valid_function (f: t) :=
+     ~ (f.(blocks) = []) (* not empty *)
+     /\
+    forall b,
+      In b (blocks f) <-> get_block f b.(BlockD.bid) = Some b.
+   
 End Function.
 
 
@@ -189,8 +195,7 @@ Module SmartContract (D: DIALECT).
     functions : list FunctionD.t; (* List of functions in the smart contract *)
     main: FunctionName.t; (* The main function of the smart contract *)
   }.
-
-  
+ 
   Definition get_function (sc: t) (fname: FunctionName.t) : option FunctionD.t :=
     match List.find (fun f => FunctionName.eqb f.(FunctionD.name) fname) sc.(functions) with
     | Some func => Some func
@@ -215,5 +220,16 @@ Module SmartContract (D: DIALECT).
     | Some func => Some func.(FunctionD.entry_block_id)
     | None => None
     end.
-  
+
+  Definition all_function_name_are_different  (p: t) :=
+      forall f,
+        In f (functions p) <-> get_function p f.(FunctionD.name) = Some f.
+
+  Definition all_function_are_valid  (p: t) :=
+    forall f,
+      In f (functions p) -> FunctionD.valid_function f.
+
+  Definition valid_smart_contract (p: t) :=
+    all_function_name_are_different p /\ all_function_are_valid p.
+
 End SmartContract.
