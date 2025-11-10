@@ -1087,7 +1087,7 @@ Lemma check_live_out_complete:
       forall l,
         get_all_blocks_1 fs = l ->
         forall b fname, In (fname,b) l <->
-                          exists f, In f fs /\ FunctionD.get_block f b.(BlockD.bid) = Some b /\ FunctionName.eqb f.(FunctionD.name) fname = true.
+                          exists f, In f fs /\ FunctionName.eqb f.(FunctionD.name) fname = true /\ FunctionD.get_block f b.(BlockD.bid) = Some b.
   Proof.
     induction fs as [| f fs' IHfs'].
     - intros H_all_valid H_diff_name l H_get b fname.
@@ -1200,7 +1200,7 @@ Lemma check_live_out_complete:
     pose proof (get_all_blocks_1_correct (SmartContractD.functions p) H_valid_fs H_all_diff_find l H_get b fname) as [H_block_1_correct_l H_block_1_correct_r].
     split.
     - intros H_in_b_l.
-      apply H_block_1_correct_l in H_in_b_l as [f0 [H_in_b_l_1 [H_in_b_l_2 H_in_b_l_3]]].
+      apply H_block_1_correct_l in H_in_b_l as [f0 [H_in_b_l_1 [H_in_b_l_3 H_in_b_l_2]]].
       unfold SmartContractD.get_block.
       unfold FunctionName.eqb in H_in_b_l_3.
       rewrite String.eqb_eq in  H_in_b_l_3.
@@ -1223,8 +1223,8 @@ Lemma check_live_out_complete:
       subst func.
       repeat split.
       + apply E_find_func_1.
-      + apply H_get_b.
       + rewrite String.eqb_eq. reflexivity.
+      + apply H_get_b.
   Qed.
 
   Fixpoint forallb_stop {A : Type} (test : A -> bool) (l : list A) : bool :=
