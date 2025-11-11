@@ -177,8 +177,6 @@ Module Function (D: DIALECT).
     end.
   
    Definition valid_function (f: t) :=
-     ~ (f.(blocks) = []) (* not empty *)
-     /\
     forall b,
       In b (blocks f) <-> get_block f b.(BlockD.bid) = Some b.
    
@@ -231,5 +229,72 @@ Module SmartContract (D: DIALECT).
 
   Definition valid_smart_contract (p: t) :=
     all_function_name_are_different p /\ all_function_are_valid p.
+
+  Lemma valid_p_vs_get_block:
+    forall p,
+      valid_smart_contract p ->
+      forall fname bid b,
+        get_block p fname bid = Some b <->
+          exists f, In f p.(functions)  /\ In b f.(FunctionD.blocks) /\ FunctionName.eqb f.(FunctionD.name) fname = true /\ BlockID.eqb b.(BlockD.bid) bid = true.
+  Proof.
+    intros p H_valid_p.
+    intros f bid b.
+    split.
+    - intros H_get_block.
+      unfold get_block in H_get_block.
+      destruct (get_function p f) as [func|] eqn:E_get_function; try discriminate.
+      unfold get_function in E_get_function.
+      destruct (find (fun f0 : FunctionD.t => FunctionName.eqb (FunctionD.name f0) f)) as [func'|] eqn:E_find_func'; try discriminate.
+      injection E_get_function as H_func'_eq_func.
+      subst func'.
+
+      unfold FunctionD.get_block in H_get_block.
+      destruct (find (fun b : FunctionD.BlockD.t => BlockID.eqb (FunctionD.BlockD.bid b) bid) (FunctionD.blocks func)) as [b'|] eqn:E_find_b'; try discriminate.
+        
+      injection H_get_block as H_b'_eq_b.
+      subst b'.
+
+      pose proof (find_some (fun f0 : FunctionD.t => FunctionName.eqb (FunctionD.name f0) f) (functions p) E_find_func' ) as [H_in_func_pfs H_func_name_eqb_f].
+      
+      pose proof (find_some (fun b : FunctionD.BlockD.t => BlockID.eqb (FunctionD.BlockD.bid b) bid) (FunctionD.blocks func) E_find_b') as [H_in_b_funcbs H_b_bid_eqb_bid].
+
+      exists func.
+      repeat split.
+      + apply H_in_func_pfs.
+      + apply H_in_b_funcbs.
+      + apply H_func_name_eqb_f.
+      + apply H_b_bid_eqb_bid.
+
+    - intros H_exists_f0.
+      destruct H_exists_f0 as [f0 [In_f0_pfs [In_b_f0bs [H_f0_name_eqb_f H_b_bid_eqb_b]]]].
+
+      unfold FunctionName.eqb in H_f0_name_eqb_f.
+      apply String.eqb_eq in H_f0_name_eqb_f.
+      subst f.
+
+      unfold BlockID.eqb in H_b_bid_eqb_b.
+      apply Nat.eqb_eq in H_b_bid_eqb_b.
+      subst bid.
+      
+      
+      unfold valid_smart_contract in H_valid_p.
+      destruct H_valid_p as [H_all_fname_diff H_all_f_valid].
+
+      
+      unfold all_function_name_are_different in H_all_fname_diff.
+      unfold all_function_are_valid in H_all_f_valid.
+
+      unfold get_block.
+
+      pose proof (H_all_fname_diff f0) as H_get_function_f0.
+      pose proof (H_all_f_valid f0 In_f0_pfs) as H_f0_valid.
+      unfold FunctionD.valid_function in H_f0_valid.
+
+      rewrite H_get_function_f0 in In_f0_pfs.
+      rewrite In_f0_pfs.
+      
+      rewrite H_f0_valid in In_b_f0bs.
+      apply In_b_f0bs.
+  Qed.
 
 End SmartContract.
