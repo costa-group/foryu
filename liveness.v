@@ -992,7 +992,7 @@ Lemma check_live_out_complete:
       - apply check_smart_contract_snd.
     Qed.
         
-  Lemma check_smart_contract_correct_1:
+  Lemma check_valid_smart_contract_correct:
     forall p r,
       SmartContractD.valid_smart_contract p ->
       snd_all_blocks_info p r <-> check_smart_contract p r = true.
@@ -1027,7 +1027,7 @@ Lemma check_live_out_complete:
       
       apply (H_snd f H_f_in_pfs b H_b_in_fbs).
   Qed.
-
+  
 End Liveness.
 
 
