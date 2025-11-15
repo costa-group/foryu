@@ -130,6 +130,8 @@ Module U256.
             0 in
         (x mod (2 ^ size)) + extend_bit sign_bit size.
 
+    Definition  eq_dec := Z.eq_dec.
+
 End U256.
 
 
@@ -477,4 +479,8 @@ Module EVMDialect <: DIALECT.
 
   Definition revert_state (old_state new_state: dialect_state) : dialect_state :=
     old_state.
+
+  Definition eq_dec (x y : value_t) : {x = y} + {x <> y}.
+  Admitted.
+
 End EVMDialect.

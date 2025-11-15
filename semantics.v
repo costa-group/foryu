@@ -326,11 +326,7 @@ Module SmallStep (D: DIALECT).
     Fixpoint eval (steps: nat) (s: StateD.t) (p: SmartContractD.t) : StateD.t :=
         match steps with
         | 0%nat => s
-        | S n => 
-            match s.(StateD.status) with
-            | Status.Running => let s' := step s p in eval n s' p
-            | _ => s (* If the status is not running, return the state as is *)
-            end
+        | S n => eval n (step s p) p
         end.
 
 End SmallStep.

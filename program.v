@@ -8,6 +8,10 @@ Require Export Coq.Lists.List.
 Import ListNotations.
 Require Export Coq.Strings.String.
 Require Export FORYU.evm_dialect.
+Require Import Orders.
+Require Import OrdersEx.
+Require Import MSets.
+Require Import Arith.
 
 
 Global Open Scope string_scope.
@@ -20,6 +24,8 @@ Module BlockID.
 
   Definition eqb (b1 b2 : t) : bool :=
     Nat.eqb b1 b2.
+
+  Definition eq_dec := Nat.eq_dec.
 End BlockID.
 
 Module YULVariable.
@@ -28,10 +34,75 @@ Module YULVariable.
 
   Definition eqb (v1 v2 : t) : bool :=
     Nat.eqb v1 v2.
+
+  Definition eq_dec := Nat.eq_dec.  
 End YULVariable.
+
+Module VarSet := Make Nat_as_OT.
+
 
 Module SimpleExpr (D: DIALECT).
   Definition t : Type := YULVariable.t + D.value_t.
+
+
+  Definition eq_dec (v1 v2 : t) : {v1 = v2} + {v1 <> v2}.
+  Proof.
+  (* We do a case analysis on the first value, v1 *)
+  destruct v1 as [n1 | s1].
+  
+  (* --- Case 1: v1 is 'inl n1' (a nat) --- *)
+  - (* Now we do a case analysis on the second value, v2 *)
+    destruct v2 as [n2 | s2].
+    
+    (* Case 1.1: v1 = inl n1, v2 = inl n2 *)
+    (* Both are nats. We can use the 'nat' decider. *)
+    + destruct (YULVariable.eq_dec n1 n2) as [H_eq | H_neq].
+      * (* n1 = n2 *)
+        left. (* We claim v1 = v2 *)
+        (* Proof: *)
+        rewrite H_eq. reflexivity.
+      * (* n1 <> n2 *)
+        right. (* We claim v1 <> v2 *)
+        (* Proof: *)
+        intros H_contra. (* Assume v1 = v2 (inl n1 = inl n2) *)
+        injection H_contra as H_n_eq. (* This implies n1 = n2 *)
+        apply H_neq. (* This contradicts H_neq *)
+        exact H_n_eq.
+
+    (* Case 1.2: v1 = inl n1, v2 = inr s2 *)
+    (* A nat and a string can never be equal. *)
+    + right. (* We claim v1 <> v2 *)
+      (* Proof: *)
+      intros H_contra. (* Assume inl n1 = inr s2 *)
+      discriminate H_contra. (* 'discriminate' proves this is impossible *)
+
+  (* --- Case 2: v1 is 'inr s1' (a string) --- *)
+  - (* Case analysis on v2 *)
+    destruct v2 as [n2 | s2].
+
+    (* Case 2.1: v1 = inr s1, v2 = inl n2 *)
+    (* A string and a nat can never be equal. *)
+    + right. (* We claim v1 <> v2 *)
+      (* Proof: *)
+      intros H_contra. (* Assume inr s1 = inl n2 *)
+      discriminate H_contra.
+      
+    (* Case 2.2: v1 = inr s1, v2 = inr s2 *)
+    (* Both are strings. We can use the 'string' decider. *)
+    + destruct (D.eq_dec s1 s2) as [H_eq | H_neq].
+      * (* s1 = s2 *)
+        left. (* We claim v1 = v2 *)
+        (* Proof: *)
+        rewrite H_eq. reflexivity.
+      * (* s1 <> s2 *)
+        right. (* We claim v1 <> v2 *)
+        (* Proof: *)
+        intros H_contra. (* Assume inr s1 = inr s2 *)
+        injection H_contra as H_s_eq.
+        apply H_neq.
+        exact H_s_eq.
+Defined.
+
 End SimpleExpr.
 
 Module FunctionName.
@@ -40,12 +111,18 @@ Module FunctionName.
 
   Definition eqb (f1 f2 : t) : bool :=
     String.eqb f1 f2.
+
+  Definition eq_dec := string_dec.
 End FunctionName.
 
 
 Module ExitInfo (D: DIALECT).
   Definition tt := D.value_t.
   Module SimpleExprD := SimpleExpr(D).
+
+  Inductive ttt:=
+  | c1 (n: nat).
+  
   
   Inductive t : Type := 
   | ConditionalJump (cond_var : YULVariable.t) 
@@ -54,6 +131,56 @@ Module ExitInfo (D: DIALECT).
   | Jump (target : BlockID.t)
   | ReturnBlock (return_values : list SimpleExprD.t) (* I believe they are always vars *)
   | Terminated.
+
+  Definition eq_dec (v1 v2: t) : {v1 = v2} + { v1 <> v2}.
+    destruct v1 as [ cv1 tt1 tf1 | t1 | rs1 | ]; destruct v2 as [ cv2 tt2 tf2 | t2 | rs2 | ]; try (right; intros H_contra; discriminate H_contra).
+    - destruct (YULVariable.eq_dec cv1 cv2) as [H_cv1_eq_cv2 | H_cv1_neq_cv2].
+      + destruct (BlockID.eq_dec tt1 tt2) as [H_tt1_eq_tt2 | H_tt1_neq_tt2].
+        * destruct (BlockID.eq_dec tf1 tf2) as [H_tf1_eq_tf2 | H_tf1_neq_tf2].
+          ** left.
+             rewrite H_cv1_eq_cv2. rewrite H_tt1_eq_tt2. rewrite H_tf1_eq_tf2. reflexivity.
+          ** right.
+             rewrite H_cv1_eq_cv2.
+             rewrite H_tt1_eq_tt2.
+             intros H_contra.
+             injection H_contra as H_tf1_eq_tf2.
+             apply H_tf1_neq_tf2.
+             exact H_tf1_eq_tf2.
+        * right.
+          rewrite H_cv1_eq_cv2.
+          intros H_contra.
+          injection H_contra as H_tt1_eq_tt2 H_tf1_eq_tf2.
+          apply H_tt1_neq_tt2.
+          exact H_tt1_eq_tt2.
+      + right.
+        intro H_contra.
+        injection H_contra as H_cv1_eq_cv2 H_tt1_eq_tt2 H_tf1_eq_tf2.
+        apply H_cv1_neq_cv2.
+        exact H_cv1_eq_cv2.        
+    - destruct (BlockID.eq_dec t1 t2) as [H_t1_eq_t2 | H_t1_neq_t2].
+      + left.
+        rewrite H_t1_eq_t2.
+        reflexivity.
+      + right.
+        intro H_contra.
+        apply H_t1_neq_t2.
+        injection H_contra as H_t1_eq_t2.
+        exact H_t1_eq_t2.
+        
+    - destruct (list_eq_dec SimpleExprD.eq_dec rs1 rs2) as [H_rs1_eq_rs2|H_rs1_neq_rs2].
+      + left.
+        rewrite H_rs1_eq_rs2.
+        reflexivity.
+      + right.
+        intros H_contra.
+        apply H_rs1_neq_rs2.
+        injection H_contra as H_rs1_eq_rs2.
+        exact  H_rs1_eq_rs2.
+
+    - left. reflexivity.
+  Defined.
+
+       
 End ExitInfo.
 
 
@@ -66,6 +193,28 @@ Module YULVariableMap (D: DIALECT).
   (* A pair (dest, origin) means that variable 'x' must take the value of the variable 'origin' *)
  
   Definition empty : t := [].
+
+  Definition eq_dec_aux (v1 v2 : YULVariable.t * SimpleExprD.t) : {v1 = v2} + { v1 <> v2}.
+    destruct v1 as [v1 s1]; destruct v2 as [v2 s2].
+    destruct (YULVariable.eq_dec v1 v2) as [H_v1_eq_v2 | H_v1_neq_v2].
+    - destruct (SimpleExprD.eq_dec s1 s2) as [H_s1_eq_s2 | H_s1_neq_s2].
+      + left.
+        rewrite H_v1_eq_v2.
+        rewrite H_s1_eq_s2.
+        reflexivity.
+      + right.
+        rewrite H_v1_eq_v2.
+        intros H_contra.
+        injection H_contra as H_s1_eq_s2.
+        apply H_s1_neq_s2.
+        apply H_s1_eq_s2.
+    - right.
+      intro H_contra.
+      injection H_contra as H_v1_eq_v2 H_s1_eq_s2.
+      apply H_v1_neq_v2.
+      apply H_v1_eq_v2.
+  Qed.
+  
 End YULVariableMap.
 
 

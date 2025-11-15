@@ -11,6 +11,7 @@ Module Status.
 End Status.
 
 
+
 Module Type DIALECT.
   Parameter value_t : Type.
   Parameter opcode_t : Type.
@@ -25,4 +26,8 @@ Module Type DIALECT.
   Parameter empty_dialect_state : dialect_state.
 
   Parameter revert_state : dialect_state -> dialect_state -> dialect_state.
+
+  Parameter eq_dec
+     : forall (n m : value_t), {n = m} + {n <> m}.
+  
 End DIALECT.

@@ -7,11 +7,11 @@ Require Import MSets.
 Require Import Arith.
 Require Import List.
 Import ListNotations.
+Require Import Coq.Relations.Relation_Operators.
+Require Import stdpp.prelude.
+Require Import stdpp.relations. (* This is where nsteps lives *)
 
-Set Bullet Behavior "Strict Subproofs".
-
-Module VarSet := Make Nat_as_OT.
-
+  
 Module Liveness (D: DIALECT).
 
   Module SmallStepD := SmallStep(D).
@@ -23,7 +23,10 @@ Module Liveness (D: DIALECT).
   Module InstructionD := BlockD.InstructionD.
   Module YULVariableMapD := BlockD.PhiInfoD.YULVariableMapD.
   Module SimpleExprD := BlockD.PhiInfoD.YULVariableMapD.SimpleExprD.
-
+  Module CallStackD := StateD.CallStackD.
+  Module StackFrameD := CallStackD.StackFrameD.
+  Module VariableAssignmentD := StackFrameD.VariableAssignmentD.
+  
   (* convert a list to a set *)
   Fixpoint list_to_set (l : list nat) : VarSet.t :=
     match l with
@@ -31,6 +34,8 @@ Module Liveness (D: DIALECT).
     | x::xs => VarSet.add x (list_to_set xs)
     end.
 
+  (* extracts a list of variables from a list of simple expressions (a
+    simple expression is either a variable or of type D.t *)
   Fixpoint extract_yul_vars (l : list SimpleExprD.t) : list nat :=
     match l with
     | nil => nil
@@ -42,21 +47,22 @@ Module Liveness (D: DIALECT).
         end
     end.
 
-  Fixpoint apply_phi (l : YULVariableMapD.t) (s: VarSet.t) :=
+  (* applies the inverse of the phi function 'l' (pairs of variable
+  and simple expressions) to the set of expressions 's'.  *)
+  Fixpoint apply_inv_phi (l : YULVariableMapD.t) (s: VarSet.t) :=
     match l with
     | nil => s
     | (dest,orig)::vs =>
         match orig with
         | inl var =>
             if (VarSet.mem dest s) then
-              apply_phi vs (VarSet.add var (VarSet.remove dest s))
+              apply_inv_phi vs (VarSet.add var (VarSet.remove dest s))
             else
-              apply_phi vs s
+              apply_inv_phi vs s
         | inr _ =>
-            apply_phi vs s
+            apply_inv_phi vs s
         end
     end.
-
 
   Lemma remove_preserves_equal:
     forall s1 s2 e,
@@ -106,15 +112,15 @@ Module Liveness (D: DIALECT).
       discriminate.
   Qed.
       
-  Lemma apply_phi_preserves_equal:
+  Lemma apply_inv_phi_preserves_equal:
     forall l s1 s2,
       VarSet.Equal s1 s2 ->
-      VarSet.Equal (apply_phi l s1) (apply_phi l s2).
+      VarSet.Equal (apply_inv_phi l s1) (apply_inv_phi l s2).
   Proof.
     induction l as [|a l' IHl'].
     + trivial.
     + intros s1 s2 H_s1_eq_s2.
-      unfold apply_phi. fold apply_phi.
+      unfold apply_inv_phi. fold apply_inv_phi.
       destruct a as [dest orig] eqn:E_do.
       destruct orig as [var|] eqn:E_orig.
       ++ pose proof (VarSet.mem_spec s1 dest) as H_mem_s1.
@@ -206,32 +212,85 @@ Module Liveness (D: DIALECT).
     reflexivity.
   Qed.
 
-  Fixpoint prop_live_set_bkw (l: list InstructionD.t) (s: VarSet.t) : VarSet.t  :=
-    match l with
-    | nil => s
-    | i::l' =>
-        let s' :=  prop_live_set_bkw l' s in
-        let inset := list_to_set (extract_yul_vars i.(InstructionD.input)) in
-        let outset := list_to_set i.(InstructionD.output) in
-        (VarSet.union (VarSet.diff s' outset) inset)
+  Lemma aux {A: Type}:
+    forall (n: nat) (l: list A),
+      Nat.le (S n) (length l) ->
+      exists x xs, l=x::xs.
+  Proof.
+    intros n l H.
+    destruct l as [|x xs].
+    - simpl in H.
+      pose proof (Nat.nle_succ_0 n) as H0.
+      contradiction.
+    - exists x. exists xs.
+      reflexivity.
+  Qed.
+    
+  Definition prop_live_set_bkw_instr (i: InstructionD.t) (s: VarSet.t) : VarSet.t :=
+    let inset := list_to_set (extract_yul_vars i.(InstructionD.input)) in
+    let outset := list_to_set i.(InstructionD.output) in
+    (VarSet.union (VarSet.diff s outset) inset).
+
+    Lemma prop_live_set_bkw_instr_preserves_equal:
+    forall i s1 s2,
+      VarSet.Equal s1 s2 ->
+      VarSet.Equal (prop_live_set_bkw_instr i s1) (prop_live_set_bkw_instr i s2).
+    Proof.
+      intros l s1 s2 H_eq_s1_s2.
+      unfold prop_live_set_bkw_instr.
+      apply  (union_preserves_equal (VarSet.diff s1 (list_to_set (InstructionD.output l))) (VarSet.diff s2 (list_to_set (InstructionD.output l))) (list_to_set (extract_yul_vars (InstructionD.input l))) (list_to_set (extract_yul_vars (InstructionD.input l))) (diff_preserves_equal s1 s2 (list_to_set (InstructionD.output l)) (list_to_set (InstructionD.output l)) H_eq_s1_s2 (varset_equal_refl (list_to_set (InstructionD.output l)))) (varset_equal_refl  (list_to_set (extract_yul_vars (InstructionD.input l))))).
+    Qed.
+    
+  Fixpoint prop_live_set_bkw_aux (n: nat) (l_rev: list InstructionD.t) (s: VarSet.t) : VarSet.t :=
+    match n with
+    | 0%nat => s
+    | S n' =>
+        match l_rev with
+        | nil => s
+        | i::l_rev' =>
+            prop_live_set_bkw_aux n' l_rev' (prop_live_set_bkw_instr i s)
+        end
     end.
 
-  Lemma prop_live_set_bkw_preserves_equal:
-        forall l s1 s2,
-          VarSet.Equal s1 s2 ->
-          VarSet.Equal (prop_live_set_bkw l s1) (prop_live_set_bkw l s2).
+  Lemma prop_live_set_bkw_aux_preserves_equal:
+    forall n l s1 s2,
+      VarSet.Equal s1 s2 ->
+      VarSet.Equal (prop_live_set_bkw_aux n l s1) (prop_live_set_bkw_aux n l s2).
   Proof.
-    induction l as [|a l' IHl'].
-    + trivial.
-    + intros s1 s2 H_s1_eq_s2.
-      unfold prop_live_set_bkw. fold prop_live_set_bkw.
-      apply (union_preserves_equal
-               (VarSet.diff (prop_live_set_bkw l' s1) (list_to_set (InstructionD.output a)))
-               (VarSet.diff (prop_live_set_bkw l' s2) (list_to_set (InstructionD.output a)))
-               (list_to_set (extract_yul_vars (InstructionD.input a)))
-               (list_to_set (extract_yul_vars (InstructionD.input a)))
-               (diff_preserves_equal (prop_live_set_bkw l' s1) (prop_live_set_bkw l' s2) (list_to_set (InstructionD.output a)) (list_to_set (InstructionD.output a)) (IHl' s1 s2 H_s1_eq_s2) (varset_equal_refl (list_to_set (InstructionD.output a))))
-               (varset_equal_refl (list_to_set (extract_yul_vars (InstructionD.input a))))).
+    induction n as [|n' IHn'].
+    - simpl.
+      intros l s1 s2 H_eq_s1_s2.
+      apply H_eq_s1_s2.
+    - intros l s1 s2 H_eq_s1_s2.
+      destruct l as [|i l'] eqn:E_l; try discriminate.
+      + simpl.
+        apply H_eq_s1_s2.
+      +
+        simpl.
+        apply (IHn' l' (prop_live_set_bkw_instr i s1) (prop_live_set_bkw_instr i s2) (prop_live_set_bkw_instr_preserves_equal i s1 s2 H_eq_s1_s2)).
+  Qed.
+
+  Fixpoint prop_live_set_bkw (l: list InstructionD.t) (s: VarSet.t) : VarSet.t :=    
+    prop_live_set_bkw_aux  (length l) (rev l) s.
+
+  Lemma prop_live_set_bkw_is_prop_aux:
+    forall l s,
+      prop_live_set_bkw l s = prop_live_set_bkw_aux (length l) (rev l) s.
+  Proof.
+    intros l s.
+    destruct l as [|i l'] eqn:E_l.
+    - simpl. reflexivity.
+    - unfold prop_live_set_bkw. reflexivity.
+  Qed.
+  
+  Lemma prop_live_set_bkw_preserves_equal:
+    forall l s1 s2,
+      VarSet.Equal s1 s2 ->
+      VarSet.Equal (prop_live_set_bkw l s1) (prop_live_set_bkw l s2).
+  Proof.
+    intros l s1 s2 H_eq_s1_s2.
+    repeat rewrite prop_live_set_bkw_is_prop_aux.
+    apply (prop_live_set_bkw_aux_preserves_equal (Datatypes.length l) (rev l) s1 s2 H_eq_s1_s2).
   Qed.
 
   Definition add_jump_var_if_applicable (b: BlockD.t) (s: VarSet.t) :=
@@ -254,7 +313,7 @@ Module Liveness (D: DIALECT).
   
   
   (*
-    Th  e following co-inductive defintions is for live variable properties.
+    The following co-inductive defintions are for live variables properties.
     
     live_out p f bid s: s is the set of live variables at the exit of the block p/f/bid
     live_in p f bid s: s is the set of live variables at the entry of the block p/f/bid
@@ -281,7 +340,7 @@ Module Liveness (D: DIALECT).
     BlockD.is_jump_block b = Some next_bid -> (* the block ends with a jump, and next_bid is the id of the next block *)
     live_in p fname next_bid s -> (* s is the set of live variables at the entry of p/fname/next_bid *)
     SmartContractD.get_block p fname next_bid = Some next_b -> (* next_b is the block with id next_bid *)
-    VarSet.Equal sout (apply_phi (BlockD.phi_function next_b bid) s) ->
+    VarSet.Equal sout (apply_inv_phi (BlockD.phi_function next_b bid) s) ->
     live_out p fname bid sout  (* sout is the set of live variable at the exit of p/fname/bid *)
 
   (* A block with a conditional jump *)
@@ -292,7 +351,7 @@ Module Liveness (D: DIALECT).
     live_in p fname next_bid_if_false s2 -> (* s2 is the set of live variables at the entry of p/fname/next_bid_if_false *)
     SmartContractD.get_block p fname next_bid_if_true = Some next_b_if_true -> (* next_b_if_true is the block with id next_bid_if_true *)
     SmartContractD.get_block p fname next_bid_if_false = Some next_b_if_false -> (* next_b_if_false is the block with id next_bid_if_false *)
-    VarSet.Equal sout (VarSet.union (apply_phi (BlockD.phi_function next_b_if_true bid) s1) (apply_phi (BlockD.phi_function next_b_if_false bid) s2)) ->
+    VarSet.Equal sout (VarSet.union (apply_inv_phi (BlockD.phi_function next_b_if_true bid) s1) (apply_inv_phi (BlockD.phi_function next_b_if_false bid) s2)) ->
     live_out p fname bid sout
   with
     live_in (p : SmartContractD.t) : FunctionName.t -> BlockID.t -> VarSet.t -> Prop :=
@@ -302,6 +361,77 @@ Module Liveness (D: DIALECT).
     VarSet.Equal sout (prop_live_set_bkw b.(BlockD.instructions) (add_jump_var_if_applicable b s)) ->
     live_in p fname bid sout.
 
+  Inductive live_at_pc (p : SmartContractD.t) : FunctionName.t -> BlockID.t -> nat -> VarSet.t -> Prop :=
+  | live_at_pc_1 (fname : FunctionName.t) (bid :  BlockID.t) (b: BlockD.t) (pc: nat) (s sout: VarSet.t):
+    SmartContractD.get_block p fname bid = Some b -> (* the block exists *)
+    live_out p fname bid s ->
+    Nat.le pc (length b.(BlockD.instructions)) ->
+    VarSet.Equal sout (prop_live_set_bkw_aux ((length b.(BlockD.instructions)) - pc) (rev b.(BlockD.instructions)) (add_jump_var_if_applicable b s)) ->
+    live_at_pc p fname bid pc sout.
+
+    Inductive live_at_pc' (p : SmartContractD.t) : FunctionName.t -> BlockID.t -> nat -> VarSet.t -> Prop :=
+  | live_at_pc'_eob (fname : FunctionName.t) (bid :  BlockID.t) (b: BlockD.t) (pc: nat) (s sout: VarSet.t):
+    SmartContractD.get_block p fname bid = Some b -> (* the block exists *)
+    live_out p fname bid s ->
+    pc = (length b.(BlockD.instructions)) ->
+    VarSet.Equal sout (add_jump_var_if_applicable b s) ->
+    live_at_pc' p fname bid pc sout
+  | live_at_pc'_inb (fname : FunctionName.t) (bid :  BlockID.t) (b: BlockD.t) (pc: nat) (s sout: VarSet.t) (i: InstructionD.t):               
+    SmartContractD.get_block p fname bid = Some b -> (* the block exists *)
+    live_at_pc' p fname bid (S pc) s ->
+    nth_error b.(BlockD.instructions) pc = Some i ->
+    VarSet.Equal sout (prop_live_set_bkw_instr i s) ->
+    live_at_pc' p fname bid pc sout.
+
+    Lemma len_eq:
+      forall {A: Type} (x y : list A), x = y -> length x = length y.
+    Proof.
+      intros.
+      rewrite H.
+      reflexivity.
+    Qed.
+
+    
+  Theorem live_at_pc'_equiv_live_at_pc:
+    forall i p fname bid b s,
+      SmartContractD.get_block p fname bid = Some b -> (* the block exists *)
+      Nat.le i (length b.(BlockD.instructions)) ->
+      live_at_pc p fname bid ((length b.(BlockD.instructions)) - i) s <-> live_at_pc' p fname bid ((length b.(BlockD.instructions)) - i) s.
+  Proof.
+    Admitted.
+    
+  Theorem live_at_pc_zero_eq_live_in:
+    forall p fname bid s,
+      live_at_pc p fname bid 0%nat s <-> live_in p fname bid s.
+  Proof.
+    intros p fname bid s.
+    remember 0%nat as pc eqn:H_pc_0.
+    split.
+    - intros H_live_at_pc.
+      destruct H_live_at_pc.
+      subst pc.
+      rewrite Nat.sub_0_r in H2.
+      destruct (BlockD.instructions b) eqn:H_instrs.
+      + pose proof (@li_block_any p fname bid b s sout H H0).
+        rewrite H_instrs in H3.
+        simpl in *.
+        apply (H3 H2).
+      + pose proof (@li_block_any p fname bid b s sout H H0).
+        pose proof (prop_live_set_bkw_is_prop_aux (t :: l) (add_jump_var_if_applicable b s)).
+        rewrite H_instrs in H3.
+        rewrite H4 in H3.
+        apply (H3 H2).
+    - intro H_live_in.
+      destruct H_live_in.
+      
+      pose proof (live_at_pc_1 p fname bid b 0 s sout H H0 (le_0_n (Datatypes.length (BlockD.instructions b)))).
+
+      rewrite prop_live_set_bkw_is_prop_aux in H1.
+      rewrite Nat.sub_0_r in H2.
+      rewrite H_pc_0.
+      apply (H2 H1).
+  Qed.
+
   Lemma live_in_varset_eq:
     forall p f bid s1 s2,
       VarSet.Equal s1 s2 ->
@@ -310,9 +440,9 @@ Module Liveness (D: DIALECT).
   Proof.
     intros p f bid s1 s2 H_s1_eq_s2 H_live_in_s1.
     destruct H_live_in_s1.
-    apply (@li_block_any p fname bid b s s2 H H0 (varset_equal_trans s2 sout (prop_live_set_bkw (BlockD.instructions b) (add_jump_var_if_applicable b s)) (varset_equal_sym sout s2 H_s1_eq_s2) H1)).
+    apply (@li_block_any p fname bid b s s2 H H0 (varset_equal_trans s2 sout (prop_live_set_bkw (BlockD.instructions b) (add_jump_var_if_applicable b s)) (varset_equal_sym sout s2 H_s1_eq_s2) H1)).    
   Qed.
-    
+
   Lemma live_out_varset_eq:
     forall p f bid s1 s2,
       VarSet.Equal s1 s2 ->
@@ -326,11 +456,11 @@ Module Liveness (D: DIALECT).
 
     + apply (@lo_block_w_ter p fname bid b s2 e e0 (varset_equal_trans s2 sout VarSet.empty (varset_equal_sym sout s2 H_s1_eq_s2) e1)).
 
-    + apply (@lo_block_w_jump p fname bid next_bid b next_b s s2 e e0 l e1 (varset_equal_trans s2 sout (apply_phi (BlockD.phi_function next_b bid) s) (varset_equal_sym sout s2 H_s1_eq_s2) e2)).
+    + apply (@lo_block_w_jump p fname bid next_bid b next_b s s2 e e0 l e1 (varset_equal_trans s2 sout (apply_inv_phi (BlockD.phi_function next_b bid) s) (varset_equal_sym sout s2 H_s1_eq_s2) e2)).
 
-    + apply (@lo_block_w_cond_jump p fname bid next_bid_if_true next_bid_if_false cond_var b next_b_if_true next_b_if_false s1 s0 s2 e e0 l l0 e1 e2 (varset_equal_trans s2 sout (VarSet.union (apply_phi (BlockD.phi_function next_b_if_true bid) s1) (apply_phi (BlockD.phi_function next_b_if_false bid) s0)) (varset_equal_sym sout s2 H_s1_eq_s2) e3)).
+    + apply (@lo_block_w_cond_jump p fname bid next_bid_if_true next_bid_if_false cond_var b next_b_if_true next_b_if_false s1 s0 s2 e e0 l l0 e1 e2 (varset_equal_trans s2 sout (VarSet.union (apply_inv_phi (BlockD.phi_function next_b_if_true bid) s1) (apply_inv_phi (BlockD.phi_function next_b_if_false bid) s0)) (varset_equal_sym sout s2 H_s1_eq_s2) e3)).
   Qed.
-  
+
   (* The following types are used to define the result of a live-variable analysis *)
   Definition block_live_info_t := nat -> option VarSet.t.
   Definition fun_live_info_t := BlockID.t -> option (VarSet.t * VarSet.t).
@@ -343,7 +473,6 @@ Module Liveness (D: DIALECT).
       SmartContractD.get_block p f bid = Some b -> 
       exists bid_res fr,
         r f = Some fr /\ fr bid = bid_res.
-
 
   (*
      This defines a proposition stating that the live-variable
@@ -369,7 +498,7 @@ Module Liveness (D: DIALECT).
             exists next_b next_b_in_info next_b_out_info,
             SmartContractD.get_block p f next_bid = Some next_b /\ 
               f_info next_bid = Some (next_b_in_info,next_b_out_info) /\
-              VarSet.Equal b_out_info (apply_phi (BlockD.phi_function next_b b.(BlockD.bid)) next_b_in_info)
+              VarSet.Equal b_out_info (apply_inv_phi (BlockD.phi_function next_b b.(BlockD.bid)) next_b_in_info)
         | ExitInfoD.ConditionalJump cond_var next_bid_if_true next_bid_if_false => 
             exists next_b_if_true next_b_ift_in_info next_b_ift_out_info next_b_if_false next_b_iff_in_info next_b_iff_out_info,
             SmartContractD.get_block p f next_bid_if_true = Some next_b_if_true /\ 
@@ -377,8 +506,8 @@ Module Liveness (D: DIALECT).
               f_info next_bid_if_true = Some (next_b_ift_in_info,next_b_ift_out_info) /\
               f_info next_bid_if_false = Some (next_b_iff_in_info,next_b_iff_out_info) /\
               VarSet.Equal b_out_info (VarSet.union
-                                         (apply_phi (BlockD.phi_function next_b_if_true b.(BlockD.bid)) next_b_ift_in_info)
-                                         (apply_phi (BlockD.phi_function next_b_if_false b.(BlockD.bid)) next_b_iff_in_info))
+                                         (apply_inv_phi (BlockD.phi_function next_b_if_true b.(BlockD.bid)) next_b_ift_in_info)
+                                         (apply_inv_phi (BlockD.phi_function next_b_if_false b.(BlockD.bid)) next_b_iff_in_info))
         end.
  
   Definition snd_block_in_info (r: sc_live_info_t) (f: FunctionName.t) (b: BlockD.t) : Prop :=
@@ -500,13 +629,11 @@ Module Liveness (D: DIALECT).
       (*}*)
 
       rewrite H_b_in_info_info'.
-      rewrite <- H_b_out_info_info' in H_b_in_info'.
 
       apply (@li_block_any p f bid b b_out_info' b_in_info' H_b_exists).
 
       apply (build_live_out p f bid b r f_info' b_in_info' b_out_info' H_snd_info H_b_exists H_r_f  H_f_info').
       
-      rewrite <- H_b_out_info_info'.
       apply H_b_in_info'.            
         
     (* the case of live_out p f bid b_in_info *)
@@ -672,7 +799,7 @@ Module Liveness (D: DIALECT).
                     match (f_info next_bid) with
                     | None => false
                     | Some (next_b_in_info,next_b_out_info) =>
-                        VarSet.equal b_out_info (apply_phi (BlockD.phi_function next_b b.(BlockD.bid)) next_b_in_info)
+                        VarSet.equal b_out_info (apply_inv_phi (BlockD.phi_function next_b b.(BlockD.bid)) next_b_in_info)
                     end
                 end
             | ExitInfoD.ConditionalJump cond_var next_bid_if_true next_bid_if_false =>
@@ -689,8 +816,8 @@ Module Liveness (D: DIALECT).
                             | None => false
                             | Some (next_b_iff_in_info,next_b_iff_out_info) =>
                                 VarSet.equal b_out_info (VarSet.union
-                                                           (apply_phi (BlockD.phi_function next_b_if_true b.(BlockD.bid)) next_b_ift_in_info)
-                                                           (apply_phi (BlockD.phi_function next_b_if_false b.(BlockD.bid)) next_b_iff_in_info))
+                                                           (apply_inv_phi (BlockD.phi_function next_b_if_true b.(BlockD.bid)) next_b_ift_in_info)
+                                                           (apply_inv_phi (BlockD.phi_function next_b_if_false b.(BlockD.bid)) next_b_iff_in_info))
                             end
                         end
                     end
@@ -936,27 +1063,27 @@ Lemma check_live_out_complete:
   Qed.
 
   
-    Lemma check_functions_complete:
-      forall fs p r,
-        (forall f, 
-            In f fs -> forall b, In b f.(FunctionD.blocks) -> snd_block_info p r f.(FunctionD.name) b) ->
-        check_functions fs p r = true.
-    Proof.
-      induction fs as [|f fs' IHfs'].
-      - simpl.
-        intros p r H_snd.
-        reflexivity.
-      - intros p r H_snd.
-        pose proof (H_snd f) as  H_snd_f.
-        simpl.
-        destruct (check_blocks (FunctionD.blocks f) (FunctionD.name f) p r) eqn:E_check_f_blocks.
-        + apply IHfs'.
-          intros f0 H_in_f0_fs' b.
-          apply (H_snd f0 (in_cons f f0 fs' H_in_f0_fs') b).
-        + rewrite (check_blocks_complete (FunctionD.blocks f) (FunctionD.name f) p r (H_snd_f (in_eq f fs'))) in E_check_f_blocks.
-          discriminate E_check_f_blocks.
-    Qed.
-
+  Lemma check_functions_complete:
+    forall fs p r,
+      (forall f, 
+          In f fs -> forall b, In b f.(FunctionD.blocks) -> snd_block_info p r f.(FunctionD.name) b) ->
+      check_functions fs p r = true.
+  Proof.
+    induction fs as [|f fs' IHfs'].
+    - simpl.
+      intros p r H_snd.
+      reflexivity.
+    - intros p r H_snd.
+      pose proof (H_snd f) as  H_snd_f.
+      simpl.
+      destruct (check_blocks (FunctionD.blocks f) (FunctionD.name f) p r) eqn:E_check_f_blocks.
+      + apply IHfs'.
+        intros f0 H_in_f0_fs' b.
+        apply (H_snd f0 (in_cons f f0 fs' H_in_f0_fs') b).
+      + rewrite (check_blocks_complete (FunctionD.blocks f) (FunctionD.name f) p r (H_snd_f (in_eq f fs'))) in E_check_f_blocks.
+        discriminate E_check_f_blocks.
+  Qed.
+  
   Lemma check_smart_contract_snd:
     forall p r,
     check_smart_contract p r = true ->
@@ -1027,7 +1154,85 @@ Lemma check_live_out_complete:
       
       apply (H_snd f H_f_in_pfs b H_b_in_fbs).
   Qed.
+
+
+  (* (R_step p) is a transition relation induced by to SmallStepD.step *)
+  Definition R_step (p: SmartContractD.t) : relation StateD.t :=
+    fun st st' => SmallStepD.step st p = st'.
+
+  (* (R_trans p) is a transitive closure of (R_step p) *)
+  Definition R_step_trans (p: SmartContractD.t) : relation StateD.t :=
+    tc (R_step p).
+
+  (* (R_step_trans_refl_n p) is an indexed transitive closure of (R_step p).
+     It is reflexive, so we always have to avoid the 0 case.
+  *)
+  Definition R_step_trans_refl_n (p: SmartContractD.t) :=
+    nsteps (R_step p).
   
+  Definition running_state (s: StateD.t) :=
+    s.(StateD.status) = Status.Running.
+  
+  Definition same_function_call (s1 s2: StateD.t) :=
+    match s1.(StateD.call_stack),s2.(StateD.call_stack) with
+    |  sf1::rs1,sf2::rs2 => FunctionName.eqb sf1.(StackFrameD.function_name) sf2.(StackFrameD.function_name) = true /\ rs1 = rs2
+    |  _,_ => False
+    end.
+
+  
+  
+  Definition split_at_i {A : Type} (i: nat) (l hl tl: list A) (a: A) :=
+      l = hl++(a::tl) /\ length tl = i.
+  
+  (* states the the i-th frame -- from the end -- in the call stack is at program point fname/bid/pc *)
+  Definition stack_frame_i_at_pp (i: nat) (fname: FunctionName.t) (bid: BlockID.t) (pc: nat) (st: StateD.t) :=
+    let call_stack := st.(StateD.call_stack) in
+    let j := (length call_stack) - i in
+    exists fs,
+      nth_error call_stack j = Some fs /\ fs.(StackFrameD.curr_block_id) = bid /\ fs.(StackFrameD.pc) = pc.
+
+
+  Definition equiv_up_to_i_v (p: SmartContractD.t) (i: nat) (v: YULVariable.t) (st1 st2: StateD.t) :=
+    let call_stack1 := st1.(StateD.call_stack) in
+    let call_stack2 := st2.(StateD.call_stack) in
+    let j1 := (length call_stack1) - i in
+    let j2 := (length call_stack2) - i in
+    j1 = j2 /\
+    exists hl tl f1 f2,
+      split_at_i j1 call_stack1 hl tl f1 /\
+      split_at_i j2 call_stack2 hl tl f2 /\
+        forall v', v'<>v ->
+                   VariableAssignmentD.get f1.(StackFrameD.variable_assignments) v =
+                     VariableAssignmentD.get f2.(StackFrameD.variable_assignments) v.
+
+    
+  Theorem live_at_snd:   
+    forall (p: SmartContractD.t) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t),
+      SmartContractD.get_block p fname bid = Some b ->
+      live_at_pc p fname bid pc s ->
+      forall (n i: nat) (st1 st1': StateD.t),
+        stack_frame_i_at_pp i fname bid pc st1 ->
+        SmallStepD.eval n st1 p = st1' ->
+        forall st2 v,
+          equiv_up_to_i_v p i v st1 st2->
+          ~ VarSet.In v s ->
+        exists st2',
+          SmallStepD.eval n st2 p = st2' /\
+            (equiv_up_to_i_v p i v st1' st2' \/ st2' = st1').
+  Proof.
+    intros p fname bid b pc s.
+    induction n as [|n' IHn].
+    - intros i st1 st1' H_at_pp H_eval_st1 st2 v H_equiv_st1_st2 H_not_live.
+      simpl in  H_eval_st1.
+      simpl.
+      exists st2.
+      split.
+      + reflexivity.
+      + rewrite <- H_eval_st1.
+        left.
+        apply H_equiv_st1_st2.
+    - admit.
+        
 End Liveness.
 
 
