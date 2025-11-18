@@ -1,5 +1,5 @@
 Require Export Coq.Strings.String.
-
+ 
 
 Module Status.
   (* Status of the program execution *)
@@ -27,7 +27,4 @@ Module Type DIALECT.
 
   Parameter revert_state : dialect_state -> dialect_state -> dialect_state.
 
-  Parameter eq_dec
-     : forall (n m : value_t), {n = m} + {n <> m}.
-  
 End DIALECT.
