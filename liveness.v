@@ -11,7 +11,7 @@ Require Import Coq.Relations.Relation_Operators.
 Require Import stdpp.prelude.
 Require Import stdpp.relations. (* This is where nsteps lives *)
 
-  
+
 Module Liveness (D: DIALECT).
 
   Module SmallStepD := SmallStep(D).
@@ -33,7 +33,42 @@ Module Liveness (D: DIALECT).
     | nil => VarSet.empty
     | x::xs => VarSet.add x (list_to_set xs)
     end.
-
+    
+  Lemma list_to_set_in:
+    forall l v,
+      List.In v l <-> VarSet.In v (list_to_set l).
+  Proof.
+    induction l as [ |v' l' IHl'].
+    - intro v.
+      simpl.
+      pose proof (VarSet.empty_spec).
+      unfold VarSet.Empty in H.
+      pose proof (H v).
+      split.
+      + intros.
+        contradiction H1.
+      + intros.
+        contradiction.
+    - intros v.
+      simpl list_to_set.
+      split.
+      * intros H_In.
+        simpl in H_In.
+        rewrite (VarSet.add_spec (list_to_set l') v' v).
+        destruct H_In.
+        ** left. symmetry. apply H.
+        ** right.
+           rewrite <- IHl'.
+           apply H.
+      * intros H_In.
+        rewrite (VarSet.add_spec (list_to_set l') v' v) in H_In.
+        simpl.
+        destruct H_In.
+        ** left. symmetry. apply H.
+        ** right.
+           rewrite IHl'.
+           apply H.
+  Qed.
   (* extracts a list of variables from a list of simple expressions (a
     simple expression is either a variable or of type D.t *)
   Fixpoint extract_yul_vars (l : list SimpleExprD.t) : list nat :=
@@ -1118,7 +1153,7 @@ Lemma check_live_out_complete:
       - apply check_smart_contract_complete.
       - apply check_smart_contract_snd.
     Qed.
-        
+
   Lemma check_valid_smart_contract_correct:
     forall p r,
       SmartContractD.valid_smart_contract p ->
@@ -1254,7 +1289,7 @@ Lemma check_live_out_complete:
       forall v', v'<>v ->
                  VariableAssignmentD.get sf1.(StackFrameD.variable_assignments) v' =
                    VariableAssignmentD.get sf2.(StackFrameD.variable_assignments) v'.
- 
+  
   Definition accessed_vars (b: BlockD.t) (pc: nat) (s: VarSet.t) :=
     ( pc = (length b.(BlockD.instructions)) /\
         match b.(BlockD.exit_info) with
@@ -1271,17 +1306,17 @@ Lemma check_live_out_complete:
     ).
   
     
-    Definition equiv_vars_in_top_frame (b: BlockD.t) (pc: nat) (st1 st2: StateD.t) :=
-      match st1.(StateD.call_stack), st1.(StateD.call_stack) with
-      | nil,nil => True
-      | sf1::_,sf2::_ =>
-          forall v s,
-                 accessed_vars b pc s ->
-                 VarSet.In v s ->
-                VariableAssignmentD.get sf1.(StackFrameD.variable_assignments) v =
-                VariableAssignmentD.get sf2.(StackFrameD.variable_assignments) v
-      | _,_ => False
-      end.
+  Definition equiv_vars_in_top_frame (b: BlockD.t) (pc: nat) (st1 st2: StateD.t) :=
+    match st1.(StateD.call_stack), st1.(StateD.call_stack) with
+    | nil,nil => True
+    | sf1::_,sf2::_ =>
+        forall v s,
+          accessed_vars b pc s ->
+          VarSet.In v s ->
+          VariableAssignmentD.get sf1.(StackFrameD.variable_assignments) v =
+            VariableAssignmentD.get sf2.(StackFrameD.variable_assignments) v
+    | _,_ => False
+    end.
 
     
     Definition VarSet_In_dec (v: YULVariable.t) (s : VarSet.t)  : { VarSet.In v s} + {~ (VarSet.In v s)}.
@@ -1586,7 +1621,7 @@ Definition dead_variable  (p: SmartContractD.t) (fname: FunctionName.t) (bid: Bl
     subst in_set.
     
     apply (live_at_snd_3 p fname bid b b_in_info H1 H_live_in v H4).
-
+  Qed.
 End Liveness.
 
 

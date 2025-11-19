@@ -93,13 +93,14 @@ End PhiInfo.
 
 
 Module Instruction (D: DIALECT).
+  Module SimpleExprD := SimpleExpr(D).
 
   Inductive aux_inst_t : Type :=
     | ASSIGN. (* This is to allow a simple assignment of the form [v1...vk] := [exp1...expk] at the level of YUL *)
   
   (* An instruction is a pair of a block ID and a YUL variable. *)
    Record t : Type := {
-    input : list (YULVariable.t + D.value_t); (* Either a variable or a value *)
+    input : list SimpleExprD.t; 
     output : list YULVariable.t; (* Output variables *)
     op : FunctionName.t + D.opcode_t + aux_inst_t;
   }.

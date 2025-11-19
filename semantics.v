@@ -20,6 +20,7 @@ Module SmallStep (D: DIALECT).
     (* Module BlockD := SmartContractD.BlockD. *)
     Module VariableAssignmentD := StateD.CallStackD.StackFrameD.VariableAssignmentD.
     Module ExitInfoD := BlockD.ExitInfoD.
+    Module SimpleExprD := ExitInfoD.SimpleExprD.
     
     (*
     (* SmartContractD.BlockD.InstructionD and BlockD.InstructionD are considered different modules *)
@@ -192,7 +193,7 @@ Module SmallStep (D: DIALECT).
 
 
     (* Generates a list of values from a list of variables/values and a stack frame *)
-    Fixpoint eval_input (input: list (YULVariable.t + D.value_t)) (sf: StackFrameD.t) : list D.value_t :=
+    Fixpoint eval_input (input: list SimpleExprD.t ) (sf: StackFrameD.t) : list D.value_t :=
         match input with
         | nil => nil
         | inl var :: rest =>

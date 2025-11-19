@@ -4,7 +4,7 @@ Require Export Coq.Strings.String.
 Module Status.
   (* Status of the program execution *)
   Inductive t : Type :=
-  | Running : t
+  | Running : t 
   | Terminated : t
   | Reverted : t
   | Error : string -> t. 
