@@ -457,11 +457,16 @@ Module EVM_opcode.
 
 End EVM_opcode.
 
+
+(*
 Module Type BLOCK_CHAIN.
   Parameter get_addr : U256.t ->  U256.t.
 End BLOCK_CHAIN.
-
 Module EVMDialect (BC: BLOCK_CHAIN) <: DIALECT.
+
+*)
+
+Module EVMDialect <: DIALECT.
   Definition value_t := U256.t.
   Definition opcode_t := EVM_opcode.t.
   Definition dialect_state := EVMState.t.
