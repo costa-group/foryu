@@ -771,7 +771,7 @@ Module Liveness (D: DIALECT).
           VarSet.equal b_in_info (prop_live_set_bkw b.(BlockD.instructions) (add_jump_var_if_applicable b b_out_info))
       end
     end.
-
+  
   Lemma check_live_in_snd:
     forall r f b,
       check_live_in r f b = true -> snd_block_in_info r f b.
@@ -1271,25 +1271,7 @@ Lemma check_live_out_complete:
     apply H_i.
   Qed.
           
-  (*
-    states the the i-th frame -- from the end -- in the call stack is at program point fname/bid/pc.
-    i can be 0-(lengh call_stack-1)
-   *)
-  Definition stack_frame_i_at_pp (i: nat) (fname: FunctionName.t) (bid: BlockID.t) (pc: nat) (st: StateD.t) :=
-    exists hl tl fs,
-      split_at_i i  st.(StateD.call_stack)  hl tl fs /\ 
-        fs.(StackFrameD.function_name) = fname /\
-        fs.(StackFrameD.curr_block_id) = bid /\
-        fs.(StackFrameD.pc) = pc.
 
-  Definition equiv_stack_frames_up_to_v (v: YULVariable.t) (sf1 sf2: StackFrameD.t) :=
-    sf1.(StackFrameD.function_name) = sf2.(StackFrameD.function_name) /\
-      sf1.(StackFrameD.curr_block_id) = sf2.(StackFrameD.curr_block_id) /\
-      sf1.(StackFrameD.pc) = sf2.(StackFrameD.pc) /\
-      forall v', v'<>v ->
-                 VariableAssignmentD.get sf1.(StackFrameD.variable_assignments) v' =
-                   VariableAssignmentD.get sf2.(StackFrameD.variable_assignments) v'.
-  
   Definition accessed_vars (b: BlockD.t) (pc: nat) (s: VarSet.t) :=
     ( pc = (length b.(BlockD.instructions)) /\
         match b.(BlockD.exit_info) with
@@ -1304,12 +1286,15 @@ Lemma check_live_out_complete:
            nth_error b.(BlockD.instructions) pc = Some i /\
              (VarSet.Equal s (list_to_set (extract_yul_vars i.(InstructionD.input)))) 
     ).
-  
-    
+      
   Definition equiv_vars_in_top_frame (b: BlockD.t) (pc: nat) (st1 st2: StateD.t) :=
-    match st1.(StateD.call_stack), st1.(StateD.call_stack) with
+    match st1.(StateD.call_stack), st2.(StateD.call_stack) with
     | nil,nil => True
     | sf1::_,sf2::_ =>
+        sf1.(StackFrameD.function_name) = sf2.(StackFrameD.function_name) /\
+        sf1.(StackFrameD.curr_block_id) = sf2.(StackFrameD.curr_block_id) /\
+        sf1.(StackFrameD.pc) = sf2.(StackFrameD.pc) /\
+        sf1.(StackFrameD.return_variables) = sf2.(StackFrameD.return_variables) /\
         forall v s,
           accessed_vars b pc s ->
           VarSet.In v s ->
@@ -1318,37 +1303,28 @@ Lemma check_live_out_complete:
     | _,_ => False
     end.
 
-    
-    Definition VarSet_In_dec (v: YULVariable.t) (s : VarSet.t)  : { VarSet.In v s} + {~ (VarSet.In v s)}.
-    Proof.
-      destruct (VarSet.mem v s) eqn:E_mem.
-      - left.
-        rewrite VarSet.mem_spec in E_mem.
-        apply E_mem.
-      - right.
-        intro H_contra.
-        rewrite <- VarSet.mem_spec in H_contra.
-        rewrite H_contra in E_mem.
-        discriminate E_mem.
-    Defined.
-    
-    Lemma varset_in_dec:
-      forall x s,
-        VarSet.In x s \/ ~VarSet.In x s.
-    Proof.
-      intros x s.
-      destruct (VarSet.mem x s) eqn:E_mem.
-      - left.
-        rewrite VarSet.mem_spec in E_mem.
-        apply E_mem.
-      - right.
-        intro H_contra.
-        rewrite <- VarSet.mem_spec in H_contra.
-        rewrite H_contra in E_mem.
-        discriminate E_mem.
-    Qed.
-    
-    Definition equiv_states_up_to_i_v (p: SmartContractD.t) (i: nat) (v: YULVariable.t) (st1 st2: StateD.t) :=
+  Lemma equiv_vars_in_top_frame_refl:
+    forall b pc st,
+      equiv_vars_in_top_frame b pc st st.
+  Proof.
+    intros b pc st.
+    unfold equiv_vars_in_top_frame.
+    destruct (StateD.call_stack st) as [|sf rsf].
+    - apply I.
+    - repeat split; try reflexivity.
+  Qed.
+  
+  Definition equiv_stack_frames_up_to_v (fname: FunctionName.t) (bid: BlockID.t) (pc: nat) (v: YULVariable.t) (sf1 sf2: StackFrameD.t) :=
+    sf1.(StackFrameD.function_name) = fname /\
+      sf1.(StackFrameD.curr_block_id) = bid /\
+      sf1.(StackFrameD.pc) = pc /\
+      sf1.(StackFrameD.curr_block_id) = sf2.(StackFrameD.curr_block_id) /\
+      sf1.(StackFrameD.return_variables) = sf2.(StackFrameD.return_variables) /\
+      forall v', v'<>v ->
+                 VariableAssignmentD.get sf1.(StackFrameD.variable_assignments) v' =
+                   VariableAssignmentD.get sf2.(StackFrameD.variable_assignments) v'.
+  
+  Definition equiv_states_up_to_i_v (p: SmartContractD.t) (i: nat) (fname: FunctionName.t) (bid: BlockID.t) (pc: nat) (v: YULVariable.t) (st1 st2: StateD.t) :=
     let call_stack1 := st1.(StateD.call_stack) in
     let call_stack2 := st2.(StateD.call_stack) in
     Nat.lt i (length call_stack1) /\
@@ -1358,201 +1334,206 @@ Lemma check_live_out_complete:
       exists hl tl sf1 sf2,
         split_at_i i call_stack1 hl tl sf1 /\
           split_at_i i call_stack2 hl tl sf2 /\
-          equiv_stack_frames_up_to_v v sf1 sf2.
+          equiv_stack_frames_up_to_v fname bid pc v sf1 sf2.
 
-
-    Lemma at_pp_impl_non_empty_call_stack:
-      forall i fname bid pc st,
-        stack_frame_i_at_pp i fname bid pc st ->
-        st.(StateD.call_stack) <> [].
-    Proof.
-      intros i fname bid pc st H_at_pp.
-      unfold stack_frame_i_at_pp in H_at_pp.
-      destruct H_at_pp as [hl [tl [fs [H_split _]]]].
-      unfold split_at_i in H_split.
-      destruct H_split as [H_lt_i_len_call_stack [H_call_stack H_len_tl]].
-      destruct (StateD.call_stack st) eqn:E_call_stack.
-      - apply len_eq in H_call_stack.
-        simpl in H_call_stack.
-        rewrite length_app in H_call_stack.
-        rewrite Nat.add_comm in H_call_stack.
-        simpl in H_call_stack.
-        discriminate H_call_stack.
-      - intros H_contra.
-        discriminate H_contra.
-    Qed.
-
-    Lemma get_instruction_equiv_states:
-      forall p i v st1 st2,
-        equiv_states_up_to_i_v p i v st1 st2 ->
-        SmallStepD.get_next_instruction st1 p = SmallStepD.get_next_instruction st2 p.
-    Proof.
-      intros p i v st1 st2 H_equiv_st1_st2.
-      unfold equiv_states_up_to_i_v in H_equiv_st1_st2.
-      unfold SmallStepD.get_next_instruction.
-      destruct (SmallStepD.StateD.call_stack st1) as [| sf1 rs1] eqn:E_call_stack_st1;
-        destruct (SmallStepD.StateD.call_stack st2) as [| sf2 rs2] eqn:E_call_stack_st2.
+  Lemma varset_in_dec:
+    forall x s,
+      VarSet.In x s \/ ~VarSet.In x s.
+  Proof.
+    intros x s.
+    destruct (VarSet.mem x s) eqn:E_mem.
+    - left.
+      rewrite VarSet.mem_spec in E_mem.
+      apply E_mem.
+    - right.
+      intro H_contra.
+      rewrite <- VarSet.mem_spec in H_contra.
+      rewrite H_contra in E_mem.
+      discriminate E_mem.
+  Qed.
+    
+  Lemma not_In_cons {A: Type}:
+    forall (l: list A) (a b: A),
+      ~ In a (b::l) ->
+      ~ In a l.
+  Proof.
+    intros l a b H_not_in.
+    simpl in H_not_in.
+    intro H_contra.
+    apply H_not_in.
+    right.
+    apply H_contra.
+  Qed.
+  
+  Lemma not_In_neq_first {A: Type}:
+    forall (l: list A) (a b: A),
+      ~ In a (b::l) -> a <> b.
+  Proof.
+    intros l a b H_not_in.
+    simpl in H_not_in.
+    intro H_contra.
+    apply H_not_in.
+    left.
+    symmetry.
+    apply H_contra.
+  Qed.
+    
+  Lemma eval_input_snd:
+    forall l fname bid pc v sf1 sf2,
+      equiv_stack_frames_up_to_v fname bid pc v sf1 sf2 ->
+      ~List.In (inl v) l ->
+      SmallStepD.eval_input l sf1 = 
+        SmallStepD.eval_input l sf2.
+  Proof.
+    induction l as [ | e l'].
+    - intros fname bid pc v sf1 sf2 H_eq_sf1_sf2 H_not_in.
+      simpl.
+      reflexivity.
+    - intros fname bid pc v sf1 sf2 H_eq_sf1_sf2 H_not_in.
+      simpl.
+      destruct e as [var | val] eqn:E_e.
       
-      - reflexivity.
-      - simpl in  H_equiv_st1_st2.
-        destruct H_equiv_st1_st2 as [_ [H_contra _]].
-        discriminate H_contra.
-      - simpl in  H_equiv_st1_st2.
-        destruct H_equiv_st1_st2 as [_ [H_contra _]].
-        discriminate H_contra.
-      - simpl in H_equiv_st1_st2.
-        unfold split_at_i in H_equiv_st1_st2.
-        destruct H_equiv_st1_st2 as [H_i_le_len_S_rs1 [H_S_len_rs1_eq_len_rs2 [_ [_ [hl [tl [sf3 [sf4 [H_split_1 [H_split_2 H_eq_sf3_sf4_up_to_v]]]]]]]]]].
-        destruct H_split_1 as [_ [H_split_1 _]].
-        destruct H_split_2 as [_ [H_split_2 _]].
-        
-        destruct hl as [| sf' hl'] eqn:E_hl.
-        + simpl in H_split_1.
-          simpl in H_split_2.
-          injection H_split_1 as H_sf1_eq_sf3 _.
-          injection H_split_2 as H_sf2_eq_sf4 _.
-          subst sf1.
-          subst sf2.
-          unfold equiv_stack_frames_up_to_v in H_eq_sf3_sf4_up_to_v .
-          destruct H_eq_sf3_sf4_up_to_v as [H_fname_sf3_eq_sf4 [H_curr_bid_sf3_eq_sf4 [H_pc_sf3_eq_sf4 _]]].
-          rewrite H_fname_sf3_eq_sf4.
-          rewrite H_curr_bid_sf3_eq_sf4.
-          rewrite H_pc_sf3_eq_sf4.
+      + pose proof ( IHl' fname bid pc v sf1 sf2 H_eq_sf1_sf2 (not_In_cons l' (inl v) (inl var) H_not_in)) as IH_l'.
+        rewrite IH_l'.
+        unfold equiv_stack_frames_up_to_v in H_eq_sf1_sf2.
+        pose proof (not_In_neq_first l' (inl v) (inl var ) H_not_in) as H_v_neq_var_inl.
+        assert (H_var_neq_v: var <> v ). 
+        {
+          intro H_contra.
+          apply H_v_neq_var_inl.
+          rewrite H_contra.
           reflexivity.
-          
-        + simpl in H_split_1.
-          simpl in H_split_2.
-          injection H_split_1 as H_sf1_eq_sf' _.
-          injection H_split_2 as H_sf2_eq_sf' _.
-          subst sf1.
-          subst sf2.
-          reflexivity.
-    Qed.
-
-    Lemma not_In_cons {A: Type}:
-      forall (l: list A) (a b: A),
-        ~ In a (b::l) ->
-        ~ In a l.
-    Proof.
-      intros l a b H_not_in.
-      simpl in H_not_in.
-      intro H_contra.
-      apply H_not_in.
-      right.
-      apply H_contra.
-    Qed.
-    
-    Lemma not_In_neq_first {A: Type}:
-      forall (l: list A) (a b: A),
-        ~ In a (b::l) -> a <> b.
-    Proof.
-      intros l a b H_not_in.
-      simpl in H_not_in.
-      intro H_contra.
-      apply H_not_in.
-      left.
-      symmetry.
-      apply H_contra.
-    Qed.
-    
-    Lemma eval_input_snd:
-      forall l v sf1 sf2,
-        equiv_stack_frames_up_to_v v sf1 sf2 ->
-        ~List.In (inl v) l ->
-        SmallStepD.eval_input l sf1 = 
-          SmallStepD.eval_input l sf2.
-    Proof.
-      induction l as [ | e l'].
-      - intros v sf1 sf2 H_eq_sf1_sf2 H_not_in.
-        simpl.
+        }.
+        destruct H_eq_sf1_sf2 as [_ [_ [_ [_ [_ H_eq_sf1_sf2]]]]].
+        rewrite (H_eq_sf1_sf2 var H_var_neq_v).
         reflexivity.
-      - intros v sf1 sf2 H_eq_sf1_sf2 H_not_in.
-        simpl.
-        destruct e as [var | val] eqn:E_e.
-        
-        + pose proof ( IHl' v sf1 sf2 H_eq_sf1_sf2 (not_In_cons l' (inl v) (inl var) H_not_in)) as IH_l'.
-          rewrite IH_l'.
-          unfold equiv_stack_frames_up_to_v in H_eq_sf1_sf2.
-          pose proof (not_In_neq_first l' (inl v) (inl var ) H_not_in) as H_v_neq_var_inl.
-          assert (H_var_neq_v: var <> v ). 
-          {
-            intro H_contra.
-            apply H_v_neq_var_inl.
-            rewrite H_contra.
-            reflexivity.
-          }.
-          destruct H_eq_sf1_sf2 as [_ [_ [_ H_eq_sf1_sf2]]].
-          rewrite (H_eq_sf1_sf2 var H_var_neq_v).
-          reflexivity.
-        + pose proof ( IHl' v sf1 sf2 H_eq_sf1_sf2 (not_In_cons l' (inl v) (inr val) H_not_in)) as IH_l'.
-          rewrite IH_l'.
-          reflexivity.
-    Qed.
+      + pose proof ( IHl' fname bid pc v sf1 sf2 H_eq_sf1_sf2 (not_In_cons l' (inl v) (inr val) H_not_in)) as IH_l'.
+        rewrite IH_l'.
+        reflexivity.
+  Qed.
+  
+  Lemma get_next_instruction_succ:
+    forall st p instruction sf rsf b,
+      st.(StateD.call_stack) = sf::rsf ->
+      SmartContractD.get_block p sf.(StackFrameD.function_name) sf.(StackFrameD.curr_block_id) = Some b ->
+      SmallStepD.get_next_instruction st p = Some instruction ->
+      Nat.lt sf.(StackFrameD.pc) (length b.(BlockD.instructions)).
+  Proof.
+    intros st p instruction sf rsf b H_call_stack H_block_exists H_get_next.
+    unfold SmallStepD.get_next_instruction in H_get_next.
+    rewrite H_call_stack in H_get_next.
+    unfold SmallStepD.SmartContractD.get_instruction in H_get_next.
+    rewrite H_block_exists in H_get_next.
+    pose proof (nth_error_Some (SmallStepD.SmartContractD.BlockD.instructions b) (SmallStepD.StackFrameD.pc sf)).
+    
+    assert (nth_error (SmallStepD.SmartContractD.BlockD.instructions b) (SmallStepD.StackFrameD.pc sf) <> None).
+    {
+      intros H_contra.
+      rewrite H_contra in H_get_next.
+      discriminate H_get_next.
+    }.
+    
+    rewrite H in H0.
+    apply H0.
+  Qed.
+    
 
-    Lemma get_next_instruction_succ:
-      forall st p instruction sf rsf b,
-        st.(StateD.call_stack) = sf::rsf ->
-        SmartContractD.get_block p sf.(StackFrameD.function_name) sf.(StackFrameD.curr_block_id) = Some b ->
-        SmallStepD.get_next_instruction st p = Some instruction ->
-        Nat.lt sf.(StackFrameD.pc) (length b.(BlockD.instructions)).
-    Proof.
-      intros st p instruction sf rsf b H_call_stack H_block_exists H_get_next.
-      unfold SmallStepD.get_next_instruction in H_get_next.
-      rewrite H_call_stack in H_get_next.
-      unfold SmallStepD.SmartContractD.get_instruction in H_get_next.
-      rewrite H_block_exists in H_get_next.
-      pose proof (nth_error_Some (SmallStepD.SmartContractD.BlockD.instructions b) (SmallStepD.StackFrameD.pc sf)).
-      
-      assert (nth_error (SmallStepD.SmartContractD.BlockD.instructions b) (SmallStepD.StackFrameD.pc sf) <> None).
-      {
-        intros H_contra.
-        rewrite H_contra in H_get_next.
-        discriminate H_get_next.
-      }.
-      
-      rewrite H in H0.
-      apply H0.
-    Qed.
-    
-    
-  Lemma live_at_execute_instr_snd:   
-    forall (p: SmartContractD.t) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t),
+  Theorem live_at_step_snd:   
+    forall (p: SmartContractD.t) (i: nat) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t),
       SmartContractD.get_block p fname bid = Some b ->
       live_at_pc' p fname bid pc s ->
-      forall (i: nat) (st1 st1': StateD.t) (instruction: InstructionD.t),
-        stack_frame_i_at_pp i fname bid pc st1 ->
-        SmallStepD.get_next_instruction st1 p = Some instruction ->
-        SmallStepD.execute_instr instruction st1 p = st1' ->
-        forall st2 v,
-          equiv_states_up_to_i_v p i v st1 st2->
-          ~ VarSet.In v s ->
-          SmallStepD.get_next_instruction st2 p = Some instruction /\
-            exists st2',
-              SmallStepD.execute_instr instruction st2 p = st2' /\
-                (equiv_states_up_to_i_v p i v st1' st2' \/ st2' = st1') /\
-                equiv_vars_in_top_frame b pc st1 st2.
+      forall  (st1 st2 st1': StateD.t) (v: YULVariable.t),
+        equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
+        SmallStepD.step st1 p = st1' ->
+        ~ VarSet.In v s ->
+        exists st2' bid' b' pc' s',
+          SmallStepD.step st2 p = st2'
+          /\
+          SmartContractD.get_block p fname bid' = Some b'  /\ 
+          (
+           ( ( equiv_states_up_to_i_v p i fname bid' pc' v st1' st2') /\ live_at_pc' p fname bid' pc' s' /\ ~ VarSet.In v s' )
+           \/
+           st2' = st1'
+          )
+          /\
+          equiv_vars_in_top_frame b' pc' st1' st2'.
+  Proof.
+      Admitted.
+
+  Lemma equiv_state_equiv_frames_at_top:
+    forall p fname bid b pc i v st1 st2,
+      equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
+      equiv_vars_in_top_frame b pc st1 st2.
   Proof.
     Admitted.
 
-
-
-  Theorem live_at_snd:   
-    forall (p: SmartContractD.t) (n i: nat) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t),
+    
+  Lemma live_at_snd:   
+    forall (p: SmartContractD.t) (n: nat) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t),
       SmartContractD.get_block p fname bid = Some b ->
       live_at_pc' p fname bid pc s ->
-      forall  (st1 st1': StateD.t),
-        stack_frame_i_at_pp i fname bid pc st1 ->
+      forall  (st1 st2 st1': StateD.t) (v: YULVariable.t) (i: nat),
+        equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
         SmallStepD.eval n st1 p = st1' ->
-        forall st2 v,
-          equiv_states_up_to_i_v p i v st1 st2->
-          ~ VarSet.In v s ->
-          exists st2',
-            SmallStepD.eval n st2 p = st2' /\
-              (equiv_states_up_to_i_v p i v st1' st2' \/ st2' = st1') /\
-              equiv_vars_in_top_frame b pc st1' st2'.
+        ~ VarSet.In v s ->
+        exists st2' pc' b' bid',
+          SmallStepD.eval n st2 p = st2' /\
+            (equiv_states_up_to_i_v p i fname bid' pc' v st1' st2' \/ st2' = st1') /\
+            equiv_vars_in_top_frame b' pc' st1' st2'.
   Proof.
-  Admitted.
+    intros p.
+    induction n as [|n' IHn'].
+    - intros fname bid b pc s H_b_exists H_live_at_pc st1 st2 st1' v i H_equiv_st1_st2 H_eval_st1 H_not_In_v_s.
+      simpl in H_eval_st1.
+      simpl.
+      exists st2.
+      exists pc.
+      exists b.
+      exists bid.
+      repeat split.
+      +  left.
+         rewrite <- H_eval_st1.
+         apply H_equiv_st1_st2.
+      + rewrite <- H_eval_st1.
+        apply (equiv_state_equiv_frames_at_top p fname bid b pc i v st1 st2 H_equiv_st1_st2).
+        
+    - intros fname bid b pc s H_b_exists H_live_at_pc st1 st2 st1' v i H_equiv_st1_st2 H_eval_st1 H_not_In_v_s.
 
+      simpl in H_eval_st1.
+      remember (SmallStepD.step st1 p) as st1_1_step eqn:H_step_st1.
+      symmetry in H_step_st1.
+      
+      pose proof (live_at_step_snd p i fname bid b pc s H_b_exists H_live_at_pc st1 st2 st1_1_step v H_equiv_st1_st2 H_step_st1 H_not_In_v_s) as H_live_at_step_snd.
+      simpl.
+      destruct H_live_at_step_snd as [st2_1_step [bid' [b' [pc' [s' [H_step_st2 [ H_exists_b' [[[ H_equiv_states_up_to_i_v_st1_1_step_st2_1_step [H_live_at_pc'_bid'_pc' H_v_not_In_s']] | H_st2_1_step_eq_st1_1_step] H_equiv_vars_in_top_frame_st1_1_step_st2_1_step]]]]]]]].
+
+      + pose proof (IHn' fname bid' b' pc' s' H_exists_b' H_live_at_pc'_bid'_pc' st1_1_step st2_1_step st1' v i H_equiv_states_up_to_i_v_st1_1_step_st2_1_step H_eval_st1 H_v_not_In_s') as IHn'_inst.
+        destruct IHn'_inst as [st2' [pc'' [b'' [bid'' [H_eval_st2_1_step [H_equiv_st1'_st2' H_equiv_vars_in_top_frame_st1'_st2']]]]]].
+
+        exists st2'.
+        exists pc''.
+        exists b''.
+        exists bid''.
+        repeat split.
+
+        * rewrite H_step_st2.
+          apply H_eval_st2_1_step.
+        * apply H_equiv_st1'_st2'.
+        * apply H_equiv_vars_in_top_frame_st1'_st2'.
+
+      + subst st2_1_step.
+        exists st1'.
+        exists pc'.
+        exists b'.
+        exists bid'.
+        repeat split.
+        
+        * rewrite H_st2_1_step_eq_st1_1_step.
+          apply H_eval_st1.
+        * right. reflexivity.
+        * apply equiv_vars_in_top_frame_refl.
+  Qed.
+  
 
 Definition dead_variable  (p: SmartContractD.t) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (v: YULVariable.t) :=
   forall (st1 st1': StateD.t) (n i: nat),
