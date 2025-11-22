@@ -177,7 +177,7 @@
           },
           "methodIdentifiers": {}
         },
-        "metadata": "{\"compiler\":{\"version\":\"0.8.30+commit.73712a01\"},\"language\":\"Solidity\",\"output\":{\"abi\":[],\"devdoc\":{\"kind\":\"dev\",\"methods\":{},\"version\":1},\"userdoc\":{\"kind\":\"user\",\"methods\":{},\"version\":1}},\"settings\":{\"compilationTarget\":{\"constant_variables.sol\":\"Foo\"},\"evmVersion\":\"prague\",\"libraries\":{},\"metadata\":{\"appendCBOR\":false,\"bytecodeHash\":\"ipfs\"},\"optimizer\":{\"enabled\":true,\"runs\":200},\"remappings\":[],\"viaIR\":true},\"sources\":{\"constant_variables.sol\":{\"keccak256\":\"0x80fcc7a015e0834e1bf27d796c4d33c4b9dcd883bbacd9dac33d22e089306047\",\"urls\":[\"bzz-raw://cd9ddf8d2d3fc52488823d3757a4812dcd8265b5c4ee8814428d0cf6baa2cfd5\",\"dweb:/ipfs/QmfDbDvmRVX1uKVoDT1rUDHHZnhrBd3EonCxmm9PVNduh2\"]}},\"version\":1}",
+        "metadata": "{\"compiler\":{\"version\":\"0.8.31-pre.1+commit.b59566f6\"},\"language\":\"Solidity\",\"output\":{\"abi\":[],\"devdoc\":{\"kind\":\"dev\",\"methods\":{},\"version\":1},\"userdoc\":{\"kind\":\"user\",\"methods\":{},\"version\":1}},\"settings\":{\"compilationTarget\":{\"constant_variables.sol\":\"Foo\"},\"evmVersion\":\"prague\",\"libraries\":{},\"metadata\":{\"appendCBOR\":false,\"bytecodeHash\":\"ipfs\"},\"optimizer\":{\"enabled\":true,\"runs\":200},\"remappings\":[],\"viaIR\":true},\"sources\":{\"constant_variables.sol\":{\"keccak256\":\"0x80fcc7a015e0834e1bf27d796c4d33c4b9dcd883bbacd9dac33d22e089306047\",\"urls\":[\"bzz-raw://cd9ddf8d2d3fc52488823d3757a4812dcd8265b5c4ee8814428d0cf6baa2cfd5\",\"dweb:/ipfs/QmfDbDvmRVX1uKVoDT1rUDHHZnhrBd3EonCxmm9PVNduh2\"]}},\"version\":1}",
         "yulCFGJson": {
           "Foo_17": {
             "blocks": [
@@ -193,10 +193,10 @@
                 "id": "Block0",
                 "instructions": [
                   {
-                    "builtinArgs": [
+                    "in": [],
+                    "literalArgs": [
                       "0x80"
                     ],
-                    "in": [],
                     "op": "memoryguard",
                     "out": [
                       "v0"
@@ -233,20 +233,20 @@
                 "id": "Block2",
                 "instructions": [
                   {
-                    "builtinArgs": [
+                    "in": [],
+                    "literalArgs": [
                       "Foo_17_deployed"
                     ],
-                    "in": [],
                     "op": "datasize",
                     "out": [
                       "v4"
                     ]
                   },
                   {
-                    "builtinArgs": [
+                    "in": [],
+                    "literalArgs": [
                       "Foo_17_deployed"
                     ],
-                    "in": [],
                     "op": "dataoffset",
                     "out": [
                       "v5"
@@ -340,6 +340,14 @@
   "errors": [
     {
       "component": "general",
+      "errorCode": "3805",
+      "formattedMessage": "Warning: This is a pre-release compiler version, please do not use it in production.\n\n",
+      "message": "This is a pre-release compiler version, please do not use it in production.",
+      "severity": "warning",
+      "type": "Warning"
+    },
+    {
+      "component": "general",
       "errorCode": "1878",
       "formattedMessage": "Warning: SPDX license identifier not provided in source file. Before publishing, consider adding a comment containing \"SPDX-License-Identifier: <SPDX-License>\" to each source file. Use \"SPDX-License-Identifier: UNLICENSED\" for non-open-source code. Please see https://spdx.org for more information.\n--> constant_variables.sol\n\n",
       "message": "SPDX license identifier not provided in source file. Before publishing, consider adding a comment containing \"SPDX-License-Identifier: <SPDX-License>\" to each source file. Use \"SPDX-License-Identifier: UNLICENSED\" for non-open-source code. Please see https://spdx.org for more information.",
@@ -354,8 +362,8 @@
     {
       "component": "general",
       "errorCode": "3420",
-      "formattedMessage": "Warning: Source file does not specify required compiler version! Consider adding \"pragma solidity ^0.8.30;\"\n--> constant_variables.sol\n\n",
-      "message": "Source file does not specify required compiler version! Consider adding \"pragma solidity ^0.8.30;\"",
+      "formattedMessage": "Warning: Source file does not specify required compiler version!\n--> constant_variables.sol\n\n",
+      "message": "Source file does not specify required compiler version!",
       "severity": "warning",
       "sourceLocation": {
         "end": -1,

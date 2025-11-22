@@ -328,6 +328,10 @@ Module EVM_opcode.
     | DIFFICULTY  (* obsolete from Paris, now uses PREVRANDAO*)
     | PREVRANDAO
     | GASLIMIT
+
+    | MEMORYGUARD
+    | DATASIZE
+    | DATAOFFSET
     .
     
     Definition eq_dec : forall (a b : t), {a = b} + {a <> b}.
