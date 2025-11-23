@@ -343,8 +343,8 @@ class JSON_Smart_Contract:
         elif instruction['op'] in JSON_Smart_Contract.evm_opcode:
             instr = f"inl (inr {JSON_Smart_Contract.evm_opcode[instruction['op']]})"
         else:
-            print(f"function call: {instruction['op']}", file=sys.stderr)
-            instr = f'inl (inl "{instruction["op"]}")'  # FIXME for function calls
+            print(f"* function call: {instruction['op']}", file=sys.stderr)
+            instr = f'inl (inl "{instruction["op"]}")'
 
         in_v = self.translate_var_constant_list(instruction['in'])
         out_v = self.translate_var_list(instruction['out'])

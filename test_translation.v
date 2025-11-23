@@ -1,7 +1,7 @@
 (* 
 FORYU: Automatic translation for liveness analysis
 Smart contract: arrays_in_constructors.sol 
-Date: 2025-11-23 18:54:48.479219
+Date: 2025-11-23 19:20:39.257172
 
 Compile with:
 $ coqc -R . FORYU filename.v
