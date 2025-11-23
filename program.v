@@ -74,7 +74,7 @@ Module YULVariableMap (D: DIALECT).
   (* Map between YUL variables to apply renamings in phi functions *)
   (* Definition t := YULVariable.t -> YULVariable.t. *)
   Definition t := list (YULVariable.t * SimpleExprD.t).
-  (* A pair (dest, origin) means that variable 'x' must take the value of the variable 'origin' *)
+  (* A pair (x, origin) means that variable 'x' must take the value of the variable 'origin' *)
  
   Definition empty : t := [].
 
@@ -102,7 +102,7 @@ Module Instruction (D: DIALECT).
    Record t : Type := {
     input : list SimpleExprD.t; 
     output : list YULVariable.t; (* Output variables *)
-    op : FunctionName.t + D.opcode_t + aux_inst_t;
+    op : (FunctionName.t + D.opcode_t) + aux_inst_t;
   }.
 
   Lemma eq_split: forall i1 i2 : Instruction.t, 
