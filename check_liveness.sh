@@ -14,13 +14,15 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     cd "$dir" || continue
 
     echo "$counter) $f"
+    rm -f "${start_dir}/${translated_file}"
     inicio=$(date +%s%N)
-    python3 "${start_dir}/python/json2coq.py" "${file}" "${translated_file}"
+    python3 "${start_dir}/python/json2coq.py" "${file}" "${start_dir}/${translated_file}"
     fin=$(date +%s%N)
     duracion_tr_ns=$((fin - inicio))
     duracion_tr_ms=$((duracion_tr_ns / 1000000))
 
     cd "$start_dir"
+    md5sum "${start_dir}/${translated_file}"
     inicio=$(date +%s%N)
     rm -f "${output_file}"
     coqc -R . FORYU "${translated_file}" > "${output_file}"
