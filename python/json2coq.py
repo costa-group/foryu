@@ -49,9 +49,12 @@ class JSON_Smart_Contract:
         self.sc_main_filename, self.flat_d = self.process_json(path)
         self.liveness = {}
 
-    def gen_name(self, prefix):
+    def gen_name(self, prefix, fname=None):
         """ Generates a name from the prefix """
-        return "__".join(prefix).replace(".", "_")
+        if fname is None:
+            return "__".join(prefix).replace(".", "_")
+        return "__".join(prefix+[fname]).replace(".", "_")
+
 
     def process_blocks(self, blocks, prefix):
         """ Generates a main function from an objects blocks """
@@ -64,6 +67,36 @@ class JSON_Smart_Contract:
                     }
         return {}
 
+    def expand_function_names_instr(self, i, prefix):
+        """ Expand the name in a function call (updates the parameter 'i') """
+        if i['op'] not in JSON_Smart_Contract.evm_opcode and i['op'] not in ['PhiFunction', 'LiteralAssignment']:
+            # It's a function call
+            i['op'] = self.gen_name(prefix, i['op'])
+
+    def expand_function_names_instrs(self, instructions, prefix):
+        """ Expand the name in a function call (updates the parameter 'instructions') """
+        for i in instructions:
+            self.expand_function_names_instr(i, prefix)
+
+    def expand_function_names_block(self, b, prefix):
+        """ Expand the name in a function call (updates the parameter 'b') """
+        self.expand_function_names_instrs(b['instructions'], prefix)
+
+    def expand_function_names_blocks(self, blocks, prefix):
+        """ Expand the name in a function call (updates the parameter 'blocks') """
+        for b in blocks:
+            self.expand_function_names_block(b, prefix)
+
+    def expand_function_names_def(self, functions: dict, prefix):
+        """ Expand the name in a function call and definition (updates the parameter 'functions' """
+        fnames = list(functions.keys())
+        for fname in fnames:
+            fdef = functions[fname]
+            functions.pop(fname)
+            self.expand_function_names_blocks(fdef['blocks'], prefix)
+            expand_fname = self.gen_name(prefix, fname)
+            functions[expand_fname] = fdef
+
     def process_object(self, d: dict, prefix: list):
         """ Extracts all the entries in an object (and recursively subobjects), generating functions for each one """
         r = {}
@@ -74,10 +107,14 @@ class JSON_Smart_Contract:
             subobj = d[object_name]['subObjects']
             if subobj:
                 r.update(self.process_object(subobj, prefix + [object_name]))
-            r.update(
-                d[object_name]['functions'])  # TODO: Do we need to rename the functions in different objects? (prefix)
+
+            functions = d[object_name]['functions']
+            self.expand_function_names_def(functions, prefix + [object_name])
+            r.update(functions)  # TODO: Do we need to rename the functions in different objects? (prefix)
+
             blocks = d[object_name]['blocks']
             if blocks:
+                self.expand_function_names_blocks(blocks, prefix + [object_name])
                 r.update(self.process_blocks(blocks, prefix + [object_name]))
 
         return r
@@ -181,7 +218,7 @@ class JSON_Smart_Contract:
         elif exit['type'] == 'FunctionReturn':
             # JSON: { "returnValues": ["v10"], "type": "FunctionReturn" }
             # Coq:  ReturnBlock (return_values : list SimpleExprD.t) (* I believe they are always vars *)
-            return f"EVMBlock.ExitInfoD.ReturnBlock {self.translate_var_constant_list(exit['returnValues'])}"
+            return f"EVMBlock.ExitInfoD.ReturnBlock [{self.translate_var_constant_list(exit['returnValues'])}]"
         elif exit['type'] == 'ConditionalJump':
             # JSON: {'cond': 'v2', 'targets': ['Block2', 'Block1'], 'type': 'ConditionalJump'}
             # Coq:  ConditionalJump (cond_var : YULVariable.t) (target_if_true : BlockID.t) (target_if_false : BlockID.t)
@@ -199,97 +236,97 @@ class JSON_Smart_Contract:
         else:
             raise Exception(f'Exit_info not supported: <<{exit}>>')
 
+    evm_opcode = {
+        # TODO: FIXME
+        'stop': 'EVM_opcode.STOP',
+        'add': 'EVM_opcode.ADD',
+        'sub': 'EVM_opcode.SUB',
+        'mul': 'EVM_opcode.MUL',
+        'div': 'EVM_opcode.DIV',
+        'sdiv': 'EVM_opcode.SDIV',
+        'mod': 'EVM_opcode.MOD',
+        'smod': 'EVM_opcode.SMOD',
+        'exp': 'EVM_opcode.EXP',
+        'not': 'EVM_opcode.NOT',
+        'lt': 'EVM_opcode.LT',
+        'gt': 'EVM_opcode.GT',
+        'slt': 'EVM_opcode.SLT',
+        'sgt': 'EVM_opcode.SGT',
+        'eq': 'EVM_opcode.EQ',
+        'iszero': 'EVM_opcode.ISZERO',
+        'and': 'EVM_opcode.AND',
+        'or': 'EVM_opcode.OR',
+        'xor': 'EVM_opcode.XOR',
+        'byte': 'EVM_opcode.BYTE',
+        'shl': 'EVM_opcode.SHL',
+        'shr': 'EVM_opcode.SHR',
+        'sar': 'EVM_opcode.SAR',
+        'addmod': 'EVM_opcode.ADDMOD',  # Not in semanticTests
+        'mulmod': 'EVM_opcode.MULMOD',
+        'signextend': 'EVM_opcode.SIGNEXTEND',
+        'keccak256': 'EVM_opcode.KECCAK256',
+        'pop': 'EVM_opcode.POP',
+        'mload': 'EVM_opcode.MLOAD',
+        'mstore': 'EVM_opcode.MSTORE',
+        'mstore8': 'EVM_opcode.MSTORE8',
+        'sload': 'EVM_opcode.SLOAD',
+        'sstore': 'EVM_opcode.SSTORE',
+        'tload': 'EVM_opcode.TLOAD',
+        'tstore': 'EVM_opcode.TSTORE',
+        'msize': 'EVM_opcode.MSIZE',  # Not in semanticTests
+        'gas': 'EVM_opcode.GAS',
+        'address': 'EVM_opcode.ADDRESS',
+        'balance': 'EVM_opcode.BALANCE',
+        'selfbalance': 'EVM_opcode.SELFBALANCE',
+        'caller': 'EVM_opcode.CALLER',
+        'callvalue': 'EVM_opcode.CALLVALUE',
+        'calldataload': 'EVM_opcode.CALLDATALOAD',
+        'calldatasize': 'EVM_opcode.CALLDATASIZE',
+        'calldatacopy': 'EVM_opcode.CALLDATACOPY',
+        'codesize': 'EVM_opcode.CODESIZE',
+        'codecopy': 'EVM_opcode.CODECOPY',
+        'extcodesize': 'EVM_opcode.EXTCODESIZE',
+        'extcodecopy': 'EVM_opcode.EXTCODECOPY',
+        'returndatasize': 'EVM_opcode.RETURNDATASIZE',
+        'returndatacopy': 'EVM_opcode.RETURNDATACOPY',
+        'mcopy': 'EVM_opcode.MCOPY',
+        'extcodehash': 'EVM_opcode.EXTCODEHASH',
+        'create': 'EVM_opcode.CREATE',
+        'create2': 'EVM_opcode.CREATE2',
+        'call': 'EVM_opcode.CALL',
+        'callcode': 'EVM_opcode.CALLCODE',  # Not in semanticTests
+        'delegatecall': 'EVM_opcode.DELEGATECALL',
+        'staticcall': 'EVM_opcode.STATICCALL',
+        'return': 'EVM_opcode.RETURN',
+        'revert': 'EVM_opcode.REVERT',
+        'selfdestruct': 'EVM_opcode.SELFDESTRUCT',
+        'invalid': 'EVM_opcode.INVALID',
+        'log0': 'EVM_opcode.LOG0',
+        'log1': 'EVM_opcode.LOG1',
+        'log2': 'EVM_opcode.LOG2',
+        'log3': 'EVM_opcode.LOG3',
+        'log4': 'EVM_opcode.LOG4',
+        'chainid': 'EVM_opcode.CHAINID',
+        'basefee': 'EVM_opcode.BASEFEE',
+        'blobbasefee': 'EVM_opcode.BLOBBASEFEE',
+        'origin': 'EVM_opcode.ORIGIN',
+        'basprice': 'EVM_opcode.GASPRICE',
+        'blockhash': 'EVM_opcode.BLOCKHASH',
+        'blobhash': 'EVM_opcode.BLOBHASH',
+        'coinbase': 'EVM_opcode.COINBASE',
+        'timestamp': 'EVM_opcode.TIMESTAMP',
+        'number': 'EVM_opcode.NUMBER',
+        'difficulty': 'EVM_opcode.DIFFICULTY',  # obsolete from Paris, now uses PREVRANDAO. Not in semanticTests
+        'prevrandao': 'EVM_opcode.PREVRANDAO',
+        'gaslimit': 'EVM_opcode.GASLIMIT',
+        # Yul-specific instructions (https://docs.soliditylang.org/en/latest/yul.html#datasize-dataoffset-datacopy)
+        'memoryguard': 'EVM_opcode.MEMORYGUARD',
+        'datasize': 'EVM_opcode.DATASIZE',
+        'dataoffset': 'EVM_opcode.DATAOFFSET',
+        'datacopy': 'EVM_opcode.DATACOPY',
+    }
+
     def translate_instruction(self, instruction):
-        evm_opcode = {
-            # TODO: FIXME
-            #              | STOP
-            'add': 'EVM_opcode.ADD',
-            #              | SUB
-            #              | MUL
-            #              | DIV
-            #              | SDIV
-            #              | MOD
-            #              | SMOD
-            #              | EXP
-            'not': 'EVM_opcode.NOT',
-            'lt': 'EVM_opcode.LT',
-            #              | GT
-            #              | SLT
-            'slt': 'EVM_opcode.SLT',
-            #              | SGT
-            'eq': 'EVM_opcode.EQ',
-            #              | ISZERO
-            'iszero': 'EVM_opcode.ISZERO',
-            #              | AND
-            #              | OR
-            #              | XOR
-            #              | BYTE
-            #              | SHL
-            'shr': 'EVM_opcode.SHR',
-            #              | SAR
-            #              | ADDMOD
-            #              | MULMOD
-            #              | SIGNEXTEND
-            #              | KECCAK256
-            #              | POP
-            #              | MLOAD
-            'mstore': 'EVM_opcode.MSTORE',
-            #              | MSTORE8
-            #              | SLOAD
-            #              | SSTORE
-            #              | TLOAD
-            #              | TSTORE
-            #              | MSIZE
-            #              | GAS
-            #              | ADDRESS
-            #              | BALANCE
-            #              | SELFBALANCE
-            #              | CALLER
-            'callvalue': 'EVM_opcode.CALLVALUE',
-            'calldataload': 'EVM_opcode.CALLDATALOAD',
-            'calldatasize': 'EVM_opcode.CALLDATASIZE',
-            #              | CALLDATACOPY
-            #              | CODESIZE
-            'codecopy': 'EVM_opcode.CODECOPY',
-            #              | EXTCODESIZE
-            #              | EXTCODECOPY
-            #              | RETURNDATASIZE
-            #              | RETURNDATACOPY
-            #              | MCOPY
-            #              | EXTCODEHASH
-            #              | CREATE
-            #              | CREATE2
-            #              | CALL
-            #              | CALLCODE
-            #              | DELEGATECALL
-            #              | STATICCALL
-            'return': 'EVM_opcode.RETURN',
-            'revert': 'EVM_opcode.REVERT',
-            #              | SELFDESTRUCT
-            #              | INVALID
-            #              | LOG0
-            #              | LOG1
-            #              | LOG2
-            #              | LOG3
-            #              | LOG4
-            #              | CHAINID
-            #              | BASEFEE
-            #              | BLOBBASEFEE
-            #              | ORIGIN
-            #              | GASPRICE
-            #              | BLOCKHASH
-            #              | BLOBHASH
-            #              | COINBASE
-            #              | TIMESTAMP
-            #              | NUMBER
-            #              | DIFFICULTY  # obsolete from Paris, now uses PREVRANDAO
-            #              | PREVRANDAO
-            #              | GASLIMIT
-            #
-            'memoryguard': 'EVM_opcode.MEMORYGUARD',
-            'datasize': 'EVM_opcode.DATASIZE',
-            'dataoffset': 'EVM_opcode.DATAOFFSET',
-        }
         # {'in': ['0x00', '0x00'], 'op': 'revert', 'out': []}
         #    Record t : Type := {
         #     input : list SimpleExprD.t;
@@ -303,11 +340,11 @@ class JSON_Smart_Contract:
             raise ValueError('PhiFunctions should be removed before translating instructions')
         elif instruction['op'] == 'LiteralAssignment':
             instr = 'inr EVMInstruction.ASSIGN'
-        elif instruction['op'] in evm_opcode:
-            instr = f"inl (inr {evm_opcode[instruction['op']]})"
+        elif instruction['op'] in JSON_Smart_Contract.evm_opcode:
+            instr = f"inl (inr {JSON_Smart_Contract.evm_opcode[instruction['op']]})"
         else:
-            print(f"opcode desconocido: {instruction['op']}", file=sys.stderr)
-            instr = f"inl (inr EVM_opcode.ADD)"  # FIXME for function calls
+            print(f"function call: {instruction['op']}", file=sys.stderr)
+            instr = f'inl (inl "{instruction["op"]}")'  # FIXME for function calls
 
         in_v = self.translate_var_constant_list(instruction['in'])
         out_v = self.translate_var_list(instruction['out'])
@@ -480,9 +517,16 @@ if __name__ == '__main__':
     print(sc.translate_smart_contract())
     pprint.pp(sc.extract_liveness_info())
     print(sc.translate_liveness_info())
-    """
+    
     # sc = JSON_Smart_Contract('constant_variables_standard_input.json_cfg.json')
-    sc = JSON_Smart_Contract('function_modifier_standard_input.json_cfg.json')
-    # sc = JSON_Smart_Contract('arrays_in_constructors_standard_input.json_cfg.json')
+    # sc = JSON_Smart_Contract('function_modifier_standard_input.json_cfg.json')
+    sc = JSON_Smart_Contract('arrays_in_constructors_standard_input.json_cfg.json')
     # print(sc.translate_liveness_coq_file())
-    sc.translate_liveness_coq_file_out("../test_translation.v")
+    sc.translate_liveness_coq_file_out('../test_translation.v')    
+    """
+    if len(sys.argv) != 3:
+        print(f'Usage: {sys.argv[0]} <json_file> <coq_file>')
+    else:
+        sc = JSON_Smart_Contract(sys.argv[1])
+        sc.translate_liveness_coq_file_out(sys.argv[2])
+

@@ -332,6 +332,7 @@ Module EVM_opcode.
     | MEMORYGUARD
     | DATASIZE
     | DATAOFFSET
+    | DATACOPY
     .
     
     Definition eq_dec : forall (a b : t), {a = b} + {a <> b}.
