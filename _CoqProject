@@ -13,3 +13,6 @@ liveness.v
 liveness_snd.v
 
 tests.v
+test_translation.v
+
+extract_ocaml.v

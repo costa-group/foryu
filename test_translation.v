@@ -13,6 +13,8 @@ Require Export FORYU.semantics.
 Require Export FORYU.liveness.
 Import ListNotations.
 
+Module TestTranslation.
+
 Module EVMLiveness := Liveness(EVMDialect).
 Module EVMSmallStep := EVMLiveness.SmallStepD.
 Module EVMSmartContract := EVMSmallStep.SmartContractD.
@@ -21,7 +23,6 @@ Module EVMBlock := EVMFunction.BlockD.
 Module EVMInstruction := EVMBlock.InstructionD.
 Module EVMState := EVMSmallStep.StateD.
 
-Section Translation.
 
 Definition sc_tr : EVMSmartContract.t :=
        {| EVMSmartContract.name := "arrays_in_constructors.sol";
@@ -4931,8 +4932,8 @@ fun fname =>
    | _ => None
    end.
 
-(* Launches liveness check *)
-Compute (EVMLiveness.check_smart_contract sc_tr liveness_info).
 
-End Translation.
+Definition check := EVMLiveness.check_smart_contract sc_tr liveness_info.
+
+End TestTranslation.
         
