@@ -60,7 +60,7 @@ Module Liveness (D: DIALECT).
             else
               apply_inv_phi vs s
         | inr _ =>
-            apply_inv_phi vs s
+            apply_inv_phi vs (VarSet.remove dest s)
         end
     end.
 
