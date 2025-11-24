@@ -5,6 +5,8 @@ cfg_dir="python/semanticTests_cfg"
 translated_file="test_translation.v"
 output_file="output.txt"
 counter=0
+tr_status=0
+checker_status=0
 
 find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     counter=$((counter + 1))
@@ -17,6 +19,7 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     rm -f "${start_dir}/${translated_file}"
     inicio=$(date +%s%N)
     python3 "${start_dir}/python/json2coq.py" "${file}" "${start_dir}/${translated_file}"
+    tr_status=$?
     fin=$(date +%s%N)
     duracion_tr_ns=$((fin - inicio))
     duracion_tr_ms=$((duracion_tr_ns / 1000000))
@@ -26,13 +29,26 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     inicio=$(date +%s%N)
     rm -f "${output_file}"
     coqc -R . FORYU "${translated_file}" > "${output_file}"
+    checker_status=$?
     fin=$(date +%s%N)
     duracion_chk_ns=$((fin - inicio))
     duracion_chk_ms=$((duracion_chk_ns / 1000000))
 
     checker=$(cat "$output_file" | grep '=' | awk '{print $2}')
+    msg=""
+    if [ $tr_status -ne 0 ]; then
+      msg="TRANSLATION_RUNTIME_ERROR"
+    elif [ $checker_status -ne 0 ]; then
+      msg="CHECKER_RUNTIME_ERROR"
+    elif [[ "$checker" == "true" ]]; then
+      msg="LIVENESS_VALID"
+    elif [[ "$checker" == "false" ]]; then
+      msg="LIVENESS_NOT_VALID"
+    else
+      msg="LIVENESS_MSG_UNKNOWN"
+    fi
 
-    echo "${duracion_tr_ms} ${duracion_chk_ms} ${checker}"
+    echo "@@@ ${f} ${duracion_tr_ms} ${duracion_chk_ms} ${msg}"
 
 
 	  # inicio=$(date +%s%N)

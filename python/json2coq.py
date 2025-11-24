@@ -496,7 +496,8 @@ Section Translation.
 {}
 
 (* Launches liveness check *)
-Compute (EVMLiveness.check_smart_contract sc_tr liveness_info).
+(* Compute (EVMLiveness.check_smart_contract sc_tr liveness_info). *)
+Compute (EVMLiveness.check_smart_contract_subset sc_tr liveness_info).
 
 End Translation.
         """
