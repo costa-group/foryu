@@ -133,6 +133,8 @@ class JSON_Smart_Contract:
                 sc_main_filename = sc_filename
             for comp in sc:
                 yul_cfg = sc[comp]['yulCFGJson']
+                if yul_cfg is None:
+                    continue
                 assert yul_cfg['type'] == 'Object'
                 flat_d.update(self.process_object(yul_cfg, [sc_filename, comp]))
 
