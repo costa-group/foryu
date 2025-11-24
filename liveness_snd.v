@@ -13,7 +13,7 @@ Require Import stdpp.prelude.
 Require Import stdpp.relations. (* This is where nsteps lives *)
 
 
-Module Liveness_Snd (D: DIALECT).
+Module Liveness_snd (D: DIALECT).
 
   Module LivenessD := Liveness(D).
   Module SmallStepD := LivenessD.SmallStepD.
@@ -30,7 +30,7 @@ Module Liveness_Snd (D: DIALECT).
   Module VariableAssignmentD := StackFrameD.VariableAssignmentD.
 
   Import LivenessD.
-  
+
   Lemma remove_preserves_equal:
     forall s1 s2 e,
       VarSet.Equal s1 s2 ->
@@ -1254,12 +1254,12 @@ Lemma check_live_out_complete:
         unfold equiv_stack_frames_up_to_v in H_eq_sf1_sf2.
         pose proof (not_In_neq_first l' (inl v) (inl var ) H_not_in) as H_v_neq_var_inl.
         assert (H_var_neq_v: var <> v ). 
-        {
+        (*{*)
           intro H_contra.
           apply H_v_neq_var_inl.
           rewrite H_contra.
           reflexivity.
-        }.
+        (*}.*)
         destruct H_eq_sf1_sf2 as [_ [_ [_ [_ [_ [_ [_ H_eq_sf1_sf2]]]]]]].
         rewrite (H_eq_sf1_sf2 var H_var_neq_v).
         reflexivity.
@@ -1283,11 +1283,11 @@ Lemma check_live_out_complete:
     pose proof (nth_error_Some (SmallStepD.SmartContractD.BlockD.instructions b) (SmallStepD.StackFrameD.pc sf)).
     
     assert (nth_error (SmallStepD.SmartContractD.BlockD.instructions b) (SmallStepD.StackFrameD.pc sf) <> None).
-    {
+    (*{*)
       intros H_contra.
       rewrite H_contra in H_get_next.
       discriminate H_get_next.
-    }.
+    (*}.*)
     
     rewrite H in H0.
     apply H0.
@@ -1527,6 +1527,7 @@ Lemma check_live_out_complete:
           /\
           equiv_vars_in_top_frame b' pc' st1' st2'.
   Proof.
+    intros p i fname bid b pc s instr H_b_exists H_live_at_pc st1 st2 st1' v H_equiv_st1_st2 H_exec_inst_st1 H_not_In_v_s.
     Admitted.
 
     Lemma live_at_handle_block_finish_snd:   
@@ -1681,7 +1682,7 @@ Lemma check_live_out_complete:
          rewrite <- H_eval_st1.
          apply H_equiv_st1_st2.
       + rewrite <- H_eval_st1.
-        apply (equiv_state_equiv_frames_at_top p fname bid b pc i v s st1 st2 H_live_at_pc H_not_In_v_s H_equiv_st1_st2).
+        apply (equiv_state_equiv_frames_at_top p fname bid b pc i v s st1 st2 H_b_exists H_live_at_pc H_not_In_v_s H_equiv_st1_st2).
 
     - intros fname bid b pc s H_b_exists H_live_at_pc st1 st2 st1' v i H_equiv_st1_st2 H_eval_st1 H_not_In_v_s.
 
@@ -1719,6 +1720,8 @@ Lemma check_live_out_complete:
         * right. reflexivity.
         * apply equiv_vars_in_top_frame_refl.
   Qed.
+
+End Liveness_snd.
 
 (*  
 Definition dead_variable  (p: SmartContractD.t) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (v: YULVariable.t) :=
