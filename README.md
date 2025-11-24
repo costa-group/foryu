@@ -13,6 +13,8 @@ A FORmal semantics for Yul in Coq
 The recommended way to install the Rocq Prover for the FORYU project is using the **Rocq Platform**, following the instructions at:
 https://github.com/rocq-prover/platform/blob/2025.01.0/doc/README_Linux.md#installation-by-compiling-from-sources-using-scripts--opam
 
+**Important: use the installation scripts from the repository (`git clone --branch main https://github.com/coq/platform.git`) instead of the ZIP file that appears in the instructions. The scripts from the ZIP file has some problems with version of the packages. More information: https://rocq-prover.zulipchat.com/#narrow/channel/237977-Rocq-users/topic/Install.20.20Ubuntu.2024.2E04.20fails.20.3B.20dune.2Econfigurator.2C.20elpi/near/528321610**
+
 Recommended options:
 
 * Coq Version 8.20
