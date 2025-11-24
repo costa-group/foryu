@@ -133,6 +133,8 @@ class JSON_Smart_Contract:
                 sc_main_filename = sc_filename
             for comp in sc:
                 yul_cfg = sc[comp]['yulCFGJson']
+                if yul_cfg is None:
+                    continue
                 assert yul_cfg['type'] == 'Object'
                 flat_d.update(self.process_object(yul_cfg, [sc_filename, comp]))
 
@@ -189,27 +191,33 @@ class JSON_Smart_Contract:
     def generate_phi(self, phis, entries):
         # TODO: FIXME
         assert not entries or phis, f"A block without entry information has phi_functions: {phis}"
-        assert len(entries) in [0, 2], f"A block with more than 1 o >2 entries: {entries}"
+        if len(entries) == 1:
+            raise AssertionError(f"A block with 1 entry: {entries}")
+
         if len(entries) == 0:
             return "EVMBlock.PhiInfoD.empty"
 
-        # 2 entries
-        block0 = f"{self.translate_block_id(entries[0])}%nat"
-        block1 = f"{self.translate_block_id(entries[1])}%nat"
-        phi_d = {block0: [], block1: []}
+        block_entries = list(map(lambda x: f"{self.translate_block_id(x)}%nat", entries))
+        phi_d = {key: [] for key in block_entries}
+
         for phi in phis:
             # {"in": ["v18", "v23"], "op": "PhiFunction", "out": ["v24"]}
             assert len(phi['out']) == 1, f"PhiFunction with more than one out variable {phi}"
             dest_v = self.translate_var(phi['out'][0])
-            [value_0, value_1] = self.translate_var_constant_list(phi['in']).split('; ')
-            phi_d[block0].append(f"({dest_v}, {value_0})")
-            phi_d[block1].append(f"({dest_v}, {value_1})")
+
+            for pos, orig_v in enumerate(self.translate_var_constant_list(phi['in']).split('; ')):
+                phi_d[block_entries[pos]].append(f"({dest_v}, {orig_v})")
 
         # Generate Coq text for PhiInfo
-        coq_block0 = '; '.join(phi_d[block0])
-        coq_block1 = '; '.join(phi_d[block1])
-        trans = f"fun blockid => if BlockID.eqb blockid {block0} then [{coq_block0}] else if BlockID.eqb blockid {block1} then [{coq_block1}] else []"
-        return trans
+        fun_str = "fun blockid => "
+        for pos, (k,v) in enumerate(phi_d.items()):
+            phis_str = '; '.join(v)
+            if pos == 0:
+                fun_str += f"if BlockID.eqb blockid {k} then [{phis_str}] "
+            else:
+                fun_str += f"else if BlockID.eqb blockid {k} then [{phis_str}] "
+        fun_str += "else []"
+        return fun_str
 
     def translate_exit_info(self, exit):
         # TODO: FIXME

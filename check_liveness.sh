@@ -43,7 +43,7 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     elif [[ "$checker" == "true" ]]; then
       msg="LIVENESS_VALID"
     elif [[ "$checker" == "false" ]]; then
-      msg="LIVENESS_NOT_VALID"
+      msg="LIVENESS_INVALID"
     else
       msg="LIVENESS_MSG_UNKNOWN"
     fi
