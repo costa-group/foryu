@@ -33,16 +33,6 @@ Extract Inductive bool => "bool" [ "true" "false" ].
 Extract Inductive list => "list" [ "[]" "(::)" ].
 Extract Inductive prod => "( * )" [ "( , )" ].
 
-Extract Inductive nat => "int"
-  [ "0"
-    "(fun x -> x + 1)" ]
-  "(fun zero succ n -> if n = 0 then zero () else succ (n - 1))".
-
-(* You must also map the corresponding arithmetic operations *)
-Extract Constant Nat.add => "( + )".
-Extract Constant Nat.mul => "( * )".
-Extract Constant Nat.sub => "fun x y -> if x < y then 0 else x - y".
-
 
 (** Program Extractions **)
 (*  Examples from example.v are extracted and directly tested.
