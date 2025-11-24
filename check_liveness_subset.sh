@@ -7,13 +7,15 @@ output_file="output.txt"
 counter=0
 tr_status=0
 checker_status=0
+subset_file=$1
+
 
 find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     counter=$((counter + 1))
     dir="$(dirname "$f")"
     file="$(basename "$f")"
 
-    if grep -qx "$f" runtime.csv; then
+    if grep -qx "$f" "$subset_file"; then
       cd "$dir" || continue
 
       echo "$counter) $f"
