@@ -7,66 +7,118 @@ output_file="output.txt"
 counter=0
 tr_status=0
 checker_status=0
+msg_subset=""
+msg_optimal=""
+nblocks=0
+ninstrs=0
+output_size=""
 
 find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     counter=$((counter + 1))
     dir="$(dirname "$f")"
     file="$(basename "$f")"
 
-    cd "$dir" || continue
-
     echo "$counter) $f"
+
+    cd ${start_dir}
+
+    # Get size
+    output_size=$(python3 python/json2coq.py -c subset --size "-i ${start_dir}/${dir}/${file}" "-o ${start_dir}/${translated_file}")
+    read nblocks ninstrs <<< "$output_size"
+    # echo "&&&&&&&&&&&&&&&&&&&&& ${nblocks} ${ninstrs}"
+    # cat ${output_size_file}
+    # echo "&&&&&&&&&&&&&&&&&&&&& ${output_size}"
+    # read nblocks ninstrs <<< "$output_size"
+
+    # cd "$dir" || continue
+    # Translates with "subset" checker
     rm -f "${start_dir}/${translated_file}"
     inicio=$(date +%s%N)
-    python3 "${start_dir}/python/json2coq.py" "${file}" "${start_dir}/${translated_file}"
+    python3 "${start_dir}/python/json2coq.py" -c subset  "-i ${start_dir}/${dir}/${file}" "-o ${start_dir}/${translated_file}"
     tr_status=$?
     fin=$(date +%s%N)
     duracion_tr_ns=$((fin - inicio))
-    duracion_tr_ms=$((duracion_tr_ns / 1000000))
+    duracion_tr_ms_subset=$((duracion_tr_ns / 1000000))
 
+    # Executes with "subset" checker
     cd "$start_dir"
-    md5sum "${start_dir}/${translated_file}"
     inicio=$(date +%s%N)
+    make
+    cd ocaml_interface
+    make
+    fin=$(date +%s%N)
+    t_ns=$((fin - inicio))
+    duracion_comp_ms_subset=$((t_ns / 1000000))
     rm -f "${output_file}"
-    coqc -R . FORYU "${translated_file}" > "${output_file}"
+    inicio=$(date +%s%N)
+    ./checker > "${output_file}"
     checker_status=$?
     fin=$(date +%s%N)
     duracion_chk_ns=$((fin - inicio))
-    duracion_chk_ms=$((duracion_chk_ns / 1000000))
+    duracion_chk_ms_subset=$((duracion_chk_ns / 1000000))
 
-    checker=$(cat "$output_file" | grep '=' | awk '{print $2}')
-    msg=""
+    # Generates message subset
+    # checker=$(cat "$output_file" | grep '=' | awk '{print $2}')
+    checker=$(cat "$output_file")
+    msg_subset=""
     if [ $tr_status -ne 0 ]; then
-      msg="TRANSLATION_RUNTIME_ERROR"
+      msg_subset="TRANSLATION_RUNTIME_ERROR"
     elif [ $checker_status -ne 0 ]; then
-      msg="CHECKER_RUNTIME_ERROR"
+      msg_subset="CHECKER_RUNTIME_ERROR"
     elif [[ "$checker" == "true" ]]; then
-      msg="LIVENESS_VALID"
+      msg_subset="LIVENESS_VALID"
     elif [[ "$checker" == "false" ]]; then
-      msg="LIVENESS_INVALID"
+      msg_subset="LIVENESS_INVALID"
     else
-      msg="LIVENESS_MSG_UNKNOWN"
+      msg_subset="LIVENESS_MSG_UNKNOWN"
     fi
 
-    echo "@@@ ${f} ${duracion_tr_ms} ${duracion_chk_ms} ${msg}"
 
+    cd ${start_dir}
+    # cd "$dir" || continue
+    # Translates with "subset" checker
+    rm -f "${start_dir}/${translated_file}"
+    inicio=$(date +%s%N)
+    python3 "${start_dir}/python/json2coq.py" -c optimal  "-i ${start_dir}/${dir}/${file}" "-o ${start_dir}/${translated_file}"
+    tr_status=$?
+    fin=$(date +%s%N)
+    duracion_tr_ns=$((fin - inicio))
+    duracion_tr_ms_optimal=$((duracion_tr_ns / 1000000))
 
-	  # inicio=$(date +%s%N)
-    # solc $file --standard-json --pretty-json > "${start_dir}/${exit_dir}/${file}_cfg.json"
-    # fin=$(date +%s%N)
-    # duracion_ns=$((fin - inicio))
-    # duracion_ms=$((duracion_ns / 1000000))
-    # echo "${counter}) ${duracion_ms} ms"
-    # echo "$f"
-    # echo 
+    # Executes with "optimal" checker
+    cd "$start_dir"
+    inicio=$(date +%s%N)
+    make
+    cd ocaml_interface
+    make
+    fin=$(date +%s%N)
+    t_ns=$((fin - inicio))
+    duracion_comp_ms_optimal=$((t_ns / 1000000))
+    rm -f "${output_file}"
+    inicio=$(date +%s%N)
+    ./checker > "${output_file}"
+    checker_status=$?
+    fin=$(date +%s%N)
+    duracion_chk_ns=$((fin - inicio))
+    duracion_chk_ms_optimal=$((duracion_chk_ns / 1000000))
 
-    # timeout 5s "${start_dir}/solc-static-linux" $file --standard-json --pretty-json > "${start_dir}/${exit_dir}/${file}_cfg.json"
-    # if [ $? -eq 0 ]; then
-    #     echo "${counter}) Exito: $f"
-    # else
-    #     echo "${counter}) Timeout $f"
-	  # fi
+    # Generates message optimal
+    checker=$(cat "$output_file")
+    msg_optimal=""
+    if [ $tr_status -ne 0 ]; then
+      msg_optimal="TRANSLATION_RUNTIME_ERROR"
+    elif [ $checker_status -ne 0 ]; then
+      msg_optimal="CHECKER_RUNTIME_ERROR"
+    elif [[ "$checker" == "true" ]]; then
+      msg_optimal="LIVENESS_VALID"
+    elif [[ "$checker" == "false" ]]; then
+      msg_optimal="LIVENESS_INVALID"
+    else
+      msg_optimal="LIVENESS_MSG_UNKNOWN"
+    fi
+
+    # @@@,filename,nblocks,ninst,time_tr_subset,time_comp_subset,time_checker_subset,msg_subset,time_tr_optimal,time_comp_optimal,time_checker_optimal,msg_optimal
+    echo "@@@,${f},$nblocks,$ninstrs,${duracion_tr_ms_subset},${duracion_comp_ms_subset},${duracion_chk_ms_subset},${msg_subset},${duracion_tr_ms_optimal},${duracion_comp_ms_optimal},${duracion_chk_ms_optimal},${msg_optimal}"
 
     echo
-    cd "$start_dir"
 done

@@ -21,7 +21,7 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
       echo "$counter) $f"
       rm -f "${start_dir}/${translated_file}"
       inicio=$(date +%s%N)
-      python3 "${start_dir}/python/json2coq.py" "${file}" "${start_dir}/${translated_file}"
+      python3 "${start_dir}/python/json2coq.py" -c subset  "-i ${file}" "-o ${start_dir}/${translated_file}"
       tr_status=$?
       fin=$(date +%s%N)
       duracion_tr_ns=$((fin - inicio))

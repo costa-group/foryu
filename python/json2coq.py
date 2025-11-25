@@ -5,6 +5,7 @@ JSON are obtained using solc:
 $ solc file_standard_input.json --standard-json --pretty-json > cfg.json
 """
 
+import argparse
 import json
 import pprint
 import re
@@ -473,7 +474,7 @@ fun fname =>
         tr_funcs_str = "\n   | ".join(tr_funcs)
         return template.format(tr_funcs_str)
 
-    def translate_liveness_coq_file(self):
+    def translate_liveness_coq_file(self, checker:str="optimal"):
         template = """(* 
 FORYU: Automatic translation for liveness analysis
 Smart contract: {} 
@@ -497,24 +498,41 @@ Module EVMBlock := EVMFunction.BlockD.
 Module EVMInstruction := EVMBlock.InstructionD.
 Module EVMState := EVMSmallStep.StateD.
 
-Section Translation.
+Module TestTranslation.
+
+{}
 
 {}
 
 {}
 
 (* Launches liveness check *)
-(* Compute (EVMLiveness.check_smart_contract sc_tr liveness_info). *)
-Compute (EVMLiveness.check_smart_contract_subset sc_tr liveness_info).
+(* Compute check. *) 
 
-End Translation.
-        """
+End TestTranslation."""
+        checker_def = "Definition check := EVMLiveness.check_smart_contract_subset sc_tr liveness_info."
+        if checker == "optimal":
+            checker_def = "Definition check := EVMLiveness.check_smart_contract sc_tr liveness_info."
         return template.format(self.sc_main_filename, datetime.now(), self.translate_smart_contract(),
-                               self.translate_liveness_info())
+                               self.translate_liveness_info(), checker_def)
 
-    def translate_liveness_coq_file_out(self, path):
+    def translate_liveness_coq_file_out(self, path, checker:str="optimal"):
         with open(path, 'w', encoding='utf8') as f:
-            f.write(self.translate_liveness_coq_file())
+            f.write(self.translate_liveness_coq_file(checker))
+
+    def get_size(self):
+        """ Computes the number of blocks and the number of instructions in a smart contract """
+        tot_blocks = 0
+        tot_instructions = 0
+        for func in self.flat_d.values():
+            blocks = func['blocks']
+            tot_blocks += len(blocks)
+            for b in blocks:
+                tot_instructions += len(b['instructions'])
+
+        return tot_blocks, tot_instructions
+
+
 
 
 if __name__ == '__main__':
@@ -533,9 +551,20 @@ if __name__ == '__main__':
     # print(sc.translate_liveness_coq_file())
     sc.translate_liveness_coq_file_out('../test_translation.v')    
     """
-    if len(sys.argv) != 3:
-        print(f'Usage: {sys.argv[0]} <json_file> <coq_file>')
+
+    parser = argparse.ArgumentParser(description="Translate JSON->Coq")
+    parser.add_argument("--input", "-i", required=True, help="JSON input file")
+    parser.add_argument("--output", "-o", required=True, help="Coq output file")
+    parser.add_argument("--checker", "-c", choices=["subset", "optimal"],
+                        required=True, help="Liveness checker")
+    parser.add_argument("--size", action="store_true", help="Compute size in number of blocks and number of instructions")
+    args = parser.parse_args()
+
+    sc = JSON_Smart_Contract(args.input.strip())
+    if args.size:
+        sizes = sc.get_size()
+        print(f"{sizes[0]} {sizes[1]}")
     else:
-        sc = JSON_Smart_Contract(sys.argv[1])
-        sc.translate_liveness_coq_file_out(sys.argv[2])
+        sc.translate_liveness_coq_file_out(args.output.strip(), args.checker.strip())
+
 
