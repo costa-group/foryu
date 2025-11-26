@@ -105,7 +105,7 @@ class JSON_Smart_Contract:
             if object_name == 'type':
                 continue
 
-            subobj = d[object_name]['subObjects']
+            subobj = d[object_name].get('subObjects')
             if subobj:
                 r.update(self.process_object(subobj, prefix + [object_name]))
 

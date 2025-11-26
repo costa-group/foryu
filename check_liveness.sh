@@ -1,7 +1,10 @@
 #!/bin/bash
 
+ulimit -s unlimited
+
 start_dir="$(pwd)"
-cfg_dir="python/semanticTests_cfg"
+#cfg_dir="python/semanticTests_cfg"
+cfg_dir="python/stack_too_deep_cfg"
 translated_file="test_translation.v"
 output_file="output.txt"
 counter=0
@@ -37,25 +40,23 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     python3 "${start_dir}/python/json2coq.py" -c subset  "-i ${start_dir}/${dir}/${file}" "-o ${start_dir}/${translated_file}"
     tr_status=$?
     fin=$(date +%s%N)
-    duracion_tr_ns=$((fin - inicio))
-    duracion_tr_ms_subset=$((duracion_tr_ns / 1000000))
+    duracion_tr_ns_subset=$((fin - inicio))
 
     # Executes with "subset" checker
     cd "$start_dir"
     inicio=$(date +%s%N)
     make
     cd ocaml_interface
-    make
+    rm -f checker
+    make > /dev/null
     fin=$(date +%s%N)
-    t_ns=$((fin - inicio))
-    duracion_comp_ms_subset=$((t_ns / 1000000))
+    duracion_comp_ns_subset=$((fin - inicio))
     rm -f "${output_file}"
     inicio=$(date +%s%N)
     ./checker > "${output_file}"
     checker_status=$?
     fin=$(date +%s%N)
-    duracion_chk_ns=$((fin - inicio))
-    duracion_chk_ms_subset=$((duracion_chk_ns / 1000000))
+    duracion_chk_ns_subset=$((fin - inicio))
 
     # Generates message subset
     # checker=$(cat "$output_file" | grep '=' | awk '{print $2}')
@@ -82,25 +83,23 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     python3 "${start_dir}/python/json2coq.py" -c optimal  "-i ${start_dir}/${dir}/${file}" "-o ${start_dir}/${translated_file}"
     tr_status=$?
     fin=$(date +%s%N)
-    duracion_tr_ns=$((fin - inicio))
-    duracion_tr_ms_optimal=$((duracion_tr_ns / 1000000))
+    duracion_tr_ns_optimal=$((fin - inicio))
 
     # Executes with "optimal" checker
     cd "$start_dir"
     inicio=$(date +%s%N)
     make
     cd ocaml_interface
-    make
+    rm -f checker
+    make >/dev/null
     fin=$(date +%s%N)
-    t_ns=$((fin - inicio))
-    duracion_comp_ms_optimal=$((t_ns / 1000000))
+    duracion_comp_ns_optimal=$((fin - inicio))
     rm -f "${output_file}"
     inicio=$(date +%s%N)
     ./checker > "${output_file}"
     checker_status=$?
     fin=$(date +%s%N)
-    duracion_chk_ns=$((fin - inicio))
-    duracion_chk_ms_optimal=$((duracion_chk_ns / 1000000))
+    duracion_chk_ns_optimal=$((fin - inicio))
 
     # Generates message optimal
     checker=$(cat "$output_file")
@@ -118,7 +117,7 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     fi
 
     # @@@,filename,nblocks,ninst,time_tr_subset,time_comp_subset,time_checker_subset,msg_subset,time_tr_optimal,time_comp_optimal,time_checker_optimal,msg_optimal
-    echo "@@@,${f},$nblocks,$ninstrs,${duracion_tr_ms_subset},${duracion_comp_ms_subset},${duracion_chk_ms_subset},${msg_subset},${duracion_tr_ms_optimal},${duracion_comp_ms_optimal},${duracion_chk_ms_optimal},${msg_optimal}"
+    echo "@@@,${f},$nblocks,$ninstrs,${duracion_tr_ns_subset},${duracion_comp_ns_subset},${duracion_chk_ns_subset},${msg_subset},${duracion_tr_ns_optimal},${duracion_comp_ns_optimal},${duracion_chk_ns_optimal},${msg_optimal}"
 
     echo
 done
