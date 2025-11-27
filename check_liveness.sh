@@ -3,8 +3,8 @@
 ulimit -s unlimited
 
 start_dir="$(pwd)"
-#cfg_dir="python/semanticTests_cfg"
-cfg_dir="python/stack_too_deep_cfg"
+cfg_dir="python/semanticTests_cfg"
+#cfg_dir="python/stack_too_deep_cfg"
 translated_file="test_translation.v"
 output_file="output.txt"
 counter=0
@@ -15,6 +15,9 @@ msg_optimal=""
 nblocks=0
 ninstrs=0
 output_size=""
+
+start_p=$(date +%s%N)
+echo start_p
 
 find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     counter=$((counter + 1))
@@ -28,35 +31,31 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     # Get size
     output_size=$(python3 python/json2coq.py -c subset --size "-i ${start_dir}/${dir}/${file}" "-o ${start_dir}/${translated_file}")
     read nblocks ninstrs <<< "$output_size"
-    # echo "&&&&&&&&&&&&&&&&&&&&& ${nblocks} ${ninstrs}"
-    # cat ${output_size_file}
-    # echo "&&&&&&&&&&&&&&&&&&&&& ${output_size}"
-    # read nblocks ninstrs <<< "$output_size"
 
     # cd "$dir" || continue
     # Translates with "subset" checker
     rm -f "${start_dir}/${translated_file}"
-    inicio=$(date +%s%N)
+    start=$(date +%s%N)
     python3 "${start_dir}/python/json2coq.py" -c subset  "-i ${start_dir}/${dir}/${file}" "-o ${start_dir}/${translated_file}"
     tr_status=$?
-    fin=$(date +%s%N)
-    duracion_tr_ns_subset=$((fin - inicio))
+    end=$(date +%s%N)
+    duration_tr_ns_subset=$((end - start))
 
     # Executes with "subset" checker
     cd "$start_dir"
-    inicio=$(date +%s%N)
+    start=$(date +%s%N)
     make
     cd ocaml_interface
     rm -f checker
-    make > /dev/null
-    fin=$(date +%s%N)
-    duracion_comp_ns_subset=$((fin - inicio))
+    make > /dev/null 2>&1
+    end=$(date +%s%N)
+    duration_comp_ns_subset=$((end - start))
     rm -f "${output_file}"
-    inicio=$(date +%s%N)
+    start=$(date +%s%N)
     ./checker > "${output_file}"
     checker_status=$?
-    fin=$(date +%s%N)
-    duracion_chk_ns_subset=$((fin - inicio))
+    end=$(date +%s%N)
+    duration_chk_ns_subset=$((end - start))
 
     # Generates message subset
     # checker=$(cat "$output_file" | grep '=' | awk '{print $2}')
@@ -79,27 +78,27 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     # cd "$dir" || continue
     # Translates with "subset" checker
     rm -f "${start_dir}/${translated_file}"
-    inicio=$(date +%s%N)
+    start=$(date +%s%N)
     python3 "${start_dir}/python/json2coq.py" -c optimal  "-i ${start_dir}/${dir}/${file}" "-o ${start_dir}/${translated_file}"
     tr_status=$?
-    fin=$(date +%s%N)
-    duracion_tr_ns_optimal=$((fin - inicio))
+    end=$(date +%s%N)
+    duration_tr_ns_optimal=$((end - start))
 
     # Executes with "optimal" checker
     cd "$start_dir"
-    inicio=$(date +%s%N)
+    start=$(date +%s%N)
     make
     cd ocaml_interface
     rm -f checker
-    make >/dev/null
-    fin=$(date +%s%N)
-    duracion_comp_ns_optimal=$((fin - inicio))
+    make > /dev/null 2>&1
+    end=$(date +%s%N)
+    duration_comp_ns_optimal=$((end - start))
     rm -f "${output_file}"
-    inicio=$(date +%s%N)
+    start=$(date +%s%N)
     ./checker > "${output_file}"
     checker_status=$?
-    fin=$(date +%s%N)
-    duracion_chk_ns_optimal=$((fin - inicio))
+    end=$(date +%s%N)
+    duration_chk_ns_optimal=$((end - start))
 
     # Generates message optimal
     checker=$(cat "$output_file")
@@ -117,7 +116,12 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     fi
 
     # @@@,filename,nblocks,ninst,time_tr_subset,time_comp_subset,time_checker_subset,msg_subset,time_tr_optimal,time_comp_optimal,time_checker_optimal,msg_optimal
-    echo "@@@,${f},$nblocks,$ninstrs,${duracion_tr_ns_subset},${duracion_comp_ns_subset},${duracion_chk_ns_subset},${msg_subset},${duracion_tr_ns_optimal},${duracion_comp_ns_optimal},${duracion_chk_ns_optimal},${msg_optimal}"
+    echo "@@@,${f},$nblocks,$ninstrs,${duration_tr_ns_subset},${duration_comp_ns_subset},${duration_chk_ns_subset},${msg_subset},${duration_tr_ns_optimal},${duration_comp_ns_optimal},${duration_chk_ns_optimal},${msg_optimal}"
 
     echo
 done
+
+end_p=$(date +%s%N)
+echo end_p
+time_p=$((end_p - start_p))
+echo "Total time ${time_p} ns"
