@@ -17,7 +17,7 @@ ninstrs=0
 output_size=""
 
 start_p=$(date +%s%N)
-echo start_p
+echo $start_p
 
 find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     counter=$((counter + 1))
@@ -122,6 +122,6 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
 done
 
 end_p=$(date +%s%N)
-echo end_p
+echo $end_p
 time_p=$((end_p - start_p))
 echo "Total time ${time_p} ns"
