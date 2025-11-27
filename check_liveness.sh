@@ -44,7 +44,7 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     # Executes with "subset" checker
     cd "$start_dir"
     start=$(date +%s%N)
-    make
+    make > /dev/null 2>&1
     cd ocaml_interface
     rm -f checker
     make > /dev/null 2>&1
@@ -87,7 +87,7 @@ find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
     # Executes with "optimal" checker
     cd "$start_dir"
     start=$(date +%s%N)
-    make
+    make > /dev/null 2>&1
     cd ocaml_interface
     rm -f checker
     make > /dev/null 2>&1
