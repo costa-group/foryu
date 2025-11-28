@@ -107,29 +107,35 @@ Module SmallStep (D: DIALECT).
                     let return_values := VariableAssignmentD.get_all_se sf_var_assignment l in
                     match rsf with
                     | nil => (* No return stack to copy values to -> Error *)
-                        let s' := StateD.set_status s (Status.Error "Missing return stack frame") in
-                        s'
-                    | prev_sf :: rsf2 => 
-                        let prev_sf_var_assignment := prev_sf.(StackFrameD.variable_assignments) in
-                        let vars := sf.(StackFrameD.return_variables) in
-                        let opt_prev_sf_var_assignment' := VariableAssignmentD.assign_all prev_sf_var_assignment vars return_values in
-                        match opt_prev_sf_var_assignment' with
-                        | None => let s' := StateD.set_status s (Status.Error "Failed to assign return values") in
-                                  s'
-                        | Some prev_sf_var_assignment' =>
-                            let prev_sf' := {| 
-                                StackFrameD.function_name := prev_sf.(StackFrameD.function_name);
-                                StackFrameD.variable_assignments := prev_sf_var_assignment';
-                                StackFrameD.curr_block_id := prev_sf.(StackFrameD.curr_block_id);
-                                StackFrameD.pc := prev_sf.(StackFrameD.pc); (* Keep the previous program counter *)
-                                StackFrameD.return_variables := prev_sf.(StackFrameD.return_variables) 
-                            |} in
-                            let s' : StateD.t := {|
-                                    StateD.call_stack := prev_sf' :: rsf2;
-                                    (* StateD.status := s.(StateD.status); (* Keep the previous status *) *)
-                                    StateD.status := Status.Running;
-                                    StateD.dialect_state := s.(StateD.dialect_state); |} in
-                            s'
+                        let s' := StateD.set_status s (Status.Error "Missing return stack frame") in s'
+                    | prev_sf :: rsf2 =>
+                        match SmartContractD.get_block p prev_sf.(StackFrameD.function_name) prev_sf.(StackFrameD.curr_block_id) with
+                        | None => let s' := StateD.set_status s (Status.Error "Failed to calling block") in s'
+                        | Some b =>
+                            match List.nth_error b.(BlockD.instructions) prev_sf.(StackFrameD.pc) with
+                            | None => let s' := StateD.set_status s (Status.Error "Failed to find call instruction") in s'
+                            | Some instr =>
+                                let prev_sf_var_assignment := prev_sf.(StackFrameD.variable_assignments) in
+                                let vars := instr.(SmartContractD.BlockD.InstructionD.output) in
+                                let opt_prev_sf_var_assignment' := VariableAssignmentD.assign_all prev_sf_var_assignment vars return_values in
+                                match opt_prev_sf_var_assignment' with
+                                | None => let s' := StateD.set_status s (Status.Error "Failed to assign return values") in
+                                          s'
+                                | Some prev_sf_var_assignment' =>
+                                    let prev_sf' := {| 
+                                                     StackFrameD.function_name := prev_sf.(StackFrameD.function_name);
+                                                     StackFrameD.variable_assignments := prev_sf_var_assignment';
+                                                     StackFrameD.curr_block_id := prev_sf.(StackFrameD.curr_block_id);
+                                                     StackFrameD.pc := prev_sf.(StackFrameD.pc)+1; (* Increment the previous pc *)
+                                                   |} in
+                                    let s' : StateD.t := {|
+                                                          StateD.call_stack := prev_sf' :: rsf2;
+                                                          (* StateD.status := s.(StateD.status); (* Keep the previous status *) *)
+                                                          StateD.status := Status.Running;
+                                                          StateD.dialect_state := s.(StateD.dialect_state); |} in
+                                    s'
+                                end
+                            end
                         end
                     end
 
@@ -151,7 +157,7 @@ Module SmallStep (D: DIALECT).
                             StackFrameD.variable_assignments := var_assignments';
                             StackFrameD.curr_block_id := target_block; 
                             StackFrameD.pc := 0; (* Reset the program counter to the start of the target block *)
-                            StackFrameD.return_variables := sf.(StackFrameD.return_variables) |} in
+                                  |} in
                         let call_stack' := sf' :: rsf in
                         let s' : StateD.t := {|
                             StateD.call_stack := call_stack';
@@ -179,7 +185,7 @@ Module SmallStep (D: DIALECT).
                             StackFrameD.variable_assignments := var_assignments';
                             StackFrameD.curr_block_id := target_block; 
                             StackFrameD.pc := 0; (* Reset the program counter to the start of the target block *)
-                            StackFrameD.return_variables := sf.(StackFrameD.return_variables) |} in
+                                  |} in
                         let call_stack' := sf' :: rsf in
                         let s' : StateD.t := {|
                             StateD.call_stack := call_stack';
@@ -229,7 +235,6 @@ Module SmallStep (D: DIALECT).
                                     StackFrameD.variable_assignments := var_assignments';
                                     StackFrameD.curr_block_id := sf.(StackFrameD.curr_block_id);  
                                     StackFrameD.pc := sf.(StackFrameD.pc) + 1; (* Increment the program counter *)
-                                    StackFrameD.return_variables := sf.(StackFrameD.return_variables)
                                   |} in
                         let call_stack' := sf' :: rsf in
                         let s' : StateD.t := {|
@@ -258,7 +263,6 @@ Module SmallStep (D: DIALECT).
                                         StackFrameD.variable_assignments := var_assignments';
                                         StackFrameD.curr_block_id := sf.(StackFrameD.curr_block_id);  
                                         StackFrameD.pc := sf.(StackFrameD.pc) + 1; (* Increment the program counter *)
-                                        StackFrameD.return_variables := sf.(StackFrameD.return_variables)
                                       |} in
                             let call_stack' := sf' :: rsf in
                             let s' : StateD.t := {|
@@ -292,11 +296,10 @@ Module SmallStep (D: DIALECT).
                                                StackFrameD.variable_assignments := var_assignments;
                                                StackFrameD.curr_block_id := first_block_id; 
                                                StackFrameD.pc := 0; (* Start at the first instruction of the block *)
-                                               StackFrameD.return_variables := output (* The output variables will receive the return values *)
                                              |} in 
-                                let sf' := StackFrameD.increase_pc sf in
+                                (* let sf' := StackFrameD.increase_pc sf in *)
                                 let s' : StateD.t := {|
-                                                      StateD.call_stack := new_sf :: sf' :: rsf;
+                                                      StateD.call_stack := new_sf :: sf :: rsf;
                                                       StateD.status := s.(StateD.status);
                                                       StateD.dialect_state := s.(StateD.dialect_state);
                                                     |} in

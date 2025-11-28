@@ -1,6 +1,6 @@
 Require Export FORYU.list_functions.
 Require Export FORYU.program.
-
+ 
 Module VariableAssignment(D: DIALECT).
 
   Module YULVariableMapD := YULVariableMap(D).
@@ -41,10 +41,14 @@ Module VariableAssignment(D: DIALECT).
     | nil, _ :: _ => None
     | _ :: _, nil => None
     | var :: rvars, val :: rvals =>
+        let new_assignments := assign assignments var val in
+        assign_all new_assignments rvars rvals
+    (*
         match assign_all assignments rvars rvals with
         | Some new_assignments => Some (assign new_assignments var val)
         | None => None
         end
+     *) 
     end.
 
   (* Applies a list of renamings to the assignments. Each renaming is a pair (dest, origin) where 
@@ -72,8 +76,6 @@ Module StackFrame(D: DIALECT).
     (*curr_block : SmartContractD.BlockD.t; (* current block in execution, the list of instructions is consumed *)*)
     curr_block_id: BlockID.t; (* id of the current block *)
     pc : nat; (* position of the next instructions in the curr_block *)
-    return_variables : list YULVariable.t; (* variables of the previous frame that will receive the 
-                                              return values *)
   }.
 
   Definition increase_pc (sf: t) : t :=
@@ -82,7 +84,6 @@ Module StackFrame(D: DIALECT).
       variable_assignments := sf.(variable_assignments);
       curr_block_id := sf.(curr_block_id);
       pc := sf.(pc) + 1;
-      return_variables := sf.(return_variables)
     |}.
 End StackFrame.
 
@@ -128,7 +129,7 @@ Module State(D: DIALECT).
                       StackFrameD.variable_assignments := VariableAssignmentD.empty;
                       StackFrameD.curr_block_id := 0%nat;
                       StackFrameD.pc := 0%nat;
-                      StackFrameD.return_variables := nil; |} ) :: nil;
+                   |} ) :: nil;
     status := Status.Running;
     dialect_state := D.empty_dialect_state;
   |}.
