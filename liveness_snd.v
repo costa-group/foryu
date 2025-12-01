@@ -416,7 +416,7 @@ Module Liveness_snd (D: DIALECT).
 
   
 
-  Lemma aux {A: Type}:
+  Lemma non_empty_list_cons {A: Type}:
     forall (n: nat) (l: list A),
       Nat.le (S n) (length l) ->
       exists x xs, l=x::xs.
