@@ -8,7 +8,7 @@ Open Scope string_scope.
 - both in handle_block_finish and execute call (define function part)
 - Create function to create/adapt variable assignment with phi-info
 *)
-
+ 
 
 Module SmallStep (D: DIALECT).
     Module StateD := State(D).
@@ -19,6 +19,7 @@ Module SmallStep (D: DIALECT).
     (* Module BlockD := StateD.CallStackD.StackFrameD.BlockD. *)
     (* Module BlockD := SmartContractD.BlockD. *)
     Module VariableAssignmentD := StateD.CallStackD.StackFrameD.VariableAssignmentD.
+    Module YULVariableMapD := VariableAssignmentD.YULVariableMapD.
     Module ExitInfoD := BlockD.ExitInfoD.
     Module SimpleExprD := ExitInfoD.SimpleExprD.
     
@@ -79,6 +80,29 @@ Module SmallStep (D: DIALECT).
     | None => None
     end.
     *)
+ 
+    (* Generates a list of values from a list of variables/values and a stack frame *)
+    Fixpoint eval_sexpr (input: list SimpleExprD.t ) (sf: StackFrameD.t) : list D.value_t :=
+        match input with
+        | nil => nil
+        | inl var :: rest =>
+            let value := VariableAssignmentD.get sf.(StackFrameD.variable_assignments) var in
+            value :: eval_sexpr rest sf
+        | inr val :: rest =>
+            val :: eval_sexpr rest sf
+        end.
+
+    Definition get_renaming_var (renamings : YULVariableMapD.t) :=
+      map (fun r => fst r) renamings.
+
+    Definition get_renaming_sexpr (renamings : YULVariableMapD.t) :=
+      map (fun r => snd r) renamings.
+    
+    Definition apply_renamings (renamings : YULVariableMapD.t) (sf: StackFrameD.t) :=
+      let output := get_renaming_var renamings in
+      let input := get_renaming_sexpr renamings in
+      let input_values := eval_sexpr input sf in
+      VariableAssignmentD.assign_all sf.(StackFrameD.variable_assignments) output input_values.
 
     (* Handle the end of a block execution *)
     Definition handle_block_finish (s: StateD.t) (p: SmartContractD.t) : StateD.t :=
@@ -87,7 +111,6 @@ Module SmallStep (D: DIALECT).
                  s' 
         | sf :: rsf => (* sf.pc should be > sf.curr_block length *)
             let function_name := sf.(StackFrameD.function_name) in
-            let sf_var_assignment := sf.(StackFrameD.variable_assignments) in
             let curr_block_id : BlockID.t := sf.(StackFrameD.curr_block_id) in
             let opt_curr_block : option SmartContractD.BlockD.t := SmartContractD.get_block p function_name curr_block_id in
             match opt_curr_block with
@@ -104,7 +127,7 @@ Module SmallStep (D: DIALECT).
 
                 | ExitInfoD.ReturnBlock l =>
                     (* Passes return values and pops the last stack frame *)
-                    let return_values := VariableAssignmentD.get_all_se sf_var_assignment l in
+                    let return_values := eval_sexpr l sf in
                     match rsf with
                     | nil => (* No return stack to copy values to -> Error *)
                         let s' := StateD.set_status s (Status.Error "Missing return stack frame") in s'
@@ -140,37 +163,37 @@ Module SmallStep (D: DIALECT).
                     end
 
 
-                | ExitInfoD.Jump target_block =>
+                | ExitInfoD.Jump target_block_bid =>
                     (* Jump to the target block, resetting the program counter *)
-                    let var_assignments := sf.(StackFrameD.variable_assignments) in
-                    match SmartContractD.get_block p function_name target_block with
+                    match SmartContractD.get_block p function_name target_block_bid with
                     | None => let s' := StateD.set_status s (Status.Error "Target block not found in the smart contract") in
                               s'
 
-                    | Some target_block_data =>
-                        let phi_function := SmartContractD.BlockD.phi_function target_block_data in
+                    | Some target_block =>
+                        let phi_function := SmartContractD.BlockD.phi_function target_block in
                         let phi_renamings := phi_function curr_block_id in
-                        let var_assignments' := VariableAssignmentD.apply_renamings var_assignments phi_renamings in  
-                    
-                        let sf' := {| 
-                            StackFrameD.function_name := function_name;
-                            StackFrameD.variable_assignments := var_assignments';
-                            StackFrameD.curr_block_id := target_block; 
-                            StackFrameD.pc := 0; (* Reset the program counter to the start of the target block *)
-                                  |} in
-                        let call_stack' := sf' :: rsf in
-                        let s' : StateD.t := {|
-                            StateD.call_stack := call_stack';
-                            StateD.status := Status.Running;
-                            StateD.dialect_state := s.(StateD.dialect_state) |} in
-                        s'
-                    end 
-
+                        match (apply_renamings phi_renamings sf) with
+                        | Some var_assignments' =>                    
+                            let sf' := {| 
+                                        StackFrameD.function_name := function_name;
+                                        StackFrameD.variable_assignments := var_assignments';
+                                        StackFrameD.curr_block_id := target_block_bid; 
+                                        StackFrameD.pc := 0; (* Reset the program counter to the start of the target block *)
+                                      |} in
+                            let call_stack' := sf' :: rsf in
+                            let s' : StateD.t := {|
+                                                  StateD.call_stack := call_stack';
+                                                  StateD.status := Status.Running;
+                                                  StateD.dialect_state := s.(StateD.dialect_state) |} in
+                            s'
+                    | None => let s' := StateD.set_status s (Status.Error "Error while applying phi-function") in
+                              s'
+                        end
+                    end
 
                 | ExitInfoD.ConditionalJump cond_var target_if_true target_if_false =>
                     let cond_val := VariableAssignmentD.get sf.(StackFrameD.variable_assignments) cond_var in
                     let target_block := if D.is_true_value cond_val then target_if_true else target_if_false in
-                    let var_assignments := sf.(StackFrameD.variable_assignments) in
                     match SmartContractD.get_block p function_name target_block with
                     | None => let s' := StateD.set_status s (Status.Error "Target block not found in the smart contract") in
                               s'
@@ -178,35 +201,26 @@ Module SmallStep (D: DIALECT).
                     | Some target_block_data =>
                         let phi_function := SmartContractD.BlockD.phi_function target_block_data in
                         let phi_renamings := phi_function curr_block_id in
-                        let var_assignments' := VariableAssignmentD.apply_renamings var_assignments phi_renamings in  
-                    
-                        let sf' := {| 
-                            StackFrameD.function_name := function_name;
-                            StackFrameD.variable_assignments := var_assignments';
-                            StackFrameD.curr_block_id := target_block; 
-                            StackFrameD.pc := 0; (* Reset the program counter to the start of the target block *)
-                                  |} in
-                        let call_stack' := sf' :: rsf in
-                        let s' : StateD.t := {|
-                            StateD.call_stack := call_stack';
-                            StateD.status := Status.Running;
-                            StateD.dialect_state := s.(StateD.dialect_state) |} in
-                        s'
+                        match apply_renamings phi_renamings sf with
+                          | Some var_assignments' =>                    
+                              let sf' := {| 
+                                          StackFrameD.function_name := function_name;
+                                          StackFrameD.variable_assignments := var_assignments';
+                                          StackFrameD.curr_block_id := target_block; 
+                                          StackFrameD.pc := 0; (* Reset the program counter to the start of the target block *)
+                                        |} in
+                              let call_stack' := sf' :: rsf in
+                              let s' : StateD.t := {|
+                                                    StateD.call_stack := call_stack';
+                                                    StateD.status := Status.Running;
+                                                    StateD.dialect_state := s.(StateD.dialect_state) |} in
+                              s'
+                        | None => let s' := StateD.set_status s (Status.Error "Error while applying phi-function") in
+                              s'
+                        end
                     end
                 end
             end
-        end.
-
-
-    (* Generates a list of values from a list of variables/values and a stack frame *)
-    Fixpoint eval_input (input: list SimpleExprD.t ) (sf: StackFrameD.t) : list D.value_t :=
-        match input with
-        | nil => nil
-        | inl var :: rest =>
-            let value := VariableAssignmentD.get sf.(StackFrameD.variable_assignments) var in
-            value :: eval_input rest sf
-        | inr val :: rest =>
-            val :: eval_input rest sf
         end.
 
 
@@ -218,7 +232,7 @@ Module SmallStep (D: DIALECT).
             | nil => let s' := StateD.set_status s (Status.Error "No current stack frame") in
                      s'
             | sf :: rsf => 
-                let input_values := eval_input input sf in
+                let input_values := eval_sexpr input sf in
         
                 match instr.(SmartContractD.BlockD.InstructionD.op) with
 

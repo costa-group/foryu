@@ -10,6 +10,7 @@ Import ListNotations.
 Require Import Coq.Relations.Relation_Operators.
 Require Import stdpp.prelude.
 Require Import stdpp.relations. (* This is where nsteps lives *)
+From Coq Require Import Strings.Ascii.
 
 
 Module Liveness (D: DIALECT).
@@ -47,24 +48,31 @@ Module Liveness (D: DIALECT).
         end
     end.
 
+
+  (*
   (* applies the inverse of the phi function 'l' (pairs of variable
   and simple expressions) to the set of expressions 's'.  *)
   Fixpoint apply_inv_phi (l : YULVariableMapD.t) (s: VarSet.t) :=
     match l with
     | nil => s
     | (dest,orig)::vs =>
+        let s' := apply_inv_phi vs s in
         match orig with
         | inl var =>
-            if (VarSet.mem dest s) then
-              apply_inv_phi vs (VarSet.add var (VarSet.remove dest s))
-            else
-              apply_inv_phi vs s
+            if (VarSet.mem dest s') 
+            then VarSet.add var (VarSet.remove dest s')
+            else s'
         | inr _ =>
-            apply_inv_phi vs (VarSet.remove dest s)
+            VarSet.remove dest s'
         end
     end.
-
-    
+   *)
+  
+  Definition apply_inv_phi (l : YULVariableMapD.t) (s: VarSet.t) :=
+    let inset := list_to_set (extract_yul_vars (SmallStepD.get_renaming_sexpr l)) in
+    let outset := list_to_set (SmallStepD.get_renaming_var l) in
+    (VarSet.union (VarSet.diff s outset) inset).
+  
   Definition prop_live_set_bkw_instr (i: InstructionD.t) (s: VarSet.t) : VarSet.t :=
     let inset := list_to_set (extract_yul_vars i.(InstructionD.input)) in
     let outset := list_to_set i.(InstructionD.output) in
@@ -289,26 +297,57 @@ Module Liveness (D: DIALECT).
   Definition check_live_subset (p: SmartContractD.t) (r: sc_live_info_t) (f: FunctionName.t) (b: BlockD.t) : bool :=
     if (check_live_in_subset r f b) then check_live_out_subset p r f b else false.
 
-  Fixpoint check_blocks_subset (bs: list BlockD.t) (fname: FunctionName.t) (p: SmartContractD.t) (r: sc_live_info_t) :=
-    match bs with
-    | nil => true
-    | b::bs' => if (check_live_subset p r fname b)
-                then check_blocks_subset bs' fname p r
-                else false
+  Fixpoint check_blocks_subset  (n: nat) (bs: list BlockD.t) (fname: FunctionName.t) (p: SmartContractD.t) (r: sc_live_info_t) : nat * bool :=
+    match n with
+    | 0 => (0,false)
+    | S n' =>
+        match bs with
+        | nil => (n',true)
+        | b::bs' => if (check_live_subset p r fname b)
+                    then check_blocks_subset n' bs' fname p r
+                    else (0,false)
+        end
     end.
 
 
-  Fixpoint check_functions_subset (fs: list FunctionD.t) (p: SmartContractD.t) (r: sc_live_info_t) :=
-    match fs with
-    | nil => true
-    | f::fs' => if (check_blocks_subset f.(FunctionD.blocks) f.(FunctionD.name) p r)
-                then check_functions_subset fs' p r
-                else false
+  Fixpoint check_functions_subset (n: nat) (fs: list FunctionD.t) (p: SmartContractD.t) (r: sc_live_info_t) :=
+    match n with
+    | 0 => false
+    | S n' =>
+        match fs with
+        | nil => true
+        | f::fs' => match (check_blocks_subset n' f.(FunctionD.blocks) f.(FunctionD.name) p r) with
+                    | (_,false) => false
+                    | (n'',true) => check_functions_subset n'' fs' p r
+                    end
+        end
     end.
+
+    Fixpoint list_of_string (s : string) : list ascii :=
+  match s with
+  | EmptyString => []
+  | String c s => c :: (list_of_string s)
+  end.
+
+
+  Fixpoint parseDecNumber' (x : list ascii) (acc : nat) :=
+  match x with
+  | [] => Some acc
+  | d::ds => let n := nat_of_ascii d in
+             if (andb (Nat.leb 48 n) (Nat.leb n 57)) then
+               parseDecNumber' ds (10*acc+(n-48))
+             else None
+  end.
+
+  Definition parseDecNumber (x : string) : option nat :=
+  parseDecNumber' (list_of_string x) 0.
+
   
-  Definition check_smart_contract_subset (p: SmartContractD.t) (r: sc_live_info_t) :=
-    check_functions_subset p.(SmartContractD.functions) p r.
-
+  Definition check_smart_contract_subset (sn: string) (p: SmartContractD.t) (r: sc_live_info_t) :=
+    match (parseDecNumber sn) with
+    | None => false
+    | Some n => check_functions_subset n p.(SmartContractD.functions) p r
+    end.
   (* end of version with subset *)
   
   Fixpoint nodupb {A : Type} (eqb : A -> A -> bool) (l : list A) : bool :=
@@ -351,5 +390,7 @@ Module Liveness (D: DIALECT).
   Definition smart_contrac (p: SmartContractD.t): bool :=
     check_function_names_are_different p.(SmartContractD.functions) &&
     check_valid_functions p.(SmartContractD.functions).
-    
+
+
+
 End Liveness.
