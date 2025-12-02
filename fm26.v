@@ -160,4 +160,18 @@ Module FM26 (D: DIALECT).
       unfold same_pp.       
       repeat split; try (assumption || intuition).
   Qed.
+
+  Definition liveness_chk (p: SmartContractD.t) (r: sc_live_info_t) :=
+    check_smart_contract p r.
+
+  Definition liveness_info_snd := Liveness_sndD.snd_all_blocks_info.
+
+  Lemma liveness_chk_snd_cmp: 
+    forall (p: SmartContractD.t) (r: sc_live_info_t),
+      SmartContractD.valid_smart_contract p ->
+      (liveness_info_snd p r <-> liveness_chk p r = true).
+  Proof.
+    apply check_valid_smart_contract_correct.
+  Qed.
+    
 End FM26.
