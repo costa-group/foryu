@@ -178,7 +178,6 @@ Module Function (D: DIALECT).
   Record t : Type := {
     name : FunctionName.t;
     arguments : list YULVariable.t; (* Input parameters *)
-    num_outputs : nat; (* Number of output parameters *)
     blocks : list BlockD.t; (* List of blocks *)
     entry_block_id : BlockID.t; (* The ID of the entry block. *)
   }.

@@ -10,9 +10,10 @@ Require Import List.
 Import ListNotations.
 Require Import Coq.Relations.Relation_Operators.
 Require Import stdpp.prelude.
-Require Import stdpp.relations. (* This is where nsteps lives *)
+Require Import stdpp.relations.
 Require Import Coq.Logic.FunctionalExtensionality.
 Require Import Coq.Logic.Classical_Pred_Type.
+Require Import Lia.
 
 
 Module Liveness_snd (D: DIALECT).
@@ -39,6 +40,32 @@ Module Liveness_snd (D: DIALECT).
   Proof.
     intros x y H_x.
     congruence.
+  Qed.
+
+
+  Lemma some_neq_none_ {A: Type}:
+    forall n (l: list A),
+      n < length l -> exists y, nth_error l n = Some y.
+  Proof.
+    induction n as [| n' IHn'].
+    - intros l H_lt.
+      destruct l as [|a l'].
+      + simpl in H_lt.
+        contradiction (Nat.lt_irrefl 0).
+      + simpl.
+        exists a.
+        reflexivity.
+    - intros l H_lt.
+      simpl.
+      destruct l as [|a l'].
+      + simpl in H_lt.
+        contradiction (Nat.nle_succ_0 n').
+        apply Nat.lt_le_incl.
+        apply H_lt.
+      + simpl in H_lt.
+        rewrite <- Nat.succ_lt_mono in H_lt.
+        apply IHn'.
+        apply H_lt.
   Qed.
 
   
@@ -265,83 +292,7 @@ Module Liveness_snd (D: DIALECT).
     intros x y s H_xs H_ys.
     congruence.
   Qed.
-      
-(*
-  Lemma apply_inv_phi_preserves_equal:
-    forall l s1 s2,
-      VarSet.Equal s1 s2 ->
-      VarSet.Equal (apply_inv_phi l s1) (apply_inv_phi l s2).
-  Proof.
-    induction l as [|a l' IHl'].
-    + trivial.
-    + intros s1 s2 H_s1_eq_s2.
-      unfold apply_inv_phi. fold apply_inv_phi.
-      destruct a as [dest orig] eqn:E_do.
-      destruct orig as [var|] eqn:E_orig.
-      ++ pose proof (VarSet.mem_spec s1 dest) as H_mem_s1.
-         pose proof (VarSet.mem_spec s2 dest) as H_mem_s2.
-         destruct (VarSet.mem dest s1) eqn:E_mem_dest_s1;
-           destruct (VarSet.mem dest s2) eqn:E_mem_dest_s2.
-         +++ pose proof (add_preserves_equal (VarSet.remove dest s1) (VarSet.remove dest s2) var (remove_preserves_equal s1 s2 dest H_s1_eq_s2)) as H_add_rem_s1_s2_eq'.
-             apply IHl'.
-             apply H_add_rem_s1_s2_eq'.
-         +++ pose proof (remove_preserves_equal s1 s2 dest H_s1_eq_s2) as H_mem_s1_s2_dest.
-             rewrite <- VarSet.mem_spec in *.
-             pose proof (mem_preserves_equal s1 s2 dest H_s1_eq_s2) as H_mem_pre_eq.
-             rewrite H_mem_pre_eq in E_mem_dest_s1.
-             rewrite E_mem_dest_s1  in E_mem_dest_s2.
-             discriminate E_mem_dest_s2.
-         +++ pose proof (remove_preserves_equal s1 s2 dest H_s1_eq_s2) as H_mem_s1_s2_dest.
-             rewrite <- VarSet.mem_spec in *.
-             pose proof (mem_preserves_equal s1 s2 dest H_s1_eq_s2) as H_mem_pre_eq.
-             rewrite H_mem_pre_eq in E_mem_dest_s1.
-             rewrite E_mem_dest_s1  in E_mem_dest_s2.
-             discriminate E_mem_dest_s2.
-         +++ apply (IHl' s1 s2 H_s1_eq_s2).
 
-      ++  apply (IHl' (VarSet.remove dest s1) (VarSet.remove dest s2) (remove_preserves_equal s1 s2 dest H_s1_eq_s2)).
-  Qed.
- *)
-
-  (*
-  Lemma apply_inv_phi_preserves_equal:
-    forall l s1 s2,
-      VarSet.Equal s1 s2 ->
-      VarSet.Equal (apply_inv_phi l s1) (apply_inv_phi l s2).
-  Proof.
-    induction l as [|a l' IHl'].
-    - trivial.
-    - intros s1 s2 H_s1_eq_s2.
-      unfold apply_inv_phi. fold apply_inv_phi.
-      remember (apply_inv_phi l' s1) as s1' eqn:E_s1'.
-      remember (apply_inv_phi l' s2) as s2' eqn:E_s2'.
-      
-      destruct a as [dest orig] eqn:E_do.
-      destruct orig as [var|] eqn:E_orig.
-      + pose proof (IHl' s1 s2 H_s1_eq_s2) as H_s1'_eq_s2'.
-        rewrite <- E_s1' in H_s1'_eq_s2'.
-        rewrite <- E_s2' in H_s1'_eq_s2'.
-
-        destruct (VarSet.mem dest s1') eqn:E_mem_dest_s1'; 
-          destruct (VarSet.mem dest s2') eqn:E_mem_dest_s2'.
-
-        * apply (add_preserves_equal (VarSet.remove dest s1') (VarSet.remove dest s2') var  (remove_preserves_equal s1' s2' dest H_s1'_eq_s2' ) ).
-        * rewrite (mem_preserves_equal s1' s2' dest H_s1'_eq_s2') in E_mem_dest_s1' .
-          rewrite E_mem_dest_s1' in E_mem_dest_s2'.
-          discriminate E_mem_dest_s2'.
-
-        * rewrite (mem_preserves_equal s1' s2' dest H_s1'_eq_s2') in E_mem_dest_s1' .
-          rewrite E_mem_dest_s1' in E_mem_dest_s2'.
-          discriminate E_mem_dest_s2'.
-        * apply H_s1'_eq_s2'.
-      + rewrite E_s1'.
-        rewrite E_s2'.
-        apply (remove_preserves_equal (apply_inv_phi l' s1) (apply_inv_phi l' s2) dest (IHl' s1 s2 H_s1_eq_s2)).
-  Qed.
-*)
-
-    
-  
   Lemma diff_preserves_equal:
     forall s1 s1' s2 s2',
       VarSet.Equal s1 s1' ->
@@ -572,21 +523,174 @@ Module Liveness_snd (D: DIALECT).
     rewrite H.
     reflexivity.
   Qed.
+
+
+Lemma sub_x_x_y: forall x y, y <= x -> x - (x - y) = y.
+Proof.
+  intros.
+  lia. (* Solves linear arithmetic goals automatically *)
+Qed.
+
+
+Lemma aux_sn_breakdown:
+  forall (n: nat) (L: list InstructionD.t) (s: VarSet.t) (i: InstructionD.t),
+    nth_error L n = Some i ->
+    prop_live_set_bkw_aux (S n) L s = 
+    prop_live_set_bkw_instr i (prop_live_set_bkw_aux n L s).
+Proof.
+  induction n as [| k IH].
   
-    
-  Lemma live_at_pc'_equiv_live_at_pc:
+  (* Case n = 0 *)
+  - intros L s i H_nth.
+    destruct L as [| h t].
+    + (* Empty list: nth_error is None, contradiction *)
+      simpl in H_nth. discriminate.
+    + (* Head element: nth_error is Some h *)
+      simpl in H_nth. injection H_nth as H_h_eq_i.
+      subst.
+      (* LHS: aux 1 (i::t) s -> aux 0 t (f i s) -> f i s *)
+      (* RHS: f i (aux 0 (i::t) s) -> f i s *)
+      simpl. reflexivity.
+
+  (* Case n = S k *)
+  - intros L s i H_nth.
+    destruct L as [| h t].
+    + (* Empty list: contradiction *)
+      simpl in H_nth. discriminate.
+    + (* List is h::t *)
+      simpl in H_nth.
+      (* H_nth is now: nth_error t k = Some i *)
+      
+      (* LHS: aux (S (S k)) (h::t) s 
+             = aux (S k) t (f h s) *)
+      simpl.
+      
+      (* RHS: f i (aux (S k) (h::t) s) 
+             = f i (aux k t (f h s)) *)
+      
+      (* Apply IH with the new state (f h s) *)
+      rewrite <- (IH t (prop_live_set_bkw_instr h s) i H_nth).
+      * reflexivity.
+Qed.
+
+
+Lemma prop_live_set_bkw_aux_i:
+  forall l n s i,
+    S n <= length l ->
+    nth_error l ((length l) - (S n)) = Some i ->
+    prop_live_set_bkw_aux (S n) (rev l) s =
+      prop_live_set_bkw_instr i (prop_live_set_bkw_aux n (rev l) s).
+Proof.
+  intros l n s i H_bound H_nth_l.
+  
+  (* 1. Use the helper lemma on the list (rev l) *)
+  apply aux_sn_breakdown.
+  
+  (* 2. We must prove: nth_error (rev l) n = Some i *)
+  
+  (* We use the standard library theorem relating nth_error and rev:
+     nth_error_rev: forall l i, 
+       i < length l -> 
+       nth_error (rev l) i = nth_error l (length l - S i)
+  *)
+  
+  rewrite nth_error_rev.
+
+  assert(H_S_le_lt: forall x y, S x <= y -> x < y). intros. lia.
+  apply H_S_le_lt in H_bound.
+  
+  - (* The rewritten goal matches our hypothesis H_nth_l exactly *)
+    rewrite <- Nat.ltb_lt in H_bound.
+    rewrite H_bound.
+    exact H_nth_l.
+Qed.
+
+                            
+Lemma live_at_pc'_equiv_live_at_pc:
     forall i p fname bid b s,
       SmartContractD.get_block p fname bid = Some b -> (* the block exists *)
       Nat.le i (length b.(BlockD.instructions)) ->
-      live_at_pc p fname bid ((length b.(BlockD.instructions)) - i) s <-> live_at_pc' p fname bid ((length b.(BlockD.instructions)) - i) s.
-  Proof.
-    Admitted.
+      live_at_pc p fname bid ((length b.(BlockD.instructions)) - i) s -> live_at_pc' p fname bid ((length b.(BlockD.instructions)) - i) s.
+Proof.
+  induction i as [|i' IHi'].
+  - intros p fname bid b s H_b_exists H_lt_0 H_live_at_pc.
+    rewrite Nat.sub_0_r.
+    rewrite Nat.sub_0_r in H_live_at_pc.
+    
+    remember (length (BlockD.instructions b)) as pc eqn:E_pc.
+    destruct H_live_at_pc as [fname bid b0 pc s sout H_b0_exists H_live_out H_lr_pc H_sout].
+    
+    rewrite H_b_exists in H_b0_exists.
+    injection H_b0_exists as H_b0_exists.
+    subst b0.
+    
+    rewrite E_pc in H_sout.
+    rewrite Nat.sub_diag in H_sout.
+    simpl in H_sout. 
+    apply (live_at_pc'_eob p fname bid b pc s sout H_b_exists H_live_out E_pc H_sout).
+      
+  - intros p fname bid b s H_b_exists H_lt_0 H_live_at_pc.
+    remember (length (BlockD.instructions b) - S i') as pc eqn:E_pc.
+
+    assert ((length (BlockD.instructions b) - i') = S pc). lia.
+
+    destruct H_live_at_pc as [fname bid b0 pc s sout H_b0_exists H_live_out H_lr_pc H_sout].
+
+    rewrite H_b_exists in H_b0_exists.
+    injection H_b0_exists as H_b0_exists.
+    subst b0.
+
+    assert(Nat.le (S pc) (length (BlockD.instructions b))). lia.
+
+    assert((length (BlockD.instructions b) - pc) = S i'). lia.
+    rewrite H1 in H_sout.
+
+    assert((length (BlockD.instructions b) - S i') < length (BlockD.instructions b) ). lia.
+
+    apply some_neq_none_ in H2 as [i H_nth].
+
+    pose proof (prop_live_set_bkw_aux_i (BlockD.instructions b) i' (add_jump_var_if_applicable b s) i H_lt_0 H_nth).
+    rewrite H2 in H_sout.
+
+    remember (prop_live_set_bkw_aux i' (rev (BlockD.instructions b)) (add_jump_var_if_applicable b s)) as s' eqn:E_s'.
+
+    assert(Nat.le (S pc) (length (BlockD.instructions b))). lia.
+
+    assert ((length (BlockD.instructions b) - S pc) = i'). lia.
+
+    rewrite <- H4 in E_s'.
+
+    assert (VarSet.Equal s' (prop_live_set_bkw_aux (length (BlockD.instructions b) - S pc) (rev (BlockD.instructions b)) (add_jump_var_if_applicable b s))). rewrite E_s'. apply varset_equal_refl.
+    
+    pose proof (live_at_pc_1 p fname bid b (S pc) s s' H_b_exists H_live_out H3 H5).
+
+    rewrite <- H in H6.
+    
+    assert (Nat.le i' (length (BlockD.instructions b))). lia.
+    pose proof (IHi' p fname bid b s' H_b_exists H7 H6).
+    rewrite H in H8.
+
+    assert(Nat.lt pc (length (BlockD.instructions b))). lia.
+    rewrite <- E_pc in H_nth.
+    apply (live_at_pc'_inb p fname bid b pc s' sout i H_b_exists H8 H9 H_nth H_sout).
+Qed.
+    
+
 
   Lemma live_at_pc'_0_equiv_live_at_pc_0:
     forall p fname bid b s,
       SmartContractD.get_block p fname bid = Some b -> (* the block exists *)
-      live_at_pc p fname bid 0%nat s <-> live_at_pc' p fname bid 0%nat s.
-    Admitted.
+      live_at_pc p fname bid 0%nat s -> live_at_pc' p fname bid 0%nat s.
+  Proof.
+    intros p fname bid b s H_b_exists H_live_at.
+
+    assert ( (length (BlockD.instructions b) - length (BlockD.instructions b)) = 0). lia.
+
+    rewrite <- H in H_live_at.
+    pose proof (live_at_pc'_equiv_live_at_pc (length (BlockD.instructions b)) p fname bid b s H_b_exists (Nat.le_refl (length (BlockD.instructions b)) ) H_live_at).
+    rewrite H in H0.
+    apply H0.
+  Qed.
   
   Lemma live_at_pc_zero_eq_live_in:
     forall p fname bid s,
@@ -3616,248 +3720,6 @@ Lemma check_live_out_complete:
                repeat split; try reflexivity.
   Qed.
 
-  Fixpoint search_renamings_split (l: YULVariableMapD.t) (v: YULVariable.t) 
-    : (YULVariableMapD.t * option YULVariableMapD.SimpleExprD.t * YULVariableMapD.t) :=
-    match l with
-    | [] => (l, None, l) (* No dummy value needed! *)
-    | (v',sexpr)::l' =>
-        if (YULVariable.eqb v' v)
-        then ([], Some sexpr, l')
-        else match search_renamings_split l' v with
-             | (hl, res, tl) => ((v',sexpr)::hl, res, tl)
-             end
-    end.
-
-  
-  
-  Lemma renaming_split_true:
-    forall (l hl tl: YULVariableMapD.t) (v: YULVariable.t) (sexpr: SimpleExprD.t),
-      search_renamings_split l v = (hl, Some sexpr, tl) ->
-      l = hl++(v, sexpr)::tl.
-  Proof.
-    induction l as [|e l' IHl'].
-    - intros hl tl v sexpr H_search.
-      simpl in H_search.
-      discriminate H_search.
-    - intros hl tl v sexpr H_search.
-      simpl in H_search.
-      destruct e as [v' sexpr'] eqn:E_e.
-      destruct (YULVariable.eqb v' v) eqn:E_eqb_v'_v.
-      + injection H_search as H_hl H_sexpr H_tl.
-        rewrite <- H_hl.
-        rewrite <- H_sexpr.
-        rewrite <- H_tl.
-        simpl.
-        unfold YULVariable.eqb in E_eqb_v'_v.
-        rewrite Nat.eqb_eq in E_eqb_v'_v.
-        rewrite E_eqb_v'_v.
-        reflexivity.
-      + destruct (search_renamings_split l' v) as [[hl' [sexpr''|]] tl'] eqn:E_search_rec; try discriminate.
-        pose proof (IHl' hl' tl' v sexpr'' E_search_rec) as IHl'_0.
-        injection H_search as H_hl H_sexpr H_tl.
-        subst tl'.
-        subst l'.
-        subst sexpr''.
-        subst hl.
-        simpl.
-        reflexivity.
-  Qed.
-
-  Lemma renaming_split_true_not_In:
-    forall (l hl tl: YULVariableMapD.t) (v: YULVariable.t) (sexpr: SimpleExprD.t),
-      search_renamings_split l v = (hl, Some sexpr, tl) ->
-      forall sexpr, ~ List.In (v,sexpr) hl.
-  Proof.
-      induction l as [|e l' IHl'].
-    - intros hl tl v sexpr H_search.
-      simpl in H_search.
-      discriminate H_search.
-    - intros hl tl v sexpr H_search.
-      simpl in H_search.
-      destruct e as [v' sexpr'] eqn:E_e.
-      destruct (YULVariable.eqb v' v) eqn:E_eqb_v'_v.
-      + injection H_search as H_hl H_sexpr H_tl.
-        rewrite <- H_hl.
-        intro sexpr0.
-        intro H_contra.
-        destruct H_contra.
-      + destruct (search_renamings_split l' v) as [[hl' [sexpr''|]] tl'] eqn:E_search_rec; try discriminate.        
-        injection H_search as H_hl H_sexpr H_tl.
-        rewrite <- H_hl.
-        subst sexpr''.
-        intros sexpr0.
-        intro H_contra.
-        simpl in  H_contra.
-        destruct H_contra as [H_contra | H_contra].
-        * injection H_contra as H_v'_v _.
-          rewrite Nat.eqb_neq in E_eqb_v'_v.
-          contradiction.
-        * contradiction (IHl' hl' tl' v sexpr E_search_rec sexpr0).
-  Qed.
-    
-    
-  Lemma renaming_split_false:
-    forall (l hl tl: YULVariableMapD.t) (v: YULVariable.t),
-      search_renamings_split l v = (hl, None, tl) ->
-      forall (hl tl: YULVariableMapD.t) (sexpr: SimpleExprD.t),
-        l <> hl++(v, sexpr)::tl.
-  Proof.
-    induction l as [|e l' IHl'].
-    - intros hl tl v H_search.
-      intros hl' tl' sexpr H_contra.
-      apply len_eq in H_contra.
-      rewrite length_app in H_contra.
-      simpl in H_contra.
-      rewrite <- plus_n_Sm in H_contra.
-      discriminate H_contra.
-    - intros hl tl v H_search.
-      intros hl' tl' sexpr H_contra.      
-      simpl in H_search.
-      destruct e as [v' sexpr'].
-      destruct (YULVariable.eqb v' v) eqn:E_eqb_v'_v'; try discriminate.      
-      destruct (search_renamings_split l' v) as [[hl'' [sexpr''|]] tl''] eqn:E_search_rec; try discriminate.
-      injection H_search as H_hl H_tl. 
-      subst hl.
-      subst tl.
-      destruct hl' as [| e' hl'''].
-      + simpl in H_contra.
-        injection H_contra as H_v H_sexpr H_l'.
-        unfold YULVariable.eqb in E_eqb_v'_v'.
-        rewrite Nat.eqb_neq in E_eqb_v'_v'.
-        contradiction.
-      + simpl in H_contra.
-        injection H_contra as H_e' H_l'.
-        contradiction (IHl' hl'' tl'' v E_search_rec hl''' tl' sexpr).
-  Qed.
-
-  Lemma renaming_split_false_not_In:
-    forall (l hl tl: YULVariableMapD.t) (v: YULVariable.t),
-      search_renamings_split l v = (hl, None, tl) ->
-      forall sexpr, ~ List.In (v,sexpr) l.
-  Proof.
-    induction l as [|e l' IHl'].
-    - intros hl tl v H_search.
-      intros sexpr H_contra.
-      destruct H_contra.
-    - intros hl tl v H_search.
-      intros sexpr H_contra.
-      simpl in H_search.
-      destruct e as [v' sexpr'].
-      destruct (YULVariable.eqb v' v) eqn:E_eqb_v'_v; try discriminate.
-      destruct (search_renamings_split l' v) as [[hl'' [sexpr''|]] tl''] eqn:E_search_rec; try discriminate.
-      injection H_search as H_hl H_tl.
-      simpl in  H_contra.
-      destruct H_contra as [H_contra | H_contra].
-      * injection H_contra as H_v'_v _.
-        unfold YULVariable.eqb in E_eqb_v'_v.
-        rewrite Nat.eqb_neq in E_eqb_v'_v.
-        contradiction.
-      * contradiction (IHl' hl'' tl'' v E_search_rec sexpr).
-  Qed.
-
-  Lemma renaming_split:
-    forall l v,
-      (exists hl tl sexpr, (l = hl++(v, sexpr)::tl)/\ forall sexpr, ~ List.In (v,sexpr) hl)
-      \/
-      ( (forall (hl tl: YULVariableMapD.t) (sexpr: SimpleExprD.t), l <> hl++(v, sexpr)::tl) /\ forall sexpr, ~ List.In (v,sexpr) l).
-  Proof.
-    intros l v.
-    destruct (search_renamings_split l v) as [[hl [sexpr|]] tl] eqn:E_search.
-    - pose proof (renaming_split_true l hl tl v sexpr E_search) as H1.
-      pose proof (renaming_split_true_not_In l hl tl v sexpr E_search) as H2.
-      left.
-      exists hl.
-      exists tl.
-      exists sexpr.
-      split.
-      + apply H1.
-      + apply H2.
-    - pose proof (renaming_split_false l hl tl v E_search) as H1.
-      pose proof (renaming_split_false_not_In l hl tl v E_search) as H2.
-      right.
-      split.
-      + apply H1.
-      + apply H2.
-  Qed.      
-
-
-  Lemma apply_renamings_app:
-    forall l l1 l2 a,
-      l1++l2 = l ->
-      (forall v,
-          VariableAssignmentD.apply_renamings a l v =
-            VariableAssignmentD.apply_renamings (VariableAssignmentD.apply_renamings a l1) l2 v).
-  Proof.
-    induction l as [|e l' IHl'].
-    - simpl.
-      intros l1 l2 a H_app v.
-      apply app_eq_nil in H_app.
-      destruct H_app as [H_l1 H_l2].
-      rewrite H_l1.
-      rewrite H_l2.
-      simpl.
-      reflexivity.
-    - intros l1 l2 a H_app v.
-      destruct l1 as [|e' l1'] eqn:E_l1.
-      + simpl in H_app.
-        rewrite H_app.
-        simpl.
-        reflexivity.
-      + simpl in H_app.
-        injection H_app as H_e' H_l'.
-        rewrite H_e'.
-        simpl.
-        destruct e as [dest origin].
-        remember (VariableAssignmentD.assign a dest (VariableAssignmentD.get_se a origin)) as a' eqn:E_a'.
-        apply (IHl' l1' l2 a' H_l' ).
-  Qed.
-
-        
-  Lemma apply_renamings_snd:
-    forall l v assign1 assign2,
-      (forall v', v'<>v -> assign1 v' = assign2 v') ->
-      (forall v', ~List.In (v',(inl v)) l) ->
-      (forall v',
-          v'<>v ->
-          VariableAssignmentD.apply_renamings assign1 l v'=
-            VariableAssignmentD.apply_renamings assign2 l v').
-  Proof.
-    induction l as [ | e l'].
-    - intros v assign1 assign2 H_equiv_up_to_v H_not_in.
-      intros v' H_neq_v'_v.
-      simpl.
-      apply H_equiv_up_to_v.
-      apply H_neq_v'_v.
-    - intros v assign1 assign2 H_equiv_up_to_v H_not_in.
-      intros v' H_neq_v'_v.
-      simpl.
-      destruct e as [dest origin] eqn:E_e.
-      
-      destruct origin as [origin_var | origin_val] eqn:E_origin.
-      + pose proof (H_not_in dest) as H_not_in_dest.
-        simpl in H_not_in_dest.
-        apply Decidable.not_or in H_not_in_dest.
-        destruct H_not_in_dest as [H_not_in_dest_1 H_not_in_dest_2].
-        assert(H_origin_var_neq_v: origin_var <> v). congruence.
-        simpl.
-        rewrite (H_equiv_up_to_v origin_var H_origin_var_neq_v).
-        
-        pose proof (assign_preserves_equiv_up_to_v assign1 assign2 v dest (assign2 origin_var) H_equiv_up_to_v) as H_equiv_new_assign.
-        unfold VariableAssignmentD.get in H_equiv_new_assign.
-
-        simpl in H_not_in.
-        rewrite forall_not_or_dist in H_not_in.
-        destruct H_not_in as [H_not_in_1 H_not_in_2].
-        
-        apply (IHl' v (SmallStepD.VariableAssignmentD.assign assign1 dest (assign2 origin_var)) (SmallStepD.VariableAssignmentD.assign assign2 dest (assign2 origin_var)) H_equiv_new_assign H_not_in_2 v' H_neq_v'_v).
-      + simpl.
-        pose proof (assign_preserves_equiv_up_to_v assign1 assign2 v dest origin_val H_equiv_up_to_v) as H_equiv_new_assign.
-        simpl in H_not_in.
-        rewrite forall_not_or_dist in H_not_in.
-        destruct H_not_in as [H_not_in_1 H_not_in_2].
-        
-        apply (IHl' v (SmallStepD.VariableAssignmentD.assign assign1 dest origin_val) (SmallStepD.VariableAssignmentD.assign assign2 dest origin_val) H_equiv_new_assign H_not_in_2 v' H_neq_v'_v).
-  Qed.
 
   
    
@@ -4024,7 +3886,7 @@ Lemma check_live_out_complete:
                        rewrite E_assign_all_2.
                        
                        rewrite <- live_at_pc_zero_eq_live_in in H_live_at_pc_if_true.
-                       rewrite (live_at_pc'_0_equiv_live_at_pc_0 p fname next_bid next_b s1' E_next_b) in H_live_at_pc_if_true.
+                       apply (live_at_pc'_0_equiv_live_at_pc_0 p fname next_bid next_b s1' E_next_b) in H_live_at_pc_if_true.
 
                        remember {|
                                   Liveness_snd.StateD.call_stack :=
@@ -4410,7 +4272,7 @@ Lemma check_live_out_complete:
                               rewrite E_assign_all_2.
                        
                               rewrite <- live_at_pc_zero_eq_live_in in H_live_at_pc_if_false.
-                              rewrite (live_at_pc'_0_equiv_live_at_pc_0 p fname next_bid next_b s2' E_next_b) in H_live_at_pc_if_false.
+                              apply (live_at_pc'_0_equiv_live_at_pc_0 p fname next_bid next_b s2' E_next_b) in H_live_at_pc_if_false.
 
                               remember {|
                                   Liveness_snd.StateD.call_stack :=
@@ -4813,7 +4675,7 @@ Lemma check_live_out_complete:
                       rewrite E_assign_all_2.
 
                       rewrite <- live_at_pc_zero_eq_live_in in H_live_in_next_pc.
-                      rewrite (live_at_pc'_0_equiv_live_at_pc_0 p fname next_bid next_b s' E_next_b) in H_live_in_next_pc.
+                      apply (live_at_pc'_0_equiv_live_at_pc_0 p fname next_bid next_b s' E_next_b) in H_live_in_next_pc.
                       
                       remember {|
                                   Liveness_snd.StateD.call_stack :=
@@ -7083,97 +6945,3 @@ Qed.
   Qed.
 
 End Liveness_snd.
-
-(*  
-Definition dead_variable  (p: SmartContractD.t) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (v: YULVariable.t) :=
-  forall (st1 st1': StateD.t) (n i: nat),
-     stack_frame_i_at_pp i fname bid pc st1 ->
-     SmallStepD.eval n st1 p = st1' ->
-     forall st2,
-        equiv_states_up_to_i_v p i v st1 st2->
-        exists st2',
-           SmallStepD.eval n st2 p = st2' /\
-           (equiv_states_up_to_i_v p i v st1' st2' \/ st2' = st1') /\
-           equiv_vars_in_top_frame b pc st1' st2'.
-
- 
-  Theorem live_at_snd_2:   
-    forall (p: SmartContractD.t) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t),
-      SmartContractD.get_block p fname bid = Some b ->
-      live_at_pc' p fname bid pc s ->
-      forall v,
-        ~ VarSet.In v s ->
-        dead_variable p fname bid b pc v.
-  Proof.
-    unfold dead_variable.
-    intros.    
-    apply (live_at_snd p n i fname bid b pc s H H0 st1 st1' H2 H3 st2 v H4 H1).
-  Qed.
-
-  Theorem live_at_snd_3:   
-    forall (p: SmartContractD.t) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (s: VarSet.t),
-      SmartContractD.get_block p fname bid = Some b ->
-      live_in p fname bid s ->
-      forall v,
-        ~ VarSet.In v s ->
-        dead_variable p fname bid b 0 v.
-  Proof.
-    unfold dead_variable.    
-    intros.
-    rewrite <- live_at_pc_zero_eq_live_in in H0.
-    pose proof (live_at_pc'_equiv_live_at_pc (length (BlockD.instructions b)) p fname bid b s  H (Nat.le_refl (length (BlockD.instructions b)))).
-    rewrite Nat.sub_diag in H5.
-    rewrite H5 in H0.
-    apply (live_at_snd p n i fname bid b 0 s H H0 st1 st1' H2 H3 st2 v H4 H1).
-  Qed.
-      
-
-  Theorem live_at_snd_4:   
-    forall (p: SmartContractD.t) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (live_info: sc_live_info_t) (f_live_info: fun_live_info_t) (in_set out_set: VarSet.t),
-    SmartContractD.valid_smart_contract p ->
-    check_smart_contract p live_info = true ->
-    SmartContractD.get_block p fname bid = Some b ->
-    live_info fname = Some f_live_info ->
-    f_live_info bid = Some (in_set, out_set) ->
-    forall v,
-      ~ VarSet.In v in_set ->
-      dead_variable p fname bid b 0 v.
-  Proof.
-    intros.
-    rewrite <- (check_valid_smart_contract_correct p live_info H) in H0.
-    pose proof (snd_info p live_info H0 fname bid b H1).
-    destruct H5 as [f_info [b_in_info [b_out_info [H_live_info [H_f_info [H_live_in H_live_out]]]]]].
-
-    rewrite H2 in H_live_info.
-    injection H_live_info as H_live_info.
-    subst f_info.
-    rewrite H3 in H_f_info.
-    injection H_f_info as H_in_set _.
-    subst in_set.
-    
-    apply (live_at_snd_3 p fname bid b b_in_info H1 H_live_in v H4).
-  Qed.
-*)
-
-
-
-
-
-(*
-
-  (* State rechability in n steps: 'reach_rel_n p n s1 s2' means that from s1 we reach s2 in n execution steps, within the program p *) 
-  Inductive reach_rel_n (p : SmartContractD.t) : nat -> StateD.t -> StateD.t -> Prop :=
-  | t_step (s1 s2 : StateD.t) :
-    SmallStepD.step s1 p = s2 ->  reach_rel_n p 1 s1 s2
-  | t_trans (n1 n2: nat) (s1 s2 s3: StateD.t) :
-    reach_rel_n p n1 s1 s2 ->
-    reach_rel_n p n2 s2 s3 ->
-    reach_rel_n p (plus n1 n2) s1 s3.
-
-  (* State rechability: 'reach_rel_n p n s1 s2' means that from s1 we reach s2 in n execution steps, within the program p *) 
-  Inductive reach_rel (p : SmartContractD.t) : StateD.t -> StateD.t -> Prop :=
-  | reach_n (n : nat) (s1 s2 : StateD.t):
-    reach_rel_n p n s1 s2 ->  reach_rel p s1 s2.
-
-
- *)
