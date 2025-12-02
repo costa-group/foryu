@@ -1460,15 +1460,16 @@ Lemma check_live_out_complete:
              (VarSet.Equal s (list_to_set (extract_yul_vars i.(InstructionD.input)))) 
     ).
       
-  Definition equiv_vars_in_top_frame (b: BlockD.t) (pc: nat) (st1 st2: StateD.t) :=
+  Definition equiv_vars_in_top_frame (p: SmartContractD.t) (st1 st2: StateD.t) :=
     match st1.(StateD.call_stack), st2.(StateD.call_stack) with
     | nil,nil => True
     | sf1::_,sf2::_ =>
         sf1.(StackFrameD.function_name) = sf2.(StackFrameD.function_name) /\
         sf1.(StackFrameD.curr_block_id) = sf2.(StackFrameD.curr_block_id) /\
         sf1.(StackFrameD.pc) = sf2.(StackFrameD.pc) /\
-        forall v s,
-          accessed_vars b pc s ->
+        forall v s b,
+          SmartContractD.get_block p sf1.(StackFrameD.function_name) sf1.(StackFrameD.curr_block_id) = Some b ->
+          accessed_vars b sf1.(StackFrameD.pc) s ->
           VarSet.In v s ->
           VariableAssignmentD.get sf1.(StackFrameD.variable_assignments) v =
             VariableAssignmentD.get sf2.(StackFrameD.variable_assignments) v
@@ -1476,10 +1477,10 @@ Lemma check_live_out_complete:
     end.
 
   Lemma equiv_vars_in_top_frame_refl:
-    forall b pc st,
-      equiv_vars_in_top_frame b pc st st.
+    forall b st,
+      equiv_vars_in_top_frame b st st.
   Proof.
-    intros b pc st.
+    intros b st.
     unfold equiv_vars_in_top_frame.
     destruct (StateD.call_stack st) as [|sf rsf].
     - apply I.
@@ -1772,7 +1773,7 @@ Lemma check_live_out_complete:
       live_at_pc' p fname bid pc s ->
       ~ VarSet.In v s ->
       equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
-      equiv_vars_in_top_frame b pc st1 st2.
+      equiv_vars_in_top_frame p st1 st2.
   Proof.
     intros p fname bid b pc i v s st1 st2 H_exists_b H_live_at_pc H_not_In_v_s H_eq_st1_st2.
 
@@ -1792,6 +1793,7 @@ Lemma check_live_out_complete:
       rewrite H_call_stack_st1.
       rewrite H_call_stack_st2.      
       unfold equiv_stack_frames_up_to_v in H_equiv_frame_up_to_v_sf1_sf2.
+      
       destruct H_equiv_frame_up_to_v_sf1_sf2 as [H_fname_sf1 [H_bid_sf1 [H_sf1_pc [H_fname_sf2 [H_bid_sf2 [H_pc_sf2 H_eq_assgin_up_to_v]]]]]].
       subst fname.
       subst bid.
@@ -1801,7 +1803,8 @@ Lemma check_live_out_complete:
       + apply (symmetry H_fname_sf2).
       + apply (symmetry H_bid_sf2).
       + apply (symmetry H_pc_sf2).
-      + intros v0 s0 H_acc H_v0_not_In_s0.
+      + intros v0 s0 b_top H_b_top_exists H_acc H_v0_not_In_s0.
+        rewrite H_exists_b in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
         unfold accessed_vars in H_acc.
         destruct H_acc as [ [H_pc_sf1_eq_len H_match]| [H_pc_sf1 H_args]].
         
@@ -2356,7 +2359,7 @@ Lemma check_live_out_complete:
            st2' = st1'
           )
           /\
-          equiv_vars_in_top_frame b' pc' st1' st2'.
+          equiv_vars_in_top_frame p st1' st2'.
   Proof.
     intros p i fname bid b pc s instr H_b_exists H_live_at_pc st1 st2 st1' v H_equiv_st1_st2 H_get_instr H_exec_inst_st1 H_not_In_v_s.
 
@@ -2416,7 +2419,7 @@ Lemma check_live_out_complete:
         destruct instr as  [input output op] eqn:E_instr.
 
         assert (H_not_In_v_input: ~ In (inl v) instr.(InstructionD.input)).
-        {
+        (*{*)
           unfold prop_live_set_bkw_instr in H_sout.
           pose proof (not_In_preserves_eq
                         sout
@@ -2445,7 +2448,7 @@ Lemma check_live_out_complete:
           rewrite <- extract_yul_vars_spec in H_not_In_v_union.
           rewrite E_instr.
           apply H_not_In_v_union.
-        }.
+        (*}.*)
         
         pose proof (eval_sexpr_snd (instr.(InstructionD.input)) fname bid pc v sf1 sf2 H_equiv_sf1_sf2 H_not_In_v_input) as H_eval_sf1_eq_eval_sf2.
 
@@ -2627,7 +2630,11 @@ Lemma check_live_out_complete:
                           ****** rewrite H_pc_sf1.
                                  rewrite H_pc_sf2.
                                  reflexivity.
-                          ****** intros v0 s0 H_accessed H_in_v0_s0.
+                                 ****** intros v0 s0 b_top H_b_top_exists H_accessed H_in_v0_s0.
+                                 rewrite H_fname_sf1 in  H_b_top_exists.
+                                 rewrite H_bid_sf1 in  H_b_top_exists.
+                                 rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+                                 rewrite H_sf1_pc in H_accessed.
                                  pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed H_in_v0_s0) as H_neq_v0_v.
                                  apply (H_equiv_assign_sf1_sf2 v0 H_neq_v0_v).
            *** remember (SmallStepD.StateD.set_status st2 (Status.Error "Function not found in call")) as st2' eqn:H_st2'.
@@ -2703,7 +2710,12 @@ Lemma check_live_out_complete:
                     ***** rewrite H_pc_sf1.
                           rewrite H_pc_sf2.
                           reflexivity.
-                    ***** intros v0 s0 H_accessed H_in_v0_s0.
+                          ***** intros v0 s0 b_top H_b_top_exists H_accessed H_in_v0_s0.
+                                 rewrite H_fname_sf1 in  H_b_top_exists.
+                                 rewrite H_bid_sf1 in  H_b_top_exists.
+                                 rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+
+                          rewrite H_sf1_pc in H_accessed.
                           pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed H_in_v0_s0) as H_neq_v0_v.
                           apply (H_equiv_assign_sf1_sf2 v0 H_neq_v0_v).
         ** rewrite <- H_dialect.
@@ -2842,7 +2854,11 @@ Lemma check_live_out_complete:
                 ***** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
                 ***** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
                 ***** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                ***** intros v0 s0 H_accessed_vars H_in_v0_s0.           
+                ***** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_in_v0_s0.
+                                
+                      rewrite H_fname_sf1 in  H_b_top_exists.
+                      rewrite H_bid_sf1 in  H_b_top_exists.
+                      rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
 
                     (* wether v in output or not *)
                     pose proof (varlist_in_dec (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) v) as H_v_output.
@@ -2852,6 +2868,8 @@ Lemma check_live_out_complete:
                            reflexivity.
                     ****** rewrite <- E_instr in H_sout.
                            pose proof (not_In_v_fwd v s sout instr H_sout H_not_In_v_s H_v_not_in_output) as H_not_In_v_s'.
+                           rewrite H_sf1_pc in H_accessed_vars.
+                           rewrite Nat.add_comm in H_accessed_vars. simpl in H_accessed_vars.
                            pose proof (accessed_var_instr_neq_v p fname bid b (S pc) s0 v0 s v H_b_exists H_live_at_S_pc H_not_In_v_s' H_accessed_vars H_in_v0_s0) as H_v0_neq_v.
                                
                            apply (assign_all_preserves_eq_up_to (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v output_values var_assignments'_sf1 var_assignments'_sf2 H_v_not_in_output H_equiv_assign_sf1_sf2 H_var_assignments'_sf1 H_var_assignments'_sf2 v0  H_v0_neq_v).
@@ -2931,7 +2949,11 @@ Lemma check_live_out_complete:
                     ***** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
                     ***** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
                     ***** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                    ***** intros v0 s0 H_accessed_var H_In_v0_s0.
+                    ***** intros v0 s0 b_top H_b_top_exists H_accessed_var H_In_v0_s0.
+                          rewrite H_fname_sf1 in  H_b_top_exists.
+                          rewrite H_bid_sf1 in  H_b_top_exists.
+                          rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+                          rewrite H_sf1_pc in H_accessed_var.
                           pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_var H_In_v0_s0) as H_v0_neq_v.
                           apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
         ** rewrite <- H_dialect.
@@ -3068,7 +3090,10 @@ Lemma check_live_out_complete:
                 ***** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
                 ***** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
                 ***** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                ***** intros v0 s0 H_accessed_vars H_in_v0_s0.           
+                ***** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_in_v0_s0.           
+                      rewrite H_fname_sf1 in  H_b_top_exists.
+                      rewrite H_bid_sf1 in  H_b_top_exists.
+                      rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
 
                     (* wether v in output or not *)
                     pose proof (varlist_in_dec (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) v) as H_v_output.
@@ -3078,6 +3103,8 @@ Lemma check_live_out_complete:
                            reflexivity.
                     ****** rewrite <- E_instr in H_sout.
                            pose proof (not_In_v_fwd v s sout instr H_sout H_not_In_v_s H_v_not_in_output) as H_not_In_v_s'.
+                           rewrite H_sf1_pc in H_accessed_vars.
+                           rewrite Nat.add_comm in H_accessed_vars.
                            pose proof (accessed_var_instr_neq_v p fname bid b (S pc) s0 v0 s v H_b_exists H_live_at_S_pc H_not_In_v_s' H_accessed_vars H_in_v0_s0) as H_v0_neq_v.
                                
                            apply (assign_all_preserves_eq_up_to (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v output_values var_assignments'_sf1 var_assignments'_sf2 H_v_not_in_output H_equiv_assign_sf1_sf2 H_var_assignments'_sf1 H_var_assignments'_sf2 v0  H_v0_neq_v).
@@ -3157,7 +3184,12 @@ Lemma check_live_out_complete:
                     ***** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
                     ***** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
                     ***** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                    ***** intros v0 s0 H_accessed_var H_In_v0_s0.
+                    ***** intros v0 s0 b_top H_b_top_exists H_accessed_var H_In_v0_s0.
+                          rewrite H_fname_sf1 in  H_b_top_exists.
+                          rewrite H_bid_sf1 in  H_b_top_exists.
+                          rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+
+                          rewrite H_pc_sf1 in H_accessed_var.
                           pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_var H_In_v0_s0) as H_v0_neq_v.
                           apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
 
@@ -3742,7 +3774,7 @@ Lemma check_live_out_complete:
            st2' = st1'
           )
           /\
-          equiv_vars_in_top_frame b' pc' st1' st2'.
+          equiv_vars_in_top_frame p st1' st2'.
   Proof.
     intros p i fname bid b pc s H_b_exists H_live_at_pc st1 st2 st1' v H_equiv_st1_st2 H_get_instr H_handle_block_finish H_not_In_v_s.
     assert (H_equiv_st1_st2' := H_equiv_st1_st2).
@@ -3790,14 +3822,14 @@ Lemma check_live_out_complete:
            subst b0.
 
            assert(H_cv_neq_v: cond_var <> v).
-           {
+           (*{*)
              unfold add_jump_var_if_applicable in H_sout.
              rewrite E_b_exit_info in H_sout.
              pose proof (not_In_preserves_eq  sout (VarSet.add cond_var s) v H_sout H_not_In_v_s) as H_not_In_v_add_cvar.
              rewrite VarSet.add_spec in H_not_In_v_add_cvar.
              apply Decidable.not_or in H_not_In_v_add_cvar as [H_v_neq_cvar _].
              congruence.
-           }.
+           (*}.*)
            
            rewrite <- (H_equiv_assign_sf1_sf2 cond_var H_cv_neq_v).
 
@@ -3859,7 +3891,7 @@ Lemma check_live_out_complete:
                        remember (SmallStepD.get_renaming_var (SmallStepD.SmartContractD.BlockD.phi_function next_b bid)) as phi_outvars eqn:E_phi_outvars.
 
                        assert (H_not_In_v_input: ~ In (inl v) phi_invars).
-                       {
+                       (*{*)
                          pose proof (not_In_preserves_eq sout (VarSet.add cond_var (VarSet.union (apply_inv_phi (BlockD.phi_function next_b bid) s1') (apply_inv_phi (BlockD.phi_function next_b0_if_false bid) s2'))) v H_sout H_not_In_v_s) as H_v_not_in_inv.
                          unfold apply_inv_phi in H_v_not_in_inv.
                          rewrite <- E_phi_invars in H_v_not_in_inv.
@@ -3876,7 +3908,7 @@ Lemma check_live_out_complete:
                          rewrite <- list_to_set_spec in  H_v_not_in_inv.
                          rewrite <- extract_yul_vars_spec in H_v_not_in_inv.
                          apply H_v_not_in_inv.
-                       }.
+                       (*}.*)
 
                        rewrite <- (eval_sexpr_snd phi_invars fname bid pc v sf1 sf2 H_equiv_sf1_sf2 H_not_In_v_input).
 
@@ -4013,11 +4045,12 @@ Lemma check_live_out_complete:
                                      unfold equiv_vars_in_top_frame.
                                      simpl.
                                      repeat split; try reflexivity.
-                                     intros v0 s0 H_accessed_vars H_In_v0_s0.
+                                     intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
+                                     rewrite E_next_b in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
 
 
                                    assert(H_not_v_In_s'': ~ VarSet.In v s1').
-                                   {
+                                   (*{*)
                                      pose proof (not_In_preserves_eq sout (VarSet.add cond_var (VarSet.union (apply_inv_phi (BlockD.phi_function next_b bid) s1') (apply_inv_phi (BlockD.phi_function next_b0_if_false bid) s2'))) v H_sout H_not_In_v_s) as H_not_In_v_s'.
                                      unfold apply_inv_phi in H_not_In_v_s'.
                                      rewrite <- E_phi_invars in H_not_In_v_s'.
@@ -4036,10 +4069,10 @@ Lemma check_live_out_complete:
                                      contradiction H_not_In_v_s'.
                                      apply varset_in_dec.
                                      ******** apply varset_in_dec.
-                                   }.
+                                   (*}.*)
 
 
-                                   apply (assign_all_preserves_eq_up_to phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_not_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2).
+                                   ******** apply (assign_all_preserves_eq_up_to phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_not_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2).
 
                                    apply (accessed_var_instr_neq_v p fname next_bid next_b 0%nat s0 v0 s1' v E_next_b H_live_at_pc_if_true H_not_v_In_s'' H_accessed_vars H_In_v0_s0).
 
@@ -4113,7 +4146,11 @@ Lemma check_live_out_complete:
                                     ******* rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
                                     ******* rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
                                     ******* rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                                    ******* intros v0 s0 H_accessed_vars H_In_v0_s0.
+                                    ******* intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
+                                            rewrite H_fname_sf1 in H_b_top_exists.
+                                            rewrite H_bid_sf1 in H_b_top_exists.
+                                            rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+                                            rewrite H_pc_sf1 in H_accessed_vars.
                                             pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
                                             apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
 
@@ -4185,7 +4222,11 @@ Lemma check_live_out_complete:
                        ***** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
                        ***** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
                        ***** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                       ***** intros v0 s0 H_accessed_vars H_In_v0_s0.
+                       ***** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
+                             rewrite H_fname_sf1 in H_b_top_exists.
+                             rewrite H_bid_sf1 in H_b_top_exists.
+                             rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+                             rewrite H_pc_sf1 in H_accessed_vars.
                              pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
                              apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
 
@@ -4245,7 +4286,7 @@ Lemma check_live_out_complete:
                        remember (SmallStepD.get_renaming_var (SmallStepD.SmartContractD.BlockD.phi_function next_b bid)) as phi_outvars eqn:E_phi_outvars.
 
                        assert (H_not_In_v_input: ~ In (inl v) phi_invars).
-                       {
+                       (*{*)
                          pose proof (not_In_preserves_eq sout (VarSet.add cond_var (VarSet.union (apply_inv_phi (BlockD.phi_function next_b0_if_true bid) s1') (apply_inv_phi (BlockD.phi_function next_b bid) s2'))) v H_sout H_not_In_v_s) as H_v_not_in_inv.
                          unfold apply_inv_phi in H_v_not_in_inv.
                          rewrite <- E_phi_invars in H_v_not_in_inv.
@@ -4262,7 +4303,7 @@ Lemma check_live_out_complete:
                          rewrite <- list_to_set_spec in  H_v_not_in_inv.
                          rewrite <- extract_yul_vars_spec in H_v_not_in_inv.
                          apply H_v_not_in_inv.
-                       }.
+                       (*}.*)
 
                        rewrite <- (eval_sexpr_snd phi_invars fname bid pc v sf1 sf2 H_equiv_sf1_sf2 H_not_In_v_input).
 
@@ -4399,11 +4440,13 @@ Lemma check_live_out_complete:
                                      unfold equiv_vars_in_top_frame.
                                      simpl.
                                      repeat split; try reflexivity.
-                                     intros v0 s0 H_accessed_vars H_In_v0_s0.
+                                     intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
+
+                                     rewrite E_next_b in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
 
 
                                    assert(H_not_v_In_s'': ~ VarSet.In v s2').
-                                   {
+                                   (*{*)
                                      pose proof (not_In_preserves_eq sout (VarSet.add cond_var (VarSet.union (apply_inv_phi (BlockD.phi_function next_b0_if_true bid) s1') (apply_inv_phi (BlockD.phi_function next_b bid) s2'))) v H_sout H_not_In_v_s) as H_not_In_v_s'.
                                      unfold apply_inv_phi in H_not_In_v_s'.
                                      rewrite <- E_phi_invars in H_not_In_v_s'.
@@ -4422,10 +4465,10 @@ Lemma check_live_out_complete:
                                      contradiction H_not_In_v_s'.
                                      apply varset_in_dec.
                                      ******** apply varset_in_dec.
-                                   }.
+                                   (*}.*)
 
 
-                                   apply (assign_all_preserves_eq_up_to phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_not_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2).
+                                   ******** apply (assign_all_preserves_eq_up_to phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_not_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2).
 
                                    apply (accessed_var_instr_neq_v p fname next_bid next_b 0%nat s0 v0 s2' v E_next_b H_live_at_pc_if_false H_not_v_In_s'' H_accessed_vars H_In_v0_s0).
 
@@ -4499,7 +4542,13 @@ Lemma check_live_out_complete:
                                     ******* rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
                                     ******* rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
                                     ******* rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                                    ******* intros v0 s0 H_accessed_vars H_In_v0_s0.
+                                    ******* intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
+
+                                            rewrite H_fname_sf1 in H_b_top_exists.
+                                            rewrite H_bid_sf1 in H_b_top_exists.
+                                            rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+                                    
+                                            rewrite H_pc_sf1 in H_accessed_vars.
                                             pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
                                             apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
 
@@ -4571,7 +4620,13 @@ Lemma check_live_out_complete:
                        ***** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
                        ***** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
                        ***** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                       ***** intros v0 s0 H_accessed_vars H_In_v0_s0.
+                       ***** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
+
+                             rewrite H_fname_sf1 in H_b_top_exists.
+                             rewrite H_bid_sf1 in H_b_top_exists.
+                             rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+
+                             rewrite H_pc_sf1 in H_accessed_vars.
                              pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
                              apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
 
@@ -4653,7 +4708,7 @@ Lemma check_live_out_complete:
                  remember (SmallStepD.get_renaming_var (SmallStepD.SmartContractD.BlockD.phi_function next_b bid)) as phi_outvars eqn:E_phi_outvars.
                  
                  assert (H_not_In_v_input: ~ In (inl v) phi_invars).
-                 {
+                 (*{*)
                    pose proof (not_In_preserves_eq sout (apply_inv_phi (BlockD.phi_function next_b bid) s') v H_sout H_not_In_v_s) as H_v_not_in_inv.
                    unfold apply_inv_phi in H_v_not_in_inv.
                    rewrite <- E_phi_invars in H_v_not_in_inv.
@@ -4665,7 +4720,7 @@ Lemma check_live_out_complete:
                    rewrite <- list_to_set_spec in  H_v_not_in_inv.
                    rewrite <- extract_yul_vars_spec in H_v_not_in_inv.
                    apply H_v_not_in_inv.
-                 }.
+                 (*}.*)
 
                  rewrite <- (eval_sexpr_snd phi_invars fname bid pc v sf1 sf2 H_equiv_sf1_sf2 H_not_In_v_input).
 
@@ -4795,7 +4850,9 @@ Lemma check_live_out_complete:
                                    unfold equiv_vars_in_top_frame.
                                    simpl.
                                    repeat split; try reflexivity.
-                                   intros v0 s0 H_accessed_vars H_In_v0_s0.
+                                   intros v0 s0 b_top H_b_top_exist H_accessed_vars H_In_v0_s0.
+
+                                   rewrite E_next_b in H_b_top_exist. injection H_b_top_exist as H_b_top_exist. subst b_top.
 
 
                                    assert(H_not_v_In_s'': ~ VarSet.In v s').
@@ -4894,7 +4951,11 @@ Lemma check_live_out_complete:
                             ****** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
                             ****** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
                             ****** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                            ****** intros v0 s0 H_accessed_vars H_In_v0_s0.
+                            ****** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
+                                   rewrite H_fname_sf1 in H_b_top_exists.
+                                   rewrite H_bid_sf1 in H_b_top_exists.
+                                   rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+                                   rewrite H_pc_sf1 in H_accessed_vars.
                                    pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
                                    apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
 
@@ -4988,7 +5049,12 @@ Lemma check_live_out_complete:
              *** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
              *** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
              *** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-             *** intros v0 s0 H_accessed_vars H_In_v0_s0.
+             *** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
+
+                 rewrite H_fname_sf1 in H_b_top_exists.
+                 rewrite H_bid_sf1 in H_b_top_exists.
+                 rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+                 rewrite H_pc_sf1 in H_accessed_vars.
                  pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 s v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
                  apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
 
@@ -5064,7 +5130,11 @@ Lemma check_live_out_complete:
              *** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
              *** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
              *** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-             *** intros v0 s0 H_accessed_vars H_In_v0_s0.
+             *** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
+                 rewrite H_fname_sf1 in H_b_top_exists.
+                 rewrite H_bid_sf1 in H_b_top_exists.
+                 rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+                 rewrite H_pc_sf1 in H_accessed_vars.
                  pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 s v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
                  apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
 
@@ -5200,7 +5270,12 @@ Lemma check_live_out_complete:
                                             ******** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
                                             ******** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
                                             ******** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                                            ******** intros v0 s0 H_accessed_vars H_In_v0_s0.
+                                            ******** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
+                                                     rewrite H_fname_sf1 in H_b_top_exists.
+                                                     rewrite H_bid_sf1 in H_b_top_exists.
+                                                     rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+                                                     rewrite H_pc_sf1 in H_accessed_vars.
+
                                                      pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
                                                      apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
 
@@ -5307,7 +5382,11 @@ Lemma check_live_out_complete:
                       ***** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
                       ***** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
                       ***** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                      ***** intros v0 s0 H_accessed_vars H_In_v0_s0.
+                      ***** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
+                            rewrite H_fname_sf1 in H_b_top_exists.
+                            rewrite H_bid_sf1 in H_b_top_exists.
+                            rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+                            rewrite H_pc_sf1 in H_accessed_vars.
                             pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 s v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
                             apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
 
@@ -5381,7 +5460,11 @@ Lemma check_live_out_complete:
                  **** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
                  **** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
                  **** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                 **** intros v0 s0 H_accessed_vars H_In_v0_s0.
+                 **** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
+                      rewrite H_fname_sf1 in H_b_top_exists.
+                      rewrite H_bid_sf1 in H_b_top_exists.
+                      rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+                      rewrite H_pc_sf1 in H_accessed_vars.
                       pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 s v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
                       apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
 
@@ -5455,7 +5538,11 @@ Lemma check_live_out_complete:
           ** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
           ** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
           ** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-          ** intros v0 s0 H_accessed_vars H_In_v0_s0.
+          ** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
+             rewrite H_fname_sf1 in H_b_top_exists.
+             rewrite H_bid_sf1 in H_b_top_exists.
+             rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
+             rewrite H_pc_sf1 in H_accessed_vars.
              pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 s v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
              apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
 
@@ -6149,7 +6236,9 @@ Lemma check_live_out_complete:
                        unfold equiv_vars_in_top_frame.
                        simpl.
                        repeat split.
-                       intros v0 s0 H_accessed_vars H_in_v0_s0.           
+                       intros v0 s0 b_top H_b_top_exists H_accessed_vars H_in_v0_s0.           
+
+                       rewrite E_next_b in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
 
                        (* wether v in output or not *)
                        pose proof (varlist_in_dec (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) v) as H_v_output.
@@ -6158,7 +6247,9 @@ Lemma check_live_out_complete:
                         ********* rewrite (assign_all_preserves_eq_up_to_eq (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) (StackFrameD.variable_assignments sf1) (StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr rs top_sf) prev_sf_var_assignment_1 prev_sf_var_assignment_2 H_v_in_output H_equiv_assign_sf1_sf2  E_prev_sf_var_assignment_1 E_prev_sf_var_assignment_2).
                                    reflexivity.
                         ********* pose proof (not_In_v_fwd v s sout instr H_sout H_not_In_v_s H_v_not_in_output) as H_not_In_v_s'.
-                                  pose proof (accessed_var_instr_neq_v p fname bid b (S pc) s0 v0 s v E_next_b H_live_at_S_pc H_not_In_v_s' H_accessed_vars H_in_v0_s0) as H_v0_neq_v.
+                                  rewrite Nat.add_comm in H_accessed_vars. simpl in H_accessed_vars.
+
+                        pose proof (accessed_var_instr_neq_v p fname bid b (S pc) s0 v0 s v E_next_b H_live_at_S_pc H_not_In_v_s' H_accessed_vars H_in_v0_s0) as H_v0_neq_v.
                                
                                   apply (assign_all_preserves_eq_up_to (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr rs top_sf) prev_sf_var_assignment_1 prev_sf_var_assignment_2 H_v_not_in_output H_equiv_assign_sf1_sf2  E_prev_sf_var_assignment_1 E_prev_sf_var_assignment_2 v0 H_v0_neq_v).
 
@@ -6794,7 +6885,7 @@ Qed.
                 st2' = st1'
             )
           /\
-            equiv_vars_in_top_frame b' pc' st1' st2'.
+            equiv_vars_in_top_frame p st1' st2'.
   Proof.
     intros p i fname bid b pc s H_exists_b H_live_at_pc st1 st2 st1' v H_equiv_up_to_i_v_st1_st2 H_step_st1 H_not_In_v_s.
     unfold SmallStepD.step in H_step_st1.
@@ -6888,8 +6979,9 @@ Qed.
         ~ VarSet.In v s ->
         exists st2' pc' b' bid',
           SmallStepD.eval n st2 p = st2' /\
+            SmartContractD.get_block p fname bid' = Some b'  /\ 
             (equiv_states_up_to_i_v p i fname bid' pc' v st1' st2' \/ st2' = st1') /\
-            equiv_vars_in_top_frame b' pc' st1' st2'.
+            equiv_vars_in_top_frame p st1' st2'.
   Proof.
     intros p.
     induction n as [|n' IHn'].
@@ -6901,9 +6993,10 @@ Qed.
       exists b.
       exists bid.
       repeat split.
-      +  left.
-         rewrite <- H_eval_st1.
-         apply H_equiv_st1_st2.
+      + apply H_b_exists.
+      + left.
+        rewrite <- H_eval_st1.
+        apply H_equiv_st1_st2.
       + rewrite <- H_eval_st1.
         apply (equiv_state_equiv_frames_at_top p fname bid b pc i v s st1 st2 H_b_exists H_live_at_pc H_not_In_v_s H_equiv_st1_st2).
 
@@ -6930,7 +7023,8 @@ Qed.
           apply H_eval_st2_1_step.
         * apply H_equiv_st1'_st2'.
         * apply H_equiv_vars_in_top_frame_st1'_st2'.
-
+        * apply H_equiv_vars_in_top_frame_st1'_st2'.
+         
       + subst st2_1_step.
         exists st1'.
         exists pc'.
@@ -6940,6 +7034,7 @@ Qed.
         
         * rewrite H_st2_1_step_eq_st1_1_step.
           apply H_eval_st1.
+        * apply H_exists_b'.
         * right. reflexivity.
         * apply equiv_vars_in_top_frame_refl.
   Qed.
