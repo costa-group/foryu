@@ -3,19 +3,16 @@ Require Import FORYU.program.
 Require Import FORYU.semantics.
 Require Import FORYU.liveness.
 Require Import FORYU.liveness_snd.
-Require Import Orders.
-Require Import OrdersEx.
-Require Import MSets.
-Require Import Arith.
-Require Import List.
-Import ListNotations.
-Require Import Coq.Relations.Relation_Operators.
 Require Import stdpp.prelude.
-Require Import stdpp.relations.
-Require Import Coq.Logic.FunctionalExtensionality.
-Require Import Coq.Logic.Classical_Pred_Type.
 Require Import Lia.
 
+(*
+
+  This module include a simplified version of the main statements that
+  appear in livenss.v and liveness_snd, which is used in Section 4 of
+  the FM26 submission.
+
+*)
 
 Module FM26 (D: DIALECT).
 
@@ -39,58 +36,77 @@ Module FM26 (D: DIALECT).
   Import Liveness_sndD.
 
 
+  (* converts a list of simple expressions to a set of variables *)
   Definition list_sexp_to_varset (l : list SimpleExprD.t) :=
     (list_to_set (extract_yul_vars l)).
-  
-  Definition same_pp (fname: FunctionName.t) (bid: BlockID.t) (pc: nat) (sf1 sf2: StackFrameD.t) :=
-    sf1.(StackFrameD.function_name) = fname /\ sf2.(StackFrameD.function_name) = fname /\
-      sf1.(StackFrameD.curr_block_id) = bid /\ sf2.(StackFrameD.curr_block_id) = bid /\ sf1.(StackFrameD.pc) = pc /\ sf2.(StackFrameD.pc) = pc.
 
-  Definition equiv_frames_up_to_v (fname: FunctionName.t) (bid: BlockID.t) (pc: nat)
-    (v: YULVariable.t) (sf1 sf2: StackFrameD.t) :=
+  (* states that two stack frames are at the same program point *)
+  Definition same_pp (fname: FunctionName.t) (bid: BlockID.t) (pc: nat) (sf1 sf2: StackFrameD.t) :=
+    sf1.(StackFrameD.function_name) = fname /\
+      sf2.(StackFrameD.function_name) = fname /\
+      sf1.(StackFrameD.curr_block_id) = bid /\
+      sf2.(StackFrameD.curr_block_id) = bid /\
+      sf1.(StackFrameD.pc) = pc /\
+      sf2.(StackFrameD.pc) = pc.
+
+  (* states that two frames are equivalent up to the value of
+  valriable v *)
+  Definition equiv_frames_up_to_v (fname: FunctionName.t) (bid: BlockID.t) (pc: nat) (v: YULVariable.t) (sf1 sf2: StackFrameD.t) :=
     same_pp fname bid pc sf1 sf2 /\
-      forall v', v' <> v -> (* equality is required for variable different from v *)
-                  VariableAssignmentD.get sf1.(StackFrameD.variable_assignments) v' = VariableAssignmentD.get sf2.(StackFrameD.variable_assignments) v'.
-    
+      forall v',
+        v' <> v -> (* equality is required for variable different from v *)
+        VariableAssignmentD.get sf1.(StackFrameD.variable_assignments) v' =
+          VariableAssignmentD.get sf2.(StackFrameD.variable_assignments) v'.
+
+  (* states that two states are equivalent up to the value of
+  valriable v in the top frame *)  
   Definition equiv_states_up_to_v (fname: FunctionName.t) (bid: BlockID.t) (pc: nat) (v: YULVariable.t) (st1 st2: StateD.t) :=
     Nat.lt 0 (length (StateD.call_stack st1)) /\
     length (StateD.call_stack st1) = length (StateD.call_stack st2) /\
-      st1.(StateD.status) = st2.(StateD.status) /\ st1.(StateD.dialect_state) = st2.(StateD.dialect_state) /\ 
+      st1.(StateD.status) = st2.(StateD.status) /\
+      st1.(StateD.dialect_state) = st2.(StateD.dialect_state) /\ 
       exists sf1 sf2 rsf,
-        st1.(StateD.call_stack) = sf1::rsf /\ st2.(StateD.call_stack) = sf2::rsf /\
+        st1.(StateD.call_stack) = sf1::rsf /\
+          st2.(StateD.call_stack) = sf2::rsf /\
           equiv_frames_up_to_v fname bid pc v sf1 sf2.
 
+  (* states that s is the set of variables that are immediately
+  accessed in a block b wrt to pc *)
   Definition accessed_vars (b: BlockD.t) (pc: nat) (s: VarSet.t) :=
-  ( pc = (length b.(BlockD.instructions)) /\ (* end of block *)
-    match b.(BlockD.exit_info) with
-    | ExitInfoD.ConditionalJump cv _ _ =>
-       VarSet.Equal s (VarSet.add cv VarSet.empty) (* cv is accessed *)
-    | ExitInfoD.ReturnBlock rvs =>
-       VarSet.Equal s (list_sexp_to_varset rvs) (* rs are accessed *)
-    | _ => VarSet.Equal s VarSet.empty (* nothing is accessed *)
-    end )
-  \/
-  ( pc < (length b.(BlockD.instructions)) /\  (* within the block *)
-    exists instr,                  (* instr.input are accessed *)
-      nth_error b.(BlockD.instructions) pc = Some instr /\
-      (VarSet.Equal s (list_sexp_to_varset instr.(InstructionD.input)) )).
+    ( pc = (length b.(BlockD.instructions)) /\ (* end of block *)
+        match b.(BlockD.exit_info) with
+        | ExitInfoD.ConditionalJump cv _ _ =>
+            VarSet.Equal s (VarSet.add cv VarSet.empty) (* cv is accessed *)
+        | ExitInfoD.ReturnBlock rvs =>
+            VarSet.Equal s (list_sexp_to_varset rvs) (* rs are accessed *)
+        | _ => VarSet.Equal s VarSet.empty (* nothing is accessed *)
+        end )
+    \/
+      ( pc < (length b.(BlockD.instructions)) /\  (* within the block *)
+          exists instr,                  
+            nth_error b.(BlockD.instructions) pc = Some instr /\
+              (VarSet.Equal s (list_sexp_to_varset instr.(InstructionD.input)) )). (* instr.input are accessed *)
 
+  (* states that top frames of states st1 and st2 are equivalent wrt
+  to the accessed variables *)  
   Definition equiv_top_frame (p: SmartContractD.t) (st1 st2: StateD.t) :=
-  match st1.(StateD.call_stack), st2.(StateD.call_stack) with
-  | nil,nil => True (* both call stacks are empty *)
-  | sf1::_,sf2::_ => (* top frames agree on values of accessed variables *)
-      let fname := sf1.(StackFrameD.function_name) in
-      let bid := sf1.(StackFrameD.curr_block_id) in
-      let pc := sf1.(StackFrameD.pc) in
+    match st1.(StateD.call_stack), st2.(StateD.call_stack) with
+    | nil,nil => True (* both call stacks are empty *)
+    | sf1::_,sf2::_ => (* top frames agree on values of accessed variables *)
+        let fname := sf1.(StackFrameD.function_name) in
+        let bid := sf1.(StackFrameD.curr_block_id) in
+        let pc := sf1.(StackFrameD.pc) in
         same_pp fname bid pc sf1 sf2 /\
-        forall v s b,
-           SmartContractD.get_block p fname bid = Some b ->
-           Liveness_sndD.accessed_vars b pc s ->
-           VarSet.In v s ->
-           VariableAssignmentD.get sf1.(StackFrameD.variable_assignments) v = VariableAssignmentD.get sf2.(StackFrameD.variable_assignments) v
-  | _,_ => False (* one of the call stacks is empty *)
- end.
+          forall v s b,
+            SmartContractD.get_block p fname bid = Some b ->
+            Liveness_sndD.accessed_vars b pc s ->
+            VarSet.In v s ->
+            VariableAssignmentD.get sf1.(StackFrameD.variable_assignments) v =
+              VariableAssignmentD.get sf2.(StackFrameD.variable_assignments) v
+    | _,_ => False (* one of the call stacks is empty *)
+    end.
 
+  (* define when a variable v is considered dead *)
   Definition dead_variable (p: SmartContractD.t) (fname: FunctionName.t) (bid: BlockID.t) (pc: nat) (v: YULVariable.t) :=
     forall (st1 st2 st1': StateD.t) (n: nat),
       equiv_states_up_to_v fname bid pc v st1 st2 ->
@@ -98,6 +114,8 @@ Module FM26 (D: DIALECT).
       exists st2',
         SmallStepD.eval n st2 p = st2' /\ equiv_top_frame p st1' st2'.
 
+  (* this lemma related the equivalence of states define in this
+  module to that defined in liveness_snd.v *)
   Lemma equiv_state_rel:
     forall p fname bid pc v st1 st2,
       equiv_states_up_to_v fname bid pc v st1 st2 ->
@@ -127,9 +145,9 @@ Module FM26 (D: DIALECT).
       + rewrite H_call_stack_st1. simpl. lia.
   Qed.
   
-  (*
-     This is an instance of the main lemma live_at_snd in liveness_snd.v.
-  *)
+  (* this lemma states that live_in provides a sound
+  under-approximation of dead variables. The proof uses the
+  corresponding (more general) lemma that appears in liveness_snd.v *)
   Lemma live_in_out_snd:  
   forall p fname bid b s,
     SmartContractD.get_block p fname bid = Some b ->
@@ -161,11 +179,17 @@ Module FM26 (D: DIALECT).
       repeat split; try (assumption || intuition).
   Qed.
 
+  (* This function is the liveness checker, it simple uses the one
+  defined in liveness.v --- just to use the same name in the paper *)
   Definition liveness_chk (p: SmartContractD.t) (r: sc_live_info_t) :=
     check_smart_contract p r.
 
+  (* just an aliasing of Liveness_sndD.snd_all_blocks_info -- just to
+  use the same name in the paper *)
   Definition liveness_info_snd := Liveness_sndD.snd_all_blocks_info.
 
+  (* this proves the soundness and completeness of the checker -- is
+  uses the corresponding lemma that appears in liveness_snd.v *)
   Lemma liveness_chk_snd_cmp: 
     forall (p: SmartContractD.t) (r: sc_live_info_t),
       SmartContractD.valid_smart_contract p ->
