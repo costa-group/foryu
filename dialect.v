@@ -1,9 +1,6 @@
-Require Export Coq.Strings.String.
-Require Import Coq.Classes.RelationClasses.
+Require Import Coq.Strings.String.
 Require Import Coq.Bool.Bool.
-Require Import NArith.
 Require Import Coq.Lists.List.
-Import ListNotations.
 Require Import FORYU.misc.
 
 (* [Status] of the program execution. It is shared beween YUL states
@@ -79,6 +76,13 @@ Module DialectFacts (D : DIALECT).
     Misc.eqb_neq_from_reflect (D.eqb_spec x y).
   Qed.
   
+  (* [eqb] is reflexive *)
+  Lemma eqb_refl : forall x: D.value_t, D.eqb x x = true.
+  Proof.
+    intro x.
+    Misc.eqb_eq_to_eq_refl eqb_eq.
+  Qed.
+
   (* [eq_dec] provides [{x=y}+{x<>y}]. Usually it is not needed as
   [eqb_spec] is enough. *)  
   Definition eq_dec (x y: D.value_t): sumbool (x=y) (x<>y).

@@ -1,14 +1,13 @@
-Require Export FORYU.dialect.
-Require Export FORYU.misc.
-Require Export Coq.ZArith.ZArith.
-Global Open Scope Z_scope.
-Require Export Coq.Lists.List.
+Require Import FORYU.dialect.
+Require Import FORYU.misc.
+Require Import Coq.ZArith.ZArith.
+Require Import Coq.Lists.List.
 Import ListNotations.
 Require Coq.Strings.HexString.
-Require Export Coq.Strings.String.
-Require Import Lia.
-Require Import Coq.Logic.ProofIrrelevance. (* Mandatory for proof_irrelevance *)
+Require Import Coq.Strings.String.
+Require Import Coq.Logic.ProofIrrelevance.
 Require Import Bool.
+
 Open Scope Z_scope. (* Important: Makes '+' refer to Z.add *)
 
 (* An arithmetic modulo 2^256 that is based on Z *)
@@ -28,9 +27,7 @@ Module U256.
   Definition eqb (x y: t): bool :=
     Z.eqb (val x) (val y).
 
-  (* we require boolean equality to reflect equality. This should be
-  the case for all [value_t] in this context, as there are basically
-  numerical. *)
+  (* we require boolean equality to reflect equality *)
   Lemma eqb_spec : forall x y : t, reflect (x = y) (eqb x y).
   Proof.
     intros x y.
@@ -72,6 +69,13 @@ Module U256.
     Misc.eqb_neq_from_reflect (eqb_spec x y).
   Qed.
   
+  (* [eqb] is reflexive *)
+  Lemma eqb_refl : forall x: t, eqb x x = true.
+  Proof.
+    intro x.
+    Misc.eqb_eq_to_eq_refl eqb_eq.
+  Qed.
+
   (* [eq_dec] provides [{x=y}+{x<>y}]. Usually it is not needed as
   [eqb_spec] is enough. *)  
   Definition eq_dec (x y: t): sumbool (x=y) (x<>y).
@@ -85,7 +89,7 @@ Module U256.
   Next Obligation.
     apply Z.mod_pos_bound.
     vm_compute. reflexivity.
-  Qed.
+  Defined.
 
   Definition zero: t := to_t 0.
   Definition one: t := to_t 1.
@@ -224,7 +228,7 @@ Module U8.
   Next Obligation.
     apply Z.mod_pos_bound.
     vm_compute. reflexivity.
-  Qed.
+  Definition.
 
   Definition zero: t := to_t 0.
   Definition one: t := to_t 1.

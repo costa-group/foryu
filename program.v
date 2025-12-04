@@ -4,43 +4,201 @@ Data structures for CFG-YUL programs
 
 *)
 
+Require Export FORYU.dialect.
+Require Export FORYU.misc.
 Require Export Coq.Lists.List.
 Import ListNotations.
 Require Export Coq.Strings.String.
-Require Export FORYU.evm_dialect.
-Require Import Orders.
-Require Import OrdersEx.
 Require Import MSets.
+Require Import NArith.
 Require Import Arith.
+
+Require Import Coq.MSets.MSetAVL.
+Require Import Coq.Structures.OrdersEx.      (* Provides New Keys *)
 
 
 Global Open Scope string_scope.
 Global Open Scope Z_scope.
 
-
+ 
+(* A module for block identifier *)
 Module BlockID.
-  (* A block ID is a natural number. *)
-  Definition t := nat.
+  (* A block ID is a natural number using N ofr effciency. *)
+  Definition t := N.
 
-  Definition eqb (b1 b2 : t) : bool :=
-    Nat.eqb b1 b2.
+  (* we require boolean equality to reflect equality *)
+  Definition eqb := N.eqb.
+  Definition eqb_spec := N.eqb_spec.
+
+    (* For rewriting [eqb x y = true] and [x = y] and vice versa *)
+  Lemma eqb_eq : forall x y, eqb x y = true <-> x = y.
+  Proof.
+    intros x y.
+    Misc.eqb_eq_from_reflect eqb_spec.    
+  Qed.
+
+  (* For rewriting [eqb x y <> true] and [x <> y] *)
+  Lemma eqb_neq : forall x y, eqb x y <> true <-> x <> y.
+  Proof.
+    intros x y.
+    Misc.eqb_neq_from_reflect (eqb_spec x y).
+  Qed.
+
+  (* For rewriting [eqb x y = false] and [x <> y] *)
+  Lemma eqb_neq_false : forall x y, eqb x y = false <-> x <> y.
+  Proof.
+    intros x y.
+    Misc.eqb_neq_from_reflect (eqb_spec x y).
+  Qed.
+  
+  (* [eqb] is reflexive *)
+  Lemma eqb_refl : forall x: t, eqb x x = true.
+  Proof.
+    intro x.
+    Misc.eqb_eq_to_eq_refl eqb_eq.
+  Qed.
+
+  (* [eq_dec] provides [{x=y}+{x<>y}]. Usually it is not needed as
+  [eqb_spec] is enough. *)  
+  Definition eq_dec (x y: t): sumbool (x=y) (x<>y).
+    Misc.sumbool_from_reflect (eqb_spec x y).
+  Defined.
 
 End BlockID.
 
+
 Module YULVariable.
-  (* YUL variables are represented as natural numbers. *)
-  Definition t := nat.
+  (* YUL variables are represented as natural numbers using N for efficiency. *)
+  Definition t := N.
 
-  Definition eqb (v1 v2 : t) : bool :=
-    Nat.eqb v1 v2.
+  (* we require boolean equality to reflect equality *)
+  Definition eqb := N.eqb.
+  Definition eqb_spec := N.eqb_spec.
 
+  (* For rewriting [eqb x y = true] and [x = y] and vice versa *)
+  Lemma eqb_eq : forall x y, eqb x y = true <-> x = y.
+  Proof.
+    intros x y.
+    Misc.eqb_eq_from_reflect eqb_spec.    
+  Qed.
+
+  (* For rewriting [eqb x y <> true] and [x <> y] *)
+  Lemma eqb_neq : forall x y, eqb x y <> true <-> x <> y.
+  Proof.
+    intros x y.
+    Misc.eqb_neq_from_reflect (eqb_spec x y).
+  Qed.
+
+  (* For rewriting [eqb x y = false] and [x <> y] *)
+  Lemma eqb_neq_false : forall x y, eqb x y = false <-> x <> y.
+  Proof.
+    intros x y.
+    Misc.eqb_neq_from_reflect (eqb_spec x y).
+  Qed.
+  
+  (* [eqb] is reflexive *)
+  Lemma eqb_refl : forall x: t, eqb x x = true.
+  Proof.
+    intro x.
+    Misc.eqb_eq_to_eq_refl eqb_eq.
+  Qed.
+
+  (* [eq_dec] provides [{x=y}+{x<>y}]. Usually it is not needed as
+  [eqb_spec] is enough. *)  
+  Definition eq_dec (x y: t): sumbool (x=y) (x<>y).
+    Misc.sumbool_from_reflect (eqb_spec x y).
+  Defined.
+
+ (* It is a UsualOrderedType, we simply use that of N *)
+  Module YULVariable_as_OT := OrdersEx.N_as_OT.
 End YULVariable.
 
-Module VarSet := Make Nat_as_OT.
+(* This module defines a set of variables. It is not used here, the
+purpose is to use it in analysis that requires such sets. *)
+Module YULVarSet := MSetAVL.Make(YULVariable.YULVariable_as_OT).
 
-
+(* This module defines simple expressions, which can be a variable or a value *)
 Module SimpleExpr (D: DIALECT).
   Definition t : Type := YULVariable.t + D.value_t.
+
+  Definition eqb (x y: t): bool :=
+    match x, y with
+    | inl v1, inl v2 => YULVariable.eqb v1 v2
+    | inr v1, inr v2 => D.eqb v1 v2
+    | _,_ => false
+    end.
+
+  (* we require boolean equality to reflect equality *)
+  Lemma eqb_spec : forall x y : t, reflect (x = y) (eqb x y).
+  Proof.
+    intros x y.
+    unfold eqb.
+    destruct x as [xvar | xval]; destruct y as [yvar | yval].
+    - destruct (YULVariable.eqb_spec xvar yvar) as [Heq | Hneq].
+      + rewrite <- YULVariable.eqb_eq in Heq.
+        rewrite Heq.
+        apply ReflectT.
+        rewrite YULVariable.eqb_eq in Heq.
+        rewrite Heq.
+        reflexivity.
+      + rewrite <- YULVariable.eqb_neq_false in Hneq.
+        rewrite Hneq.
+        apply ReflectF.
+        rewrite YULVariable.eqb_neq_false in Hneq.
+        intro H_contra.
+        injection H_contra as H_contra.
+        contradiction.
+    -   apply ReflectF.
+        intro H_contra.
+        discriminate H_contra.
+
+    - apply ReflectF.
+      intro H_contra.
+      discriminate H_contra.
+
+    - destruct (D.eqb_spec xval yval) as [Heq | Hneq].
+      + apply ReflectT.
+        rewrite Heq.
+        reflexivity.
+      + apply ReflectF.
+        intro H_contra.
+        injection H_contra as H_contra.
+        contradiction.
+  Qed.
+
+  (* For rewriting [eqb x y = true] and [x = y] and vice versa *)
+  Lemma eqb_eq : forall x y, eqb x y = true <-> x = y.
+  Proof.
+    intros x y.
+    Misc.eqb_eq_from_reflect eqb_spec.    
+  Qed.
+
+  (* For rewriting [eqb x y <> true] and [x <> y] *)
+  Lemma eqb_neq : forall x y, eqb x y <> true <-> x <> y.
+  Proof.
+    intros x y.
+    Misc.eqb_neq_from_reflect (eqb_spec x y).
+  Qed.
+
+  (* For rewriting [eqb x y = false] and [x <> y] *)
+  Lemma eqb_neq_false : forall x y, eqb x y = false <-> x <> y.
+  Proof.
+    intros x y.
+    Misc.eqb_neq_from_reflect (eqb_spec x y).
+  Qed.
+  
+  (* [eqb] is reflexive *)
+  Lemma eqb_refl : forall x: t, eqb x x = true.
+  Proof.
+    intro x.
+    Misc.eqb_eq_to_eq_refl eqb_eq.
+  Qed.
+
+  (* [eq_dec] provides [{x=y}+{x<>y}]. Usually it is not needed as
+  [eqb_spec] is enough. *)  
+  Definition eq_dec (x y: t): sumbool (x=y) (x<>y).
+    Misc.sumbool_from_reflect (eqb_spec x y).
+  Defined.
 
 End SimpleExpr.
 
@@ -48,80 +206,128 @@ Module FunctionName.
   (* YUL Function names represented as strings. *)
   Definition t := string.
 
-  Definition eqb (f1 f2 : t) : bool :=
-    String.eqb f1 f2.
+  (* we require boolean equality to reflect equality *)
+  Definition eqb := String.eqb.
+  Definition eqb_spec := String.eqb_spec.
+
+    (* For rewriting [eqb x y = true] and [x = y] and vice versa *)
+  Lemma eqb_eq : forall x y, eqb x y = true <-> x = y.
+  Proof.
+    intros x y.
+    Misc.eqb_eq_from_reflect eqb_spec.    
+  Qed.
+
+  (* For rewriting [eqb x y <> true] and [x <> y] *)
+  Lemma eqb_neq : forall x y, eqb x y <> true <-> x <> y.
+  Proof.
+    intros x y.
+    Misc.eqb_neq_from_reflect (eqb_spec x y).
+  Qed.
+
+  (* For rewriting [eqb x y = false] and [x <> y] *)
+  Lemma eqb_neq_false : forall x y, eqb x y = false <-> x <> y.
+  Proof.
+    intros x y.
+    Misc.eqb_neq_from_reflect (eqb_spec x y).
+  Qed.
+  
+  (* [eqb] is reflexive *)
+  Lemma eqb_refl : forall x: t, eqb x x = true.
+  Proof.
+    intro x.
+    Misc.eqb_eq_to_eq_refl eqb_eq.
+  Qed.
+
+  (* [eq_dec] provides [{x=y}+{x<>y}]. Usually it is not needed as
+  [eqb_spec] is enough. *)  
+  Definition eq_dec (x y: t): sumbool (x=y) (x<>y).
+    Misc.sumbool_from_reflect (eqb_spec x y).
+  Defined.
 
 End FunctionName.
+
+
 
 
 Module ExitInfo (D: DIALECT).
   Module SimpleExprD := SimpleExpr(D).
   
   Inductive t : Type := 
-  | ConditionalJump (cond_var : YULVariable.t) 
-                    (target_if_true : BlockID.t) 
-                    (target_if_false : BlockID.t)
+  | ConditionalJump (cond_var : YULVariable.t) (target_if_true : BlockID.t) (target_if_false : BlockID.t)
   | Jump (target : BlockID.t)
-  | ReturnBlock (return_values : list SimpleExprD.t) (* I believe they are always vars *)
+  | ReturnBlock (return_values : list SimpleExprD.t)
   | Terminated.
-       
+
 End ExitInfo.
 
-
-Module YULVariableMap (D: DIALECT).
-  Module SimpleExprD := SimpleExpr(D).
-
-  (* Map between YUL variables to apply renamings in phi functions *)
-  (* Definition t := YULVariable.t -> YULVariable.t. *)
-  Definition t := list (YULVariable.t * SimpleExprD.t).
-  (* A pair (x, origin) means that variable 'x' must take the value of the variable 'origin' *)
- 
-  Definition empty : t := [].
-
-End YULVariableMap.
-
+Search (NoDup nil).
 
 Module PhiInfo (D: DIALECT).
-  Module YULVariableMapD := YULVariableMap(D).
-  (* A phi function is a mapping from an entry BlockID to the mapping of YULVariables to
-     apply *)
-  Definition t := BlockID.t -> YULVariableMapD.t.
+
+  Module SimpleExprD := SimpleExpr(D).
+
+  Inductive InBlockPhiInfo :=
+  | in_phi_info (out_vars: list YULVariable.t) (in_vars: list SimpleExprD.t) (H_no_dup: List.NoDup out_vars) (H_same_le: length out_vars = length in_vars).
+  
+  Definition t := BlockID.t -> InBlockPhiInfo.
+
+  (* an empty map for a block *)
+  Definition empty_in_phi_info :=
+    in_phi_info [] [] (NoDup_nil YULVariable.t) (eq_refl (length [])).
 
   (* The empty phi function maps every block ID to the empty map. *)
-  Definition empty : t := fun _ => YULVariableMapD.empty.
+  Definition empty :=  
+      fun bid : BlockID.t => empty_in_phi_info.
+
+  Program Definition construct (out_vars: list YULVariable.t) (in_vars: list SimpleExprD.t) : option InBlockPhiInfo :=
+    match Misc.nodupb YULVariable.t YULVariable.eqb out_vars with
+    | false => None
+    | true => match Nat.eqb (length out_vars) (length in_vars) with
+              | false => None
+              | true  => Some (in_phi_info out_vars in_vars _ _)
+              end
+    end.
+  Next Obligation.
+    apply Is_true_eq_right in Heq_anonymous0.
+    apply (Misc.nodupb_spec YULVariable.t YULVariable.eqb YULVariable.eqb_eq YULVariable.eq_dec) in Heq_anonymous0.
+    exact Heq_anonymous0.
+  Defined.
+
+  Next Obligation.
+    symmetry in Heq_anonymous.
+    rewrite Nat.eqb_eq in Heq_anonymous.
+    exact Heq_anonymous.
+  Defined.
+
+
 End PhiInfo.
 
 
 Module Instruction (D: DIALECT).
   Module SimpleExprD := SimpleExpr(D).
 
-  Inductive aux_inst_t : Type :=
+  Inductive aux_inst_t :=
     | ASSIGN. (* This is to allow a simple assignment of the form [v1...vk] := [exp1...expk] at the level of YUL *)
   
   (* An instruction is a pair of a block ID and a YUL variable. *)
-   Record t : Type := {
-    input : list SimpleExprD.t; 
-    output : list YULVariable.t; (* Output variables *)
-    op : (FunctionName.t + D.opcode_t) + aux_inst_t;
-  }.
+  Record t : Type := {
+      input : list SimpleExprD.t; 
+      output : list YULVariable.t; (* Output variables *)
+      op : (FunctionName.t + D.opcode_t) + aux_inst_t;
+      H_nodup : NoDup output;
+    }.
+  
+  Program Definition construct (input : list SimpleExprD.t) (output : list YULVariable.t) (op : (FunctionName.t + D.opcode_t) + aux_inst_t) : option t :=
+  match Misc.nodupb YULVariable.t YULVariable.eqb output with
+  | true => Some ({| input:= input; output:=output; op:= _ |})
+  | false => None
+  end.
+Next Obligation.
+  apply Is_true_eq_right in Heq_anonymous.
+  apply (Misc.nodupb_spec YULVariable.t YULVariable.eqb YULVariable.eqb_eq YULVariable.eq_dec) in Heq_anonymous.
+  exact Heq_anonymous.
+Defined.
 
-  Lemma eq_split: forall i1 i2 : Instruction.t, 
-    i1.(input) = i2.(input) ->
-    i1.(output) = i2.(output) ->
-    i1.(op) = i2.(op) ->
-    i1 = i2.
-  Proof.
-    intros i1 i2 eq_input eq_output eq_op.
-    destruct i1 as [input1 output1 op1].
-    destruct i2 as [input2 output2 op2].
-    simpl in eq_input.
-    simpl in eq_output.
-    simpl in eq_op.
-    rewrite -> eq_input.
-    rewrite -> eq_output.
-    rewrite -> eq_op.
-    reflexivity.
-  Qed.
 End Instruction.
 
 (*
@@ -138,12 +344,20 @@ Module Block (D: DIALECT).
   
   (* Block of code of CFG-YUL *)
   Record t : Type := {
-    bid : BlockID.t;
-    phi_function : PhiInfoD.t;
-    exit_info : ExitInfoD.t;
-    instructions : list (InstructionD.t); (* List of instructions in the block *)
+      bid : BlockID.t;
+      phi_function : PhiInfoD.t;
+      exit_info : ExitInfoD.t;
+      instructions : list (InstructionD.t); (* List of instructions in the block *)
     }.
 
+  Definition construct (bid: BlockID.t) (phi_function : PhiInfoD.t) (exit_info : ExitInfoD.t) (instructions : list (InstructionD.t)) :=
+    {|
+      bid := bid;
+      phi_function := phi_function;
+      exit_info := exit_info;
+      instructions := instructions;
+    |}.
+  
   Definition is_return_block (b : t) :=
     match b.(exit_info) with
     | ExitInfoD.ReturnBlock rs => Some rs
@@ -171,24 +385,38 @@ Module Block (D: DIALECT).
 End Block.
 
 
+
 Module Function (D: DIALECT).
   Module BlockD := Block(D). (* Required to access Block(D) *)
   
     (* A function is a collection of blocks, an entry block ID, and a name. *)
   Record t : Type := {
-    name : FunctionName.t;
-    arguments : list YULVariable.t; (* Input parameters *)
-    blocks : list BlockD.t; (* List of blocks *)
-    entry_block_id : BlockID.t; (* The ID of the entry block. *)
-  }.
+      name : FunctionName.t;
+      arguments : list YULVariable.t; (* Input parameters *)
+      blocks : list BlockD.t; (* List of blocks *)
+      entry_block_id : BlockID.t; (* The ID of the entry block. *)
+      H_nodup : NoDup arguments
+    }.
 
+  Program Definition construct (name : FunctionName.t) (arguments : list YULVariable.t) (blocks : list BlockD.t) (entry_block_id : BlockID.t) :=
+    match Misc.nodupb YULVariable.t YULVariable.eqb arguments with
+    | false => None
+    | true => Some {| name := name; blocks := blocks; entry_block_id := entry_block_id; H_nodup := _ |}
+    end.
+  Next Obligation.
+    apply Is_true_eq_right in Heq_anonymous.
+    apply (Misc.nodupb_spec YULVariable.t YULVariable.eqb YULVariable.eqb_eq YULVariable.eq_dec) in Heq_anonymous.
+    exact Heq_anonymous.
+  Defined.
+
+      
   Definition get_block (f: t) (bid: BlockID.t) : option BlockD.t :=
     match List.find (fun b => BlockID.eqb b.(BlockD.bid) bid) f.(blocks) with
     | Some block => Some block
     | None => None
     end.
   
-   Definition valid_function (f: t) :=
+  Definition valid_function (f: t) :=
     forall b,
       In b (blocks f) <-> get_block f b.(BlockD.bid) = Some b.
    
@@ -205,7 +433,10 @@ Module SmartContract (D: DIALECT).
     functions : list FunctionD.t; (* List of functions in the smart contract *)
     main: FunctionName.t; (* The main function of the smart contract *)
   }.
- 
+
+  Definition construct (name : string) (functions : list FunctionD.t) (main: FunctionName.t) :=
+    {| name := name; functions := functions; main := main |}.
+
   Definition get_function (sc: t) (fname: FunctionName.t) : option FunctionD.t :=
     match List.find (fun f => FunctionName.eqb f.(FunctionD.name) fname) sc.(functions) with
     | Some func => Some func
@@ -280,12 +511,10 @@ Module SmartContract (D: DIALECT).
     - intros H_exists_f0.
       destruct H_exists_f0 as [f0 [In_f0_pfs [In_b_f0bs [H_f0_name_eqb_f H_b_bid_eqb_b]]]].
 
-      unfold FunctionName.eqb in H_f0_name_eqb_f.
-      apply String.eqb_eq in H_f0_name_eqb_f.
+      apply FunctionName.eqb_eq in H_f0_name_eqb_f.
       subst f.
 
-      unfold BlockID.eqb in H_b_bid_eqb_b.
-      apply Nat.eqb_eq in H_b_bid_eqb_b.
+      apply BlockID.eqb_eq in H_b_bid_eqb_b.
       subst bid.
       
       
