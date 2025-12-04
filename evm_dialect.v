@@ -1,155 +1,249 @@
 Require Export FORYU.dialect.
+Require Export FORYU.misc.
 Require Export Coq.ZArith.ZArith.
 Global Open Scope Z_scope.
 Require Export Coq.Lists.List.
 Import ListNotations.
 Require Coq.Strings.HexString.
 Require Export Coq.Strings.String.
+Require Import Lia.
+Require Import Coq.Logic.ProofIrrelevance. (* Mandatory for proof_irrelevance *)
+Require Import Bool.
+Open Scope Z_scope. (* Important: Makes '+' refer to Z.add *)
 
-
-
-
+(* An arithmetic modulo 2^256 that is based on Z *)
 Module U256.
-  Definition t := Z.
 
-  Module Valid.
-    Definition t (value : U256.t) : Prop :=
-      0 <= value < 2 ^ 256.
-  End Valid.
+  Definition modulus := 2^256.
+  
+  Definition Valid (val: Z): Prop :=
+    0 <= val < modulus.
+  
+  (* The Type Definition. It includes the value and a proposition stating its validity *)
+  Record t := mk {
+    val : Z;
+    is_valid : Valid val
+  }.
 
-  Definition to_U256 (value : U256.t) : U256.t :=
-    value mod (2 ^ 256).
+  Definition eqb (x y: t): bool :=
+    Z.eqb (val x) (val y).
 
-  Definition of_bool (b : bool) : U256.t :=
-    if b then 1 else 0.
+  (* we require boolean equality to reflect equality. This should be
+  the case for all [value_t] in this context, as there are basically
+  numerical. *)
+  Lemma eqb_spec : forall x y : t, reflect (x = y) (eqb x y).
+  Proof.
+    intros x y.
+    unfold eqb.
 
-  (* Inspired on Stdlib module from
+    destruct (Z.eqb_spec (val x) (val y)) as [Heq | Hneq].
+
+    - apply ReflectT.
+      destruct x as [vx px], y as [vy py].
+      simpl in Heq.
+      subst vy.
+      f_equal.
+      apply proof_irrelevance.
+
+    - apply ReflectF.
+      intro H_assume_equal.
+      rewrite H_assume_equal in Hneq.
+      contradiction.
+  Qed.
+  
+  (* For rewriting [eqb x y = true] and [x = y] and vice versa *)
+  Lemma eqb_eq : forall x y, eqb x y = true <-> x = y.
+  Proof.
+    intros x y.
+    Misc.eqb_eq_from_reflect eqb_spec.    
+  Qed.
+
+  (* For rewriting [eqb x y <> true] and [x <> y] *)
+  Lemma eqb_neq : forall x y, eqb x y <> true <-> x <> y.
+  Proof.
+    intros x y.
+    Misc.eqb_neq_from_reflect (eqb_spec x y).
+  Qed.
+
+  (* For rewriting [eqb x y = false] and [x <> y] *)
+  Lemma eqb_neq_false : forall x y, eqb x y = false <-> x <> y.
+  Proof.
+    intros x y.
+    Misc.eqb_neq_from_reflect (eqb_spec x y).
+  Qed.
+  
+  (* [eq_dec] provides [{x=y}+{x<>y}]. Usually it is not needed as
+  [eqb_spec] is enough. *)  
+  Definition eq_dec (x y: t): sumbool (x=y) (x<>y).
+    Misc.sumbool_from_reflect (eqb_spec x y).
+  Defined.
+  
+  
+  (* A constructor that takes any Z and fits it into t *)
+  Program Definition to_t (z : Z) : t :=
+    mk (z mod modulus) _.
+  Next Obligation.
+    apply Z.mod_pos_bound.
+    vm_compute. reflexivity.
+  Qed.
+
+  Definition zero: t := to_t 0.
+  Definition one: t := to_t 1.
+  Definition two_to_255: t := to_t (2^255).
+  
+  
+  Definition of_bool (b: bool): U256.t :=
+    if b then one else zero.
+
+  (* Inspired by Stdlib module of
      https://github.com/formal-land/coq-of-solidity/blob/638c9fdbcbe64e359d337b805a952eb2437ad4ce/coq/CoqOfSolidity/simulations/CoqOfSolidity.v#L408*)
-  Definition get_signed_value (value : U256.t) : Z :=
-    ((value + (2 ^ 255)) mod (2 ^ 256)) - (2 ^ 255).
+  Definition get_signed_value (value: U256.t): Z :=
+    (((val value) + (2 ^ 255)) mod (2 ^ 256)) - (2 ^ 255).
 
-  Definition add (a b : U256.t) : U256.t :=
-    to_U256 (a + b).
+  Definition add (a b: U256.t): U256.t :=
+    to_t ( (val a) + (val b) ).
 
-  Definition sub (a b : U256.t) : U256.t :=
-    to_U256 (a - b).
+  Definition sub (a b: U256.t): U256.t :=
+    to_t ( (val a) - (val b) ).
 
-  Definition mul (a b : U256.t) : U256.t :=
-    to_U256 (a * b).
+  Definition mul (a b: U256.t): U256.t :=
+    to_t ( (val a) * (val b) ).
 
-  Definition div (a b : U256.t) : U256.t :=
-    if b =? 0 then 0 else to_U256 (Z.div a b).
+  Definition div (a b: U256.t): U256.t :=
+    if (val b) =? 0 then zero else to_t (Z.div (val a) (val b)).
 
-  Definition sdiv (x y : U256.t) : U256.t :=
-      if y =? 0 then 0
+  Definition sdiv (x y: U256.t): U256.t :=
+      if (val y) =? 0 then zero
+      else
+        let zx := get_signed_value x in
+        let zy := get_signed_value y in
+        to_t (zx / zy).
+
+  Definition mod_evm (x y: U256.t): U256.t :=
+      if (val y) =? 0 then zero
+      else to_t ((val x) mod (val y)). (* this could be improved to eliminate the call to to_t *)
+
+  Definition smod (x y: U256.t): U256.t :=
+      if (val y) =? 0 then zero
       else
         let x := get_signed_value x in
         let y := get_signed_value y in
-        to_U256 (x / y).
-
-  Definition mod_evm (x y : U256.t) : U256.t :=
-      if y =? 0 then 0
-      else x mod y.
-
-  Definition smod (x y : U256.t) : U256.t :=
-      if y =? 0 then 0
-      else
-        let x := get_signed_value x in
-        let y := get_signed_value y in
-        to_U256 (x mod y).
+        to_t (x mod y).
     
-  Definition exp (x y : U256.t) : U256.t :=
-      to_U256 (x ^ y).
+  Definition exp (x y: U256.t): U256.t :=
+      to_t ((val x) ^ (val y)).
 
-  Definition not (x : U256.t) : U256.t :=
-      to_U256 (2^256 - x - 1).
+  Definition not (x: U256.t): U256.t :=
+      to_t (2^256 - (val x) - 1).
 
-  Definition lt (x y : U256.t) : U256.t :=
-      if x <? y then 1 else 0.
+  Definition lt (x y: U256.t): U256.t :=
+      if (val x) <? (val y) then one else zero.
 
-    Definition gt (x y : U256.t) : U256.t :=
-      if x >? y then 1 else 0.
+  Definition gt (x y: U256.t): U256.t :=
+    if (val x) >? (val y) then one else zero.
 
-    (* Signed version of [lt] *)
-    Definition slt (x y : U256.t) : U256.t :=
-      let x := get_signed_value  x in
-      let y := get_signed_value  y in
-      lt x y.
+  (* Signed version of [lt] *)
+  Definition slt (x y: U256.t): U256.t :=
+    let x := get_signed_value x in
+    let y := get_signed_value y in
+    if x <? y then one else zero.
+  
+  Definition sgt (x y: U256.t): U256.t :=
+    let x := get_signed_value x in
+    let y := get_signed_value y in
+    if x >?  y then one else zero.
 
-    Definition sgt (x y : U256.t) : U256.t :=
-      let x := get_signed_value x in
-      let y := get_signed_value y in
-      gt x y.
+  Definition eq (x y: U256.t): U256.t :=
+    if (val x) =? (val y) then one else zero.
+  
+  Definition iszero (x: U256.t): U256.t :=
+    if (val x) =? 0 then one else zero.
+  
+  Definition and (x y: U256.t): U256.t :=
+    to_t (Z.land (val x) (val y)). (* this could be improved to eliminate the call to to_t *)
 
-    Definition eq (x y : U256.t) : U256.t :=
-      if x =? y then 1 else 0.
+  Definition or (x y: U256.t): U256.t :=
+    to_t (Z.lor (val x) (val y)).
 
-    Definition iszero (x : U256.t) : U256.t :=
-      if x =? 0 then 1 else 0.
+  Definition xor (x y: U256.t): U256.t :=
+    to_t (Z.lxor (val x) (val y)).
 
-    Definition and (x y : U256.t) : U256.t :=
-      Z.land x y.
+  Definition byte (n x: U256.t): U256.t := (* SHL and MOD 256 *)
+    to_t ( ( (val x) / (256 ^ (31 - (val n)))) mod 256). (* this could be improved to eliminate the call to to_t *)
 
-    Definition or (x y : U256.t) : U256.t :=
-      Z.lor x y.
+  Definition shl (x y: U256.t): U256.t :=
+    to_t ((val y) * (2 ^ (val x))).
 
-    Definition xor (x y : U256.t) : U256.t :=
-      Z.lxor x y.
+  Definition shr (x y: U256.t): U256.t :=
+    to_t ((val y) / (2 ^ (val x))). (* this could be improved to eliminate the call to to_t *)
 
-    Definition byte (n x : U256.t) : U256.t :=
-      (x / (256 ^ (31 - n))) mod 256.  (* SHL and MOD 256 *)
+  Definition sar (shift value: U256.t): U256.t :=
+    let signed_value := get_signed_value value in
+    let shifted_value := signed_value / (2 ^ (val shift)) in
+    to_t shifted_value.
 
-    Definition shl (x y : U256.t) : U256.t :=
-      to_U256 (y * (2 ^ x)).
+  Definition addmod (x y m: U256.t): U256.t :=
+    to_t ( ((val x) + (val y)) mod (val m) ). (* this could be improved to eliminate the call to to_t *)
 
-    Definition shr (x y : U256.t) : U256.t :=
-      y / (2 ^ x).
-
-    Definition sar (shift value : U256.t) : U256.t :=
-      let signed_value := get_signed_value value in
-      let shifted_value := signed_value / (2 ^ shift) in
-      to_U256 shifted_value.
-
-    Definition addmod (x y m : U256.t) : U256.t :=
-      (x + y) mod m.
-
-    Definition mulmod (x y m : U256.t) : U256.t :=
-      (x * y) mod m.
+  Definition mulmod (x y m: U256.t): U256.t :=
+   to_t ( ((val x) * (val y)) mod (val m)). (* this could be improved to eliminate the call to to_t *)
 
     (* From https://github.com/formal-land/coq-of-solidity/blob/638c9fdbcbe64e359d337b805a952eb2437ad4ce/coq/CoqOfSolidity/simulations/CoqOfSolidity.v#L549 *)
-    Definition signextend (i x : U256.t) : U256.t :=
-      if i >=? 31 then x
-      else
-        let size := 8 * (i + 1) in
-        let byte := (x / 2 ^ (8 * i)) mod 256 in
-        let sign_bit := byte / 128 in
-        let extend_bit (bit size : Z) : Z :=
-          if bit =? 1 then
-            (2 ^ 256) - (2 ^ size)
-          else
-            0 in
-        (x mod (2 ^ size)) + extend_bit sign_bit size.
-
-    Definition  eq_dec := Z.eq_dec.
+  Definition signextend (ai ax: U256.t): U256.t :=
+    let i := (val ai) in
+    let x := (val ax) in
+    if i >=? 31 then ax
+    else
+      let size := 8 * (i + 1) in
+      let byte := (x / 2 ^ (8 * i)) mod 256 in
+      let sign_bit := byte / 128 in
+      let extend_bit (bit size: Z): Z := if bit =? 1 then (2 ^ 256) - (2 ^ size) else 0 in
+      to_t ((x mod (2 ^ size)) + extend_bit sign_bit size). (* this could be improved to eliminate the call to to_t *)
 
 End U256.
 
 
+(* A byte *)
+Module U8.
+
+  Definition modulus := 2^8.
+  
+  Definition Valid (val: Z): Prop :=
+    0 <= val < modulus.
+
+  
+  (* The Type Definition. It includes the value and a proposition stating its validity *)
+  Record t := mk {
+    val : Z;
+    is_valid : Valid val
+  }.
+
+  (* A constructor that takes any Z and fits it into t *)
+  Program Definition to_t (z : Z) : t :=
+    mk (z mod modulus) _.
+  Next Obligation.
+    apply Z.mod_pos_bound.
+    vm_compute. reflexivity.
+  Qed.
+
+  Definition zero: t := to_t 0.
+  Definition one: t := to_t 1.
+
+End U8.
+
 Module EVMStorage.
   (* From github.com/formal-land/coq-of-solidity/blob/develop/coq/CoqOfSolidity/simulations/CoqOfSolidity.v 
   *)
-  Definition t : Set :=
+  Definition t: Set :=
     U256.t -> U256.t.
 
-  Definition empty : t :=
-    fun _ => 0.
+  Definition empty: t :=
+    fun _ => U256.zero.
 
-  Definition update (storage : EVMStorage.t) (address value : U256.t) : EVMStorage.t :=
+  Definition update (storage: EVMStorage.t) (address value: U256.t): EVMStorage.t :=
     fun current_address =>
-      if address =? current_address then
-        value
-      else
-        storage current_address.
+      if U256.eqb address current_address then value
+      else storage current_address.
 End EVMStorage.
 
 
@@ -159,53 +253,54 @@ Module EVMMemory.
   *)
   (** We define the memory as a function instead of an explicit list as there can be holes in it. It
       goes from addresses in [U256.t] to bytes represented as [Z]. *)
-  Definition t : Type :=
-    U256.t -> Z.
+  Definition t: Type :=
+    U256.t -> U8.t.
 
-  Definition empty : t :=
-    fun _ => 0.
+  Definition empty: t :=
+    fun _ => U8.zero.
 
   (** Get the bytes from some memory from a start adress and for a certain length. *)
-  Definition get_bytes (memory : EVMMemory.t) (start length : U256.t) : list Z :=
+  Definition get_bytes (memory: EVMMemory.t) (start length: U256.t): list U8.t :=
     List.map
-      (fun (i : nat) =>
-        let address : U256.t := start + Z.of_nat i in
-        memory address
+      (fun (i: nat) =>
+         let address: U256.t := U256.to_t ((U256.val start) + Z.of_nat i) in (* when reaching end of memory we start from 0 *)
+         memory address
       )
-      (List.seq 0 (Z.to_nat length)).
+      (List.seq 0 (Z.to_nat (U256.val length))).
 
-  Definition update_bytes (memory : EVMMemory.t) (start : U256.t) (bytes : list Z) : EVMMemory.t :=
+  Definition update_bytes (memory: EVMMemory.t) (start: U256.t) (bytes: list U8.t): EVMMemory.t :=
     fun address =>
-      let i : Z := address - start in
+      let i: Z := (U256.val address) - (U256.val start) in
       if andb (0 <=? i) (i <? Z.of_nat (List.length bytes)) then
-        List.nth_default 0 bytes (Z.to_nat i)
+        List.nth_default U8.zero bytes (Z.to_nat i)
       else
         memory address.
 
-  Definition u256_as_bytes (value : U256.t) : list Z :=
+  Definition u256_as_bytes (value: U256.t): list U8.t :=
     List.map
-      (fun (i : nat) => Z.shiftr value (8 * (31 - Z.of_nat i)) mod 256)
+      (fun (i: nat) => U8.to_t (Z.shiftr (U256.val value) (8 * (31 - Z.of_nat i)) mod 256) )
       (List.seq 0 32).
 
-  Fixpoint bytes_as_u256_aux (acc : Z) (bytes : list Z) : U256.t :=
+  Fixpoint bytes_as_u256_aux (acc: Z) (bytes: list U8.t): U256.t :=
     match bytes with
-    | [] => acc
+    | [] => U256.to_t acc
     | byte :: bytes =>
       bytes_as_u256_aux
-        (acc * 256 + byte)
+        (acc * 256 + (U8.val byte))
         bytes
     end.
 
-  Definition bytes_as_u256 (bytes : list Z) : U256.t :=
+  Definition bytes_as_u256 (bytes: list U8.t): U256.t :=
     bytes_as_u256_aux 0 bytes.
 
-  Lemma bytes_as_u256_bounds (bytes : list Z)
-      (H_bytes : List.Forall (fun byte => 0 <= byte < 256) bytes) :
+  (*
+  Lemma bytes_as_u256_bounds (bytes: list U8.t):
     0 <= bytes_as_u256 bytes < 2 ^ (8 * Z.of_nat (List.length bytes)).
   Proof.
   Admitted.
+   *)
   
-  Fixpoint hex_string_as_bytes (hex_string : string) : list Z :=
+  Fixpoint hex_string_as_bytes (hex_string: string): list U8.t :=
     match hex_string with
     | ""%string => []
     | String.String a "" => [] (* this case is unexpected *)
@@ -213,7 +308,7 @@ Module EVMMemory.
       match HexString.ascii_to_digit a, HexString.ascii_to_digit b with
       | Some a, Some b =>
         let byte := 16 * Z.of_N a + Z.of_N b in
-        byte :: hex_string_as_bytes rest
+        (U8.to_t byte):: hex_string_as_bytes rest
       | _, _ => [] (* this case is unexpected *)
       end
     end.
@@ -222,20 +317,20 @@ End EVMMemory.
 
 Module EVMMemorySegment.
   (** List of bytes represented as Z. *)
-  Definition t : Type := list Z.
-  Definition empty : t := [].
+  Definition t: Type := list U8.t.
+  Definition empty: t := [].
 End EVMMemorySegment.
 
 
 Module EVMState.
-  Record t : Type := {
-    storage : EVMStorage.t;
+  Record t: Type := {
+    storage: EVMStorage.t;
     memory: EVMMemory.t;
-    call_data_seg : EVMMemorySegment.t;
+    call_data_seg: EVMMemorySegment.t;
     return_data_seg: EVMMemorySegment.t;
   }.
 
-  Definition empty : t :=
+  Definition empty: t :=
     {| 
       storage := EVMStorage.empty;
       memory := EVMMemory.empty;
@@ -335,14 +430,14 @@ Module EVM_opcode.
     | DATACOPY
     .
     
-    Definition eq_dec : forall (a b : t), {a = b} + {a <> b}.
+    Definition eq_dec: forall (a b: t), {a = b} + {a <> b}.
       Proof. decide equality. Defined.
 
-    Definition eqb (a b : t) : bool :=
+    Definition eqb (a b: t): bool :=
       if eq_dec a b then true else false.
       
 
-    Definition execute (state: EVMState.t) (op: t) (inputs: list U256.t) : (list U256.t * EVMState.t * Status.t) :=
+    Definition execute (state: EVMState.t) (op: t) (inputs: list U256.t): (list U256.t * EVMState.t * Status.t) :=
       match op with
       | STOP => ([], state, Status.Terminated)
       | ADD => match inputs with
@@ -457,7 +552,7 @@ Module EVM_opcode.
               ([], new_state, Status.Running)
           | _ => ([], state, Status.Error "SSTORE expects 2 inputs")
           end
-      | _  =>  ([42], state, Status.Running) (* FIXME: organize and complete *)
+      | _  =>  ([U256.to_t 42], state, Status.Running) (* FIXME: organize and complete *)
       end. 
 
 End EVM_opcode.
@@ -465,7 +560,7 @@ End EVM_opcode.
 
 (*
 Module Type BLOCK_CHAIN.
-  Parameter get_addr : U256.t ->  U256.t.
+  Parameter get_addr: U256.t ->  U256.t.
 End BLOCK_CHAIN.
 Module EVMDialect (BC: BLOCK_CHAIN) <: DIALECT.
 
@@ -473,24 +568,26 @@ Module EVMDialect (BC: BLOCK_CHAIN) <: DIALECT.
 
 Module EVMDialect <: DIALECT.
   Definition value_t := U256.t.
+
+  Definition eqb := U256.eqb.
+  Definition eqb_spec := U256.eqb_spec.
+
+  Definition is_true_value (v: value_t): bool :=
+    U256.eqb v U256.zero. (* 0 or 1? *)
+
   Definition opcode_t := EVM_opcode.t.
+
   Definition dialect_state := EVMState.t.
 
-  Definition default_value : value_t := 0.
-  Definition is_true_value (v: value_t) : bool :=
-    v =? 0.
-  Definition is_false_value (v: value_t) : bool :=
-    negb (is_true_value v).
-  Definition equal_values (v1 v2: value_t) : bool :=
-    v1 =? v2.
+  Definition default_value: value_t := U256.zero.
 
-  Definition execute_op_code (state: dialect_state) (op: opcode_t) (inputs: list value_t) : (list value_t * dialect_state * Status.t) :=
+  Definition execute_op_code (state: dialect_state) (op: opcode_t) (inputs: list value_t): (list value_t * dialect_state * Status.t) :=
     EVM_opcode.execute state op inputs.
 
-  Definition empty_dialect_state : dialect_state :=
+  Definition empty_dialect_state: dialect_state :=
     EVMState.empty.
-
-  Definition revert_state (old_state new_state: dialect_state) : dialect_state :=
-    old_state.
+    
 
 End EVMDialect.
+
+Module EVMDialect_Facts := DialectFacts EVMDialect.

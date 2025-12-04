@@ -1,8 +1,14 @@
 Require Export Coq.Strings.String.
- 
+Require Import Coq.Classes.RelationClasses.
+Require Import Coq.Bool.Bool.
+Require Import NArith.
+Require Import Coq.Lists.List.
+Import ListNotations.
+Require Import FORYU.misc.
 
+(* [Status] of the program execution. It is shared beween YUL states
+and dialects states. *)
 Module Status.
-  (* Status of the program execution *)
   Inductive t : Type :=
   | Running : t 
   | Terminated : t
@@ -11,20 +17,72 @@ Module Status.
 End Status.
 
 
-
 Module Type DIALECT.
+
+  (* [value_t] is the type for vasic values manipulated by dialect,
+  e.g., 256-bits in the EVM dialect *)
   Parameter value_t : Type.
-  Parameter opcode_t : Type.
+
+  (* [eqb v1 v2] is true iff [v1] and [v2] are euqal *)
+  Parameter eqb: value_t -> value_t -> bool.
+
+  (* we require boolean equality to reflect equality. This should be
+  the case for all [value_t] in this context, as there are basically
+  numerical. *)
+  Parameter eqb_spec : forall x y : value_t, reflect (x = y) (eqb x y).
+ 
+  (* [is_true_value] specifies which values are [true]. Any value that
+  is not [true] should be considered [false] *) 
+  Parameter is_true_value: value_t -> bool.
+ 
+  (* [opcode_t] is an inductive data type specifying the opcodes
+  supported by the dialect *)
+  Parameter opcode_t: Type.
+
+  (* [dialect_state] is data type for dialect states, e.g., in EVM it
+  encapsulate memeory, storage, etc *)
   Parameter dialect_state : Type.
 
-  Parameter default_value : value_t. (* For uninitialized variables *)
-  Parameter is_true_value: value_t -> bool.
-  Parameter is_false_value: value_t -> bool.
-  Parameter equal_values: value_t -> value_t -> bool.
+  (* A function to execute an opcode. It recieves a dialect state, an
+    opcode and a list of values, and returns a list ot output values,
+    a new dialect state and the staus of the execution. Should return
+    an Error status if the number of arguments does not match. Adding
+    it as a propositiob in the smart contract's structure would
+    complicate things a bit. *)
+  Parameter execute_op_code: dialect_state -> opcode_t -> list value_t -> (list value_t * dialect_state * Status.t).
 
-  Parameter execute_op_code : dialect_state -> opcode_t -> list (value_t) -> (list value_t * dialect_state * Status.t).
+  (* An empty dialect state, which is mainly used to testing *)
   Parameter empty_dialect_state : dialect_state.
 
-  Parameter revert_state : dialect_state -> dialect_state -> dialect_state.
-
 End DIALECT.
+
+
+Module DialectFacts (D : DIALECT).
+    (* For rewriting [eqb x y = true] and [x = y] and vice versa *)
+  Lemma eqb_eq : forall x y :D.value_t, D.eqb x y = true <-> x = y.
+  Proof.
+    intros x y.
+    Misc.eqb_eq_from_reflect D.eqb_spec.    
+  Qed.
+
+  (* For rewriting [eqb x y <> true] and [x <> y] *)
+  Lemma eqb_neq : forall x y: D.value_t, D.eqb x y <> true <-> x <> y.
+  Proof.
+    intros x y.
+    Misc.eqb_neq_from_reflect (D.eqb_spec x y).
+  Qed.
+
+  (* For rewriting [eqb x y = false] and [x <> y] *)
+  Lemma eqb_neq_false : forall x y: D.value_t, D.eqb x y = false <-> x <> y.
+  Proof.
+    intros x y.
+    Misc.eqb_neq_from_reflect (D.eqb_spec x y).
+  Qed.
+  
+  (* [eq_dec] provides [{x=y}+{x<>y}]. Usually it is not needed as
+  [eqb_spec] is enough. *)  
+  Definition eq_dec (x y: D.value_t): sumbool (x=y) (x<>y).
+    Misc.sumbool_from_reflect (D.eqb_spec x y).
+  Defined.
+
+End DialectFacts.
