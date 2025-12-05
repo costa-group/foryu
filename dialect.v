@@ -20,6 +20,9 @@ Module Type DIALECT.
   e.g., 256-bits in the EVM dialect *)
   Parameter value_t : Type.
 
+  (* A default value to be used for initializing variables *)
+  Parameter default_value: value_t.
+
   (* [eqb v1 v2] is true iff [v1] and [v2] are euqal *)
   Parameter eqb: value_t -> value_t -> bool.
 
@@ -38,7 +41,7 @@ Module Type DIALECT.
 
   (* [dialect_state] is data type for dialect states, e.g., in EVM it
   encapsulate memeory, storage, etc *)
-  Parameter dialect_state : Type.
+  Parameter dialect_state_t : Type.
 
   (* A function to execute an opcode. It recieves a dialect state, an
     opcode and a list of values, and returns a list ot output values,
@@ -46,10 +49,10 @@ Module Type DIALECT.
     an Error status if the number of arguments does not match. Adding
     it as a propositiob in the smart contract's structure would
     complicate things a bit. *)
-  Parameter execute_op_code: dialect_state -> opcode_t -> list value_t -> (list value_t * dialect_state * Status.t).
+  Parameter execute_opcode: dialect_state_t -> opcode_t -> list value_t -> (list value_t * dialect_state_t * Status.t).
 
   (* An empty dialect state, which is mainly used to testing *)
-  Parameter empty_dialect_state : dialect_state.
+  Parameter empty_dialect_state : dialect_state_t.
 
 End DIALECT.
 

@@ -228,7 +228,7 @@ Module U8.
   Next Obligation.
     apply Z.mod_pos_bound.
     vm_compute. reflexivity.
-  Definition.
+  Defined.
 
   Definition zero: t := to_t 0.
   Definition one: t := to_t 1.
@@ -581,14 +581,14 @@ Module EVMDialect <: DIALECT.
 
   Definition opcode_t := EVM_opcode.t.
 
-  Definition dialect_state := EVMState.t.
+  Definition dialect_state_t := EVMState.t.
 
   Definition default_value: value_t := U256.zero.
 
-  Definition execute_op_code (state: dialect_state) (op: opcode_t) (inputs: list value_t): (list value_t * dialect_state * Status.t) :=
+  Definition execute_opcode (state: dialect_state_t) (op: opcode_t) (inputs: list value_t): (list value_t * dialect_state_t * Status.t) :=
     EVM_opcode.execute state op inputs.
 
-  Definition empty_dialect_state: dialect_state :=
+  Definition empty_dialect_state: dialect_state_t :=
     EVMState.empty.
     
 
