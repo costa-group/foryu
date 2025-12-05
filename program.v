@@ -13,10 +13,6 @@ Require Import MSets.
 Require Import NArith.
 Require Import Arith.
 
-Require Import Coq.MSets.MSetAVL.
-Require Import Coq.Structures.OrdersEx.      (* Provides New Keys *)
-
-
 Global Open Scope string_scope.
 Global Open Scope Z_scope.
 
@@ -112,9 +108,6 @@ Module VarID.
   Module VarID_as_OT := OrdersEx.N_as_OT.
 End VarID.
 
-(* This module defines a set of variables. It is not used here, the
-purpose is to use it in analysis that requires such sets. *)
-Module VarIDSet := MSetAVL.Make(VarID.VarID_as_OT).
 
 (* This module defines simple expressions, which can be a variable or a value *)
 Module SimpleExpr (D: DIALECT).
