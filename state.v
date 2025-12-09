@@ -46,7 +46,7 @@ Module StackFrame(D: DIALECT).
   Module LocalsD := Locals(D).
   
   Record t : Type := {
-      func_id : FuncID.t;
+      fname : FuncName.t;
       locals : LocalsD.t;
       curr_bid: BlockID.t; (* id of the current block *)
       pc : nat; (* position of the next instructions in the current block. We keep using nat becuase there are many code/theorems we need that do not exists for N. Idieally we shoukd use N for efficiency in the different analysis. *)

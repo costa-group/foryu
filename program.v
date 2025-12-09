@@ -194,7 +194,7 @@ Module SimpleExpr (D: DIALECT).
 
 End SimpleExpr.
 
-Module FuncID.
+Module FuncName.
   (* YUL Function names represented as strings. *)
   Definition t := string.
 
@@ -236,7 +236,7 @@ Module FuncID.
     Misc.sumbool_from_reflect (eqb_spec x y).
   Defined.
 
-End FuncID.
+End FuncName.
 
 
 
@@ -306,14 +306,14 @@ Module Instr (D: DIALECT).
   Record t : Type := {
       input : list SimpleExprD.t; 
       output : list VarID.t; (* Output variables *)
-      op : (FuncID.t + D.opcode_t) + aux_inst_t;
+      op : (FuncName.t + D.opcode_t) + aux_inst_t;
       H_nodup : NoDup output;
     }.
   
   (* IMPORTANT: when there is an error, it uses a defualt value
   instead of failing. It is done this way so the current parser keeps
   working, should be changed one the new parser is tready *)
-  Program Definition construct (input : list SimpleExprD.t) (output : list VarID.t) (op : (FuncID.t + D.opcode_t) + aux_inst_t) : t :=
+  Program Definition construct (input : list SimpleExprD.t) (output : list VarID.t) (op : (FuncName.t + D.opcode_t) + aux_inst_t) : t :=
   match Misc.nodupb VarID.t VarID.eqb output with
   | true => {| input:= input; output:=output; op:= _ |}
   | false => {| input:= []; output:=[]; op:=op; H_nodup := (NoDup_nil VarID.t) |}
@@ -381,14 +381,14 @@ Module CFGFun (D: DIALECT).
   
     (* A function is a collection of blocks, an entry block ID, and a name. *)
   Record t : Type := {
-      name : FuncID.t;
+      name : FuncName.t;
       args : list VarID.t; (* Input parameters *)
       blocks : list BlockD.t; (* List of blocks *)
       entry_bid : BlockID.t; (* The ID of the entry block. *)
       H_nodup : NoDup args
     }.
 
-  Program Definition construct (name : FuncID.t) (args : list VarID.t) (blocks : list BlockD.t) (entry_bid : BlockID.t) : t :=
+  Program Definition construct (name : FuncName.t) (args : list VarID.t) (blocks : list BlockD.t) (entry_bid : BlockID.t) : t :=
     match Misc.nodupb VarID.t VarID.eqb args with
     | false => {| name := name; blocks := []; entry_bid := entry_bid; H_nodup := (NoDup_nil VarID.t)|}
     | true => {| name := name; blocks := blocks; entry_bid := entry_bid; H_nodup := _ |}
@@ -421,33 +421,33 @@ Module CFGProg (D: DIALECT).
   Record t : Type := {
     name : string; (* Name of the smart contract *)
     functions : list CFGFunD.t; (* List of functions in the smart contract *)
-    main: FuncID.t; (* The main function of the smart contract *)
+    main: FuncName.t; (* The main function of the smart contract *)
   }.
 
-  Definition construct (name : string) (functions : list CFGFunD.t) (main: FuncID.t) : t :=
+  Definition construct (name : string) (functions : list CFGFunD.t) (main: FuncName.t) : t :=
     {| name := name; functions := functions; main := main |}.
 
-  Definition get_func (sc: t) (func_id: FuncID.t) : option CFGFunD.t :=
-    match List.find (fun f => FuncID.eqb f.(CFGFunD.name) func_id) sc.(functions) with
+  Definition get_func (sc: t) (fname: FuncName.t) : option CFGFunD.t :=
+    match List.find (fun f => FuncName.eqb f.(CFGFunD.name) fname) sc.(functions) with
     | Some func => Some func
     | None => None
     end.
 
-  Definition get_block (sc: t) (func_id: FuncID.t) (bid: BlockID.t) : option BlockD.t :=
-    match get_func sc func_id with
+  Definition get_block (sc: t) (fname: FuncName.t) (bid: BlockID.t) : option BlockD.t :=
+    match get_func sc fname with
     | Some func => CFGFunD.get_block func bid
     | None => None
     end.
 
-  Definition get_instr (sc: t) (func_id: FuncID.t) (bid: BlockID.t) (index: nat) : option InstrD.t :=
-    match get_block sc func_id bid with
+  Definition get_instr (sc: t) (fname: FuncName.t) (bid: BlockID.t) (index: nat) : option InstrD.t :=
+    match get_block sc fname bid with
     | Some block =>
         List.nth_error block.(BlockD.instructions) index 
     | None => None
     end.
 
-  Definition get_entry_bid (sc: t) (func_id: FuncID.t) : option BlockID.t :=
-    match get_func sc func_id with
+  Definition get_entry_bid (sc: t) (fname: FuncName.t) : option BlockID.t :=
+    match get_func sc fname with
     | Some func => Some func.(CFGFunD.entry_bid)
     | None => None
     end.
@@ -460,15 +460,15 @@ Module CFGProg (D: DIALECT).
     forall f,
       In f (functions p) -> CFGFunD.valid_function f.
 
-  Definition valid_smart_contract (p: t) :=
+  Definition valid_program (p: t) :=
     all_function_name_are_different p /\ all_function_are_valid p.
 
   Lemma valid_p_vs_get_block:
     forall p,
-      valid_smart_contract p ->
-      forall func_id bid b,
-        get_block p func_id bid = Some b <->
-          exists f, In f p.(functions)  /\ In b f.(CFGFunD.blocks) /\ FuncID.eqb f.(CFGFunD.name) func_id = true /\ BlockID.eqb b.(BlockD.bid) bid = true.
+      valid_program p ->
+      forall fname bid b,
+        get_block p fname bid = Some b <->
+          exists f, In f p.(functions)  /\ In b f.(CFGFunD.blocks) /\ FuncName.eqb f.(CFGFunD.name) fname = true /\ BlockID.eqb b.(BlockD.bid) bid = true.
   Proof.
     intros p H_valid_p.
     intros f bid b.
@@ -477,7 +477,7 @@ Module CFGProg (D: DIALECT).
       unfold get_block in H_get_block.
       destruct (get_func p f) as [func|] eqn:E_get_func; try discriminate.
       unfold get_func in E_get_func.
-      destruct (find (fun f0 : CFGFunD.t => FuncID.eqb (CFGFunD.name f0) f)) as [func'|] eqn:E_find_func'; try discriminate.
+      destruct (find (fun f0 : CFGFunD.t => FuncName.eqb (CFGFunD.name f0) f)) as [func'|] eqn:E_find_func'; try discriminate.
       injection E_get_func as H_func'_eq_func.
       subst func'.
 
@@ -487,7 +487,7 @@ Module CFGProg (D: DIALECT).
       injection H_get_block as H_b'_eq_b.
       subst b'.
 
-      pose proof (find_some (fun f0 : CFGFunD.t => FuncID.eqb (CFGFunD.name f0) f) (functions p) E_find_func' ) as [H_in_func_pfs H_func_name_eqb_f].
+      pose proof (find_some (fun f0 : CFGFunD.t => FuncName.eqb (CFGFunD.name f0) f) (functions p) E_find_func' ) as [H_in_func_pfs H_func_name_eqb_f].
       
       pose proof (find_some (fun b : CFGFunD.BlockD.t => BlockID.eqb (CFGFunD.BlockD.bid b) bid) (CFGFunD.blocks func) E_find_b') as [H_in_b_funcbs H_b_bid_eqb_bid].
 
@@ -501,23 +501,23 @@ Module CFGProg (D: DIALECT).
     - intros H_exists_f0.
       destruct H_exists_f0 as [f0 [In_f0_pfs [In_b_f0bs [H_f0_name_eqb_f H_b_bid_eqb_b]]]].
 
-      apply FuncID.eqb_eq in H_f0_name_eqb_f.
+      apply FuncName.eqb_eq in H_f0_name_eqb_f.
       subst f.
 
       apply BlockID.eqb_eq in H_b_bid_eqb_b.
       subst bid.
       
       
-      unfold valid_smart_contract in H_valid_p.
-      destruct H_valid_p as [H_all_func_id_diff H_all_f_valid].
+      unfold valid_program in H_valid_p.
+      destruct H_valid_p as [H_all_fname_diff H_all_f_valid].
 
       
-      unfold all_function_name_are_different in H_all_func_id_diff.
+      unfold all_function_name_are_different in H_all_fname_diff.
       unfold all_function_are_valid in H_all_f_valid.
 
       unfold get_block.
 
-      pose proof (H_all_func_id_diff f0) as H_get_func_f0.
+      pose proof (H_all_fname_diff f0) as H_get_func_f0.
       pose proof (H_all_f_valid f0 In_f0_pfs) as H_f0_valid.
       unfold CFGFunD.valid_function in H_f0_valid.
 

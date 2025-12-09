@@ -47,7 +47,7 @@ Module SmallStep (D: DIALECT).
   Definition get_next_instr (s: StateD.t) (p: CFGProgD.t) : option InstrD.t :=
     match s.(call_stack) with
     | nil => None
-    | sf :: _ => CFGProgD.get_instr p sf.(func_id) sf.(curr_bid) sf.(pc)
+    | sf :: _ => CFGProgD.get_instr p sf.(fname) sf.(curr_bid) sf.(pc)
     end.
   
 
@@ -62,7 +62,7 @@ Module SmallStep (D: DIALECT).
         error s "Mismatch length in output variables and input values"
     | Some locals' =>
         let sf' := {|
-                    func_id := sf.(func_id);
+                    fname := sf.(fname);
                     locals := locals';
                     curr_bid := sf.(curr_bid);  
                     pc := sf.(pc)+1
@@ -83,15 +83,15 @@ Module SmallStep (D: DIALECT).
     let '(out_vals, dialect_state', status') := D.execute_opcode s.(dialect_state) opcode in_vals in
     let s' :=  execute_assignment p out_vals out_vars sf rsf s in (* It is like execute assignment *)
     let s'' := set_dialect_state s' dialect_state' in             (* and then update dialect_state *)
-    let s''' := set_status s' status' in                          (* and status *)
+    let s''' := set_status s'' status' in                          (* and status *)
     s'''.
 
-  (* Call a function [func_id] using [in_vals] as input and [out_vars]
+  (* Call a function [fname] using [in_vals] as input and [out_vars]
     as output, within the current stack frame [sf::rsf]. Anything else
     needed, apart from the call stack, should be taken from state
     [s]. The call stack in [s] is actually [sf::rsf] *)
-  Definition execute_func (p: CFGProgD.t) (func_id: FuncID.t) (in_vals: list D.value_t) (out_vars: list VarID.t) (sf: StackFrameD.t) (rsf: list StackFrameD.t) (s: StateD.t): StateD.t :=
-    match CFGProgD.get_func p func_id with
+  Definition execute_func (p: CFGProgD.t) (fname: FuncName.t) (in_vals: list D.value_t) (out_vars: list VarID.t) (sf: StackFrameD.t) (rsf: list StackFrameD.t) (s: StateD.t): StateD.t :=
+    match CFGProgD.get_func p fname with
     | None => error s "Function not found in call"
     | Some func =>
         let entry_bid := func.(entry_bid) in
@@ -99,7 +99,7 @@ Module SmallStep (D: DIALECT).
         | None => error s "Failed to create initial variable assignment" 
         | Some locals' =>
             let sf' := {|
-                        func_id := sf.(StackFrameD.func_id);
+                        fname := sf.(StackFrameD.fname);
                         locals := locals';
                         curr_bid := entry_bid;
                         pc := 0
@@ -124,7 +124,7 @@ Module SmallStep (D: DIALECT).
         match instr.(op) with
         | inr ASSIGN => execute_assignment p in_vals out_vars sf rsf s
         | inl (inr opcode) => execute_opcode p opcode in_vals out_vars sf rsf s
-        | inl (inl func_id) => execute_func p func_id in_vals out_vars sf rsf s
+        | inl (inl fname) => execute_func p fname in_vals out_vars sf rsf s
         end
     end.
 
@@ -136,14 +136,14 @@ Module SmallStep (D: DIALECT).
     end.
 
   Definition handle_jump (p: CFGProgD.t) (bid: BlockID.t) (sf: StackFrameD.t) (rsf: list StackFrameD.t) (s: StateD.t): StateD.t :=
-    match CFGProgD.get_block p sf.(func_id) bid with
+    match CFGProgD.get_block p sf.(fname) bid with
     | None => error s  "Target block not found in the smart contract"
     | Some next_b =>
         let phi_renamings := next_b.(phi_function) sf.(curr_bid) in   (* This is the phi-function of next_b that refers to the current block *)
         match (apply_renamings phi_renamings sf) with
         | Some locals' =>                    
             let sf' := {| 
-                        func_id := sf.(func_id);
+                        fname := sf.(fname);
                         locals := locals';
                         curr_bid := bid; 
                         pc := 0; 
@@ -170,7 +170,7 @@ Module SmallStep (D: DIALECT).
     match rsf with
     | nil => error s "Missing return stack frame"
     | sf' :: rsf' =>
-        match CFGProgD.get_block p sf'.(func_id) sf'.(curr_bid) with
+        match CFGProgD.get_block p sf'.(fname) sf'.(curr_bid) with
         | None => error s "Failed to calling block"
         | Some b =>
             match List.nth_error b.(instructions) sf.(StackFrameD.pc) with
@@ -192,7 +192,7 @@ Module SmallStep (D: DIALECT).
     match s.(call_stack) with
     | nil => error s "No current stack frame" (* call stack empty -> error *)
     | sf :: rsf => (* call stack in not empty *)
-        match CFGProgD.get_block p sf.(func_id) sf.(curr_bid)  with
+        match CFGProgD.get_block p sf.(fname) sf.(curr_bid)  with
         | None => error s "Current block not found"
         | Some b =>
             match b.(exit_info) with

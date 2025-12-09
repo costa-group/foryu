@@ -116,11 +116,31 @@ Module Liveness (D: DIALECT).
   (* The following types are used to define the result of a live-variable analysis *)
   Definition block_live_info_t := nat -> option VarSet.t.
   Definition func_live_info_t := BlockID.t -> option (VarSet.t * VarSet.t).
-  Definition prog_live_info_t := FuncID.t -> option func_live_info_t.
+  Definition prog_live_info_t := FuncName.t -> option func_live_info_t.
 
+
+  (*
+    Liveness analysis is typically based on solving the following equations:
+
+
+      liveout(b) = 1. if b is a terminal block, then retvars(b)  
+                   2.  if b has successor b1...bn, the \cup inv-phi_{bi}(b,\livein(bi))
+
+      livein(b) =  propbkw(instrs(b), liveout(b) cup condvars(b))
+
+      propbkw(l,s) = if l=i::l then propbkw(l',(s \ writeset(i)) \cup readset(i)) else s
+
+   So we bascally check that the given result f a liveness analysis from a
+   solutiopn for these equations.
+
+   Later we also prove that such a solution implies some semantical property,
+   givining semantical menaing to liveness.
+
+  *)
+  
   (* Checks that the live-in set of a block [b] is sound, meaning that
   it is equivalent to propagating back its live-out set *)
-  Definition check_live_in (r: prog_live_info_t) (f: FuncID.t) (b: BlockD.t) : bool :=
+  Definition check_live_in (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
     match (r f) with
     | None => false
     | Some f_info =>
@@ -133,7 +153,7 @@ Module Liveness (D: DIALECT).
   
   (* Checks that the live-out set of a block [b] is sound. It handle
   several cases depending on the kid of block *)
-  Definition check_live_out (p: CFGProgD.t) (r: prog_live_info_t) (f: FuncID.t) (b: BlockD.t) : bool :=
+  Definition check_live_out (p: CFGProgD.t) (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
     match (r f) with
     | None => false
     | Some f_info =>
@@ -191,16 +211,16 @@ Module Liveness (D: DIALECT).
 
   (* Checks that the liveness information of [b] is sound, i.e., that
   both live-in and live-out are sound *)
-  Definition check_live (p: CFGProgD.t) (r: prog_live_info_t) (f: FuncID.t) (b: BlockD.t) : bool :=
+  Definition check_live (p: CFGProgD.t) (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
     if (check_live_in r f b) then check_live_out p r f b else false.
 
 
   (* Checks that liveness information of all blocks in [bs] *)
-  Fixpoint check_blocks (bs: list BlockD.t) (func_id: FuncID.t) (p: CFGProgD.t) (r: prog_live_info_t) :=
+  Fixpoint check_blocks (bs: list BlockD.t) (fname: FuncName.t) (p: CFGProgD.t) (r: prog_live_info_t) :=
     match bs with
     | nil => true
-    | b::bs' => if (check_live p r func_id b)
-                then check_blocks bs' func_id p r
+    | b::bs' => if (check_live p r fname b)
+                then check_blocks bs' fname p r
                 else false
     end.
 
@@ -215,7 +235,7 @@ Module Liveness (D: DIALECT).
     end.
 
   (* Checks that liveness information of all blocks of all functions [fs] of the program [p] *)
-  Definition check_cfgprog (p: CFGProgD.t) (r: prog_live_info_t) :=
+  Definition check_program (p: CFGProgD.t) (r: prog_live_info_t) :=
     check_functions p.(functions) p r.
 
 

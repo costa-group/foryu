@@ -33,10 +33,10 @@ Module Misc.
       exact H_proof.
   Qed.
 
-    Section ListInDecidable.
+  Section ListInDecidable.
     Variable A : Type.
     Hypothesis eq_dec : forall x y: A, sumbool (x=y) (x<>y).
-
+    
     Lemma prove_in_decidable : forall (x : A) (l' : list A), 
         Decidable.decidable (In x l').
     Proof.
@@ -48,43 +48,52 @@ Module Misc.
     Qed.
     End ListInDecidable.
   
-    Section NoDupBool.
-      Variable A : Type.
-      Variable eqb : A -> A -> bool.
-      Hypothesis eqb_eq : forall x y, eqb x y = true <-> x = y.
-      Hypothesis eq_dec : forall x y: A, sumbool (x=y) (x<>y).
-      
-      Fixpoint nodupb (l : list A) : bool :=
-        match l with
-        | [] => true
-        | x :: xs => if existsb (eqb x) xs then false else nodupb xs
-        end.
-      
+  Section NoDupBool.
+    Variable A : Type.
+    Variable eqb : A -> A -> bool.
+    Hypothesis eqb_eq : forall x y, eqb x y = true <-> x = y.
+    Hypothesis eq_dec : forall x y: A, sumbool (x=y) (x<>y).
+
+    Fixpoint nodupb (l : list A) : bool :=
+      match l with
+      | [] => true
+      | x :: xs => if existsb (eqb x) xs then false else nodupb xs
+      end.
     
-      Lemma nodupb_spec : forall l, Is_true (nodupb l) -> NoDup l.
-      Proof.
-        induction l as [|x l' IHl'].
-        - simpl. intro. apply NoDup_nil.
-        - simpl.
-          destruct (existsb (eqb x) l') eqn:E_existsb.
-          + intros H_contra.
-            unfold Is_true in H_contra.
+    
+    Lemma nodupb_spec : forall l, Is_true (nodupb l) -> NoDup l.
+    Proof.
+      induction l as [|x l' IHl'].
+      - simpl. intro. apply NoDup_nil.
+      - simpl.
+        destruct (existsb (eqb x) l') eqn:E_existsb.
+        + intros H_contra.
+          unfold Is_true in H_contra.
+          contradiction.
+        + rewrite <- not_true_iff_false in E_existsb.        
+          rewrite (existsb_exists (eqb x) l') in E_existsb.
+          rewrite not_exists_iff_forall_not in E_existsb.
+          pose proof (E_existsb x) as E_existsb.
+          apply Decidable.not_and in E_existsb.
+          destruct E_existsb as [H_not_In_x_l' | H_not_eqb_x_x ].
+          * intros H_nodupb_l'.
+            pose proof (IHl' H_nodupb_l') as H_NoDup_l'.
+            apply NoDup_cons; assumption.
+          * rewrite eqb_eq in H_not_eqb_x_x.
             contradiction.
-          + rewrite <- not_true_iff_false in E_existsb.        
-            rewrite (existsb_exists (eqb x) l') in E_existsb.
-            rewrite not_exists_iff_forall_not in E_existsb.
-            pose proof (E_existsb x) as E_existsb.
-            apply Decidable.not_and in E_existsb.
-            destruct E_existsb as [H_not_In_x_l' | H_not_eqb_x_x ].
-            * intros H_nodupb_l'.
-              pose proof (IHl' H_nodupb_l') as H_NoDup_l'.
-              apply NoDup_cons; assumption.
-            * rewrite eqb_eq in H_not_eqb_x_x.
-              contradiction.
-            * apply prove_in_decidable.
-              apply eq_dec.
-      Qed.
-    End NoDupBool.
+          * apply prove_in_decidable.
+            apply eq_dec.
+    Qed.
+  End NoDupBool.
+
+  (* equal lists have equal length *)
+  Lemma len_eq:
+    forall {A: Type} (x y : list A), x = y -> length x = length y.
+  Proof.
+    intros.
+    rewrite H.
+    reflexivity.
+  Qed.
 
 
 End Misc.
