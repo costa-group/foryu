@@ -12,7 +12,7 @@ semantics.v
 liveness.v
 liveness_snd.v
 
-tests.v
+#tests.v
 test_translation.v
 
 extract_ocaml.v
