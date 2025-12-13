@@ -12,32 +12,50 @@ Require Import stdpp.prelude.
 Require Import stdpp.relations. (* This is where nsteps lives *)
 From Coq Require Import Strings.Ascii.
 
+Require Import Coq.MSets.MSetAVL.
+Require Import Coq.Structures.OrdersEx.      (* Provides New Keys *)
 
 Module Liveness (D: DIALECT).
 
   Module SmallStepD := SmallStep(D).
   Module StateD := SmallStepD.StateD.
-  Module SmartContractD := SmallStepD.SmartContractD.
-  Module FunctionD := SmartContractD.FunctionD.
-  Module BlockD := SmartContractD.BlockD.
-  Module ExitInfoD := BlockD.ExitInfoD.
-  Module InstructionD := BlockD.InstructionD.
-  Module YULVariableMapD := BlockD.PhiInfoD.YULVariableMapD.
-  Module SimpleExprD := BlockD.PhiInfoD.YULVariableMapD.SimpleExprD.
   Module CallStackD := StateD.CallStackD.
   Module StackFrameD := CallStackD.StackFrameD.
-  Module VariableAssignmentD := StackFrameD.VariableAssignmentD.
+  Module LocalsD := StackFrameD.LocalsD.
+  Module CFGProgD := CFGProg(D).
+  Module CFGFunD := CFGProgD.CFGFunD.
+  Module BlockD := CFGProgD.BlockD.
+  Module PhiInfoD := BlockD.PhiInfoD.
+  Module InstrD := BlockD.InstrD.
+  Module ExitInfoD := BlockD.ExitInfoD.
+  Module SimpleExprD := ExitInfoD.SimpleExprD.
+  
+  Import SmallStepD.
+  Import StateD.
+  Import CallStackD.
+  Import StackFrameD.
+  Import LocalsD.
+  Import CFGProgD.
+  Import CFGFunD.
+  Import BlockD.
+  Import PhiInfoD.
+  Import InstrD.
+  Import ExitInfoD.
+  Import SimpleExprD.
+  
+  (* This module defines a set of variables. *)
+  Module VarSet := MSetAVL.Make(VarID.VarID_as_OT).
   
   (* convert a list to a set *)
-  Fixpoint list_to_set (l : list nat) : VarSet.t :=
+  Fixpoint list_to_set (l : list VarID.t) : VarSet.t :=
     match l with
     | nil => VarSet.empty
     | x::xs => VarSet.add x (list_to_set xs)
     end.
-    
+  
   (* extracts a list of variables from a list of simple expressions (a
-    simple expression is either a variable or of type D.t *)
-  Fixpoint extract_yul_vars (l : list SimpleExprD.t) : list nat :=
+     simple expression is either a variable or of type D.t *)
+  Fixpoint extract_yul_vars (l : list SimpleExprD.t) : list VarID.t :=
     match l with
     | nil => nil
     | x::xs =>
@@ -47,39 +65,30 @@ Module Liveness (D: DIALECT).
         | inr _ => xs_vs
         end
     end.
-
-
-  (*
-  (* applies the inverse of the phi function 'l' (pairs of variable
-  and simple expressions) to the set of expressions 's'.  *)
-  Fixpoint apply_inv_phi (l : YULVariableMapD.t) (s: VarSet.t) :=
-    match l with
-    | nil => s
-    | (dest,orig)::vs =>
-        let s' := apply_inv_phi vs s in
-        match orig with
-        | inl var =>
-            if (VarSet.mem dest s') 
-            then VarSet.add var (VarSet.remove dest s')
-            else s'
-        | inr _ =>
-            VarSet.remove dest s'
-        end
+  
+  (* Applies the inverse of the phi function. It is like applying the assignment backwards. *)
+  Definition apply_inv_phi (renamings: InBlockPhiInfo) (s: VarSet.t) :=
+    match renamings with
+    | in_phi_info out_vars in_sexprs _ _ => 
+        let in_set := list_to_set (extract_yul_vars in_sexprs) in
+        let out_set := list_to_set out_vars in
+        (VarSet.union (VarSet.diff s out_set) in_set)
     end.
-   *)
   
-  Definition apply_inv_phi (l : YULVariableMapD.t) (s: VarSet.t) :=
-    let inset := list_to_set (extract_yul_vars (SmallStepD.get_renaming_sexpr l)) in
-    let outset := list_to_set (SmallStepD.get_renaming_var l) in
-    (VarSet.union (VarSet.diff s outset) inset).
   
-  Definition prop_live_set_bkw_instr (i: InstructionD.t) (s: VarSet.t) : VarSet.t :=
-    let inset := list_to_set (extract_yul_vars i.(InstructionD.input)) in
-    let outset := list_to_set i.(InstructionD.output) in
-    (VarSet.union (VarSet.diff s outset) inset).
+  (* Propages liveness information one step backwards for an instruction *)
+  Definition prop_live_set_bkw_instr (i: InstrD.t) (s: VarSet.t) : VarSet.t :=
+    let in_set := list_to_set (extract_yul_vars i.(input)) in
+      let out_set := list_to_set i.(output) in
+      (VarSet.union (VarSet.diff s out_set) in_set).
+  
 
-    
-  Fixpoint prop_live_set_bkw_aux (n: nat) (l_rev: list InstructionD.t) (s: VarSet.t) : VarSet.t :=
+  
+  (* Propagates the liveness information through the first in
+  instructions in [l_rev]. Note that [l_rev] is supposed to be the
+  reverse of an actual list of instructions -- since the propagation
+  starts from the end*)
+  Fixpoint prop_live_set_bkw_aux (n: nat) (l_rev: list InstrD.t) (s: VarSet.t) : VarSet.t :=
     match n with
     | 0%nat => s
     | S n' =>
@@ -90,10 +99,14 @@ Module Liveness (D: DIALECT).
         end
     end.
 
-
-  Definition prop_live_set_bkw (l: list InstructionD.t) (s: VarSet.t) : VarSet.t :=    
+  
+  (* Propagates the liveness information through the list of
+  instructions in [l], starting from the end. *)
+  Definition prop_live_set_bkw (l: list InstrD.t) (s: VarSet.t) : VarSet.t :=    
     prop_live_set_bkw_aux  (length l) (rev l) s.
 
+  (* Given a block [b], it adds the conditional variable of the block
+  is a conditional jump *)
   Definition add_jump_var_if_applicable (b: BlockD.t) (s: VarSet.t) :=
     match b.(BlockD.exit_info) with
     | ExitInfoD.ConditionalJump cond_var _ _ => VarSet.add cond_var s
@@ -102,54 +115,32 @@ Module Liveness (D: DIALECT).
 
   (* The following types are used to define the result of a live-variable analysis *)
   Definition block_live_info_t := nat -> option VarSet.t.
-  Definition fun_live_info_t := BlockID.t -> option (VarSet.t * VarSet.t).
-  Definition sc_live_info_t := FunctionName.t -> option fun_live_info_t.
+  Definition func_live_info_t := BlockID.t -> option (VarSet.t * VarSet.t).
+  Definition prog_live_info_t := FuncName.t -> option func_live_info_t.
 
-
-  (* All block have live-variable results in r *)
-  Definition snd_res_for_all_blocks (p : SmartContractD.t)  (r: sc_live_info_t) : Prop :=
-    forall bid f b,
-      SmartContractD.get_block p f bid = Some b -> 
-      exists bid_res fr,
-        r f = Some fr /\ fr bid = bid_res.
 
   (*
-     This defines a proposition stating that the live-variable
-     information for p/f/bid in 'r' exists, and it is sound.
+    Liveness analysis is typically based on solving the following equations:
 
-     Soundness here means that some relations between the in/out
-     information of each block holds. It is pretty much follows what
-     is defined in the definition of live_in/live_out/etc. But we do
-     not use those defintions yet, they will be used lated to prove
-     that if 'r' is sound of all blocks, then live_in/live_out holds
-     for all blocks etc.
-   *)
-  Definition snd_block_out_info (p : SmartContractD.t) (r: sc_live_info_t) (f: FunctionName.t) (b: BlockD.t) : Prop :=
-    exists f_info b_in_info b_out_info,
-      (r f) = Some f_info /\ (* The live-variable information of the function exists *)
-        f_info b.(BlockD.bid) = Some (b_in_info,b_out_info) /\ (* The live-variable information of the block exists *)
-        match b.(BlockD.exit_info) with
-        | ExitInfoD.Terminated =>
-            VarSet.Equal b_out_info  VarSet.empty 
-        | ExitInfoD.ReturnBlock rs => 
-            VarSet.Equal b_out_info (list_to_set (extract_yul_vars rs))
-        | ExitInfoD.Jump next_bid =>
-            exists next_b next_b_in_info next_b_out_info,
-            SmartContractD.get_block p f next_bid = Some next_b /\ 
-              f_info next_bid = Some (next_b_in_info,next_b_out_info) /\
-              VarSet.Equal b_out_info (apply_inv_phi (BlockD.phi_function next_b b.(BlockD.bid)) next_b_in_info)
-        | ExitInfoD.ConditionalJump cond_var next_bid_if_true next_bid_if_false => 
-            exists next_b_if_true next_b_ift_in_info next_b_ift_out_info next_b_if_false next_b_iff_in_info next_b_iff_out_info,
-            SmartContractD.get_block p f next_bid_if_true = Some next_b_if_true /\ 
-            SmartContractD.get_block p f next_bid_if_false = Some next_b_if_false /\ 
-              f_info next_bid_if_true = Some (next_b_ift_in_info,next_b_ift_out_info) /\
-              f_info next_bid_if_false = Some (next_b_iff_in_info,next_b_iff_out_info) /\
-              VarSet.Equal b_out_info (VarSet.union
-                                         (apply_inv_phi (BlockD.phi_function next_b_if_true b.(BlockD.bid)) next_b_ift_in_info)
-                                         (apply_inv_phi (BlockD.phi_function next_b_if_false b.(BlockD.bid)) next_b_iff_in_info))
-        end.
- 
-  Definition check_live_in (r: sc_live_info_t) (f: FunctionName.t) (b: BlockD.t) : bool :=
+
+      liveout(b) = 1. if b is a terminal block, then retvars(b)  
+                   2.  if b has successor b1...bn, the \cup inv-phi_{bi}(b,\livein(bi))
+
+      livein(b) =  propbkw(instrs(b), liveout(b) cup condvars(b))
+
+      propbkw(l,s) = if l=i::l then propbkw(l',(s \ writeset(i)) \cup readset(i)) else s
+
+   So we bascally check that the given result f a liveness analysis from a
+   solutiopn for these equations.
+
+   Later we also prove that such a solution implies some semantical property,
+   givining semantical menaing to liveness.
+
+  *)
+  
+  (* Checks that the live-in set of a block [b] is sound, meaning that
+  it is equivalent to propagating back its live-out set *)
+  Definition check_live_in (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
     match (r f) with
     | None => false
     | Some f_info =>
@@ -160,22 +151,30 @@ Module Liveness (D: DIALECT).
       end
     end.
   
-
-  
-  Definition check_live_out (p: SmartContractD.t) (r: sc_live_info_t) (f: FunctionName.t) (b: BlockD.t) : bool :=
+  (* Checks that the live-out set of a block [b] is sound. It handle
+  several cases depending on the kid of block *)
+  Definition check_live_out (p: CFGProgD.t) (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
     match (r f) with
     | None => false
     | Some f_info =>
-        match (f_info b.(BlockD.bid)) with
+        match (f_info b.(bid)) with
         | None => false
         | Some (b_in_info,b_out_info) =>
-            match b.(BlockD.exit_info) with
-            | ExitInfoD.Terminated =>
-                VarSet.equal b_out_info VarSet.empty 
-            | ExitInfoD.ReturnBlock rs => 
-                VarSet.equal b_out_info (list_to_set (extract_yul_vars rs))
+            match b.(exit_info) with
+              (* Terminate block has an empty live-out set *)
+            | ExitInfoD.Terminate =>
+                VarSet.equal b_out_info VarSet.empty
+                             
+              (* The live-out set of a return block is the set of
+              variables in its returned expressions *)
+            | ExitInfoD.ReturnBlock ret_sexprs => 
+                VarSet.equal b_out_info (list_to_set (extract_yul_vars ret_sexprs))
+
+            (* The live-out set of a jump blocks is obtained from the
+            live-in of the next block, after applying the inverse of
+            the phi-function *)
             | ExitInfoD.Jump next_bid =>
-                match (SmartContractD.get_block p f next_bid) with
+                match (CFGProgD.get_block p f next_bid) with
                 | None => false
                 | Some next_b =>
                     match (f_info next_bid) with
@@ -184,11 +183,13 @@ Module Liveness (D: DIALECT).
                         VarSet.equal b_out_info (apply_inv_phi (BlockD.phi_function next_b b.(BlockD.bid)) next_b_in_info)
                     end
                 end
+                  
+            (* Like the case of jump, but takes union for all successors *)
             | ExitInfoD.ConditionalJump cond_var next_bid_if_true next_bid_if_false =>
-                match (SmartContractD.get_block p f next_bid_if_true) with
+                match (CFGProgD.get_block p f next_bid_if_true) with
                 | None => false
                 | Some next_b_if_true =>
-                    match (SmartContractD.get_block p f next_bid_if_false) with
+                    match (CFGProgD.get_block p f next_bid_if_false) with
                     | None => false
                     | Some next_b_if_false =>
                         match (f_info next_bid_if_true) with
@@ -208,12 +209,14 @@ Module Liveness (D: DIALECT).
         end
     end.
 
-
-  Definition check_live (p: SmartContractD.t) (r: sc_live_info_t) (f: FunctionName.t) (b: BlockD.t) : bool :=
+  (* Checks that the liveness information of [b] is sound, i.e., that
+  both live-in and live-out are sound *)
+  Definition check_live (p: CFGProgD.t) (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
     if (check_live_in r f b) then check_live_out p r f b else false.
 
 
-  Fixpoint check_blocks (bs: list BlockD.t) (fname: FunctionName.t) (p: SmartContractD.t) (r: sc_live_info_t) :=
+  (* Checks that liveness information of all blocks in [bs] *)
+  Fixpoint check_blocks (bs: list BlockD.t) (fname: FuncName.t) (p: CFGProgD.t) (r: prog_live_info_t) :=
     match bs with
     | nil => true
     | b::bs' => if (check_live p r fname b)
@@ -222,174 +225,18 @@ Module Liveness (D: DIALECT).
     end.
 
 
-  Fixpoint check_functions (fs: list FunctionD.t) (p: SmartContractD.t) (r: sc_live_info_t) :=
+  (* Checks  liveness information of all blocks of functions [fs] *)
+  Fixpoint check_functions (fs: list CFGFunD.t) (p: CFGProgD.t) (r: prog_live_info_t) :=
     match fs with
     | nil => true
-    | f::fs' => if (check_blocks f.(FunctionD.blocks) f.(FunctionD.name) p r)
+    | f::fs' => if (check_blocks f.(blocks) f.(name) p r)
                 then check_functions fs' p r
                 else false
     end.
 
-  Definition check_smart_contract (p: SmartContractD.t) (r: sc_live_info_t) :=
-    check_functions p.(SmartContractD.functions) p r.
-
-
-  (* A version that uses subset instead of equal *)
-
-  Definition check_live_in_subset (r: sc_live_info_t) (f: FunctionName.t) (b: BlockD.t) : bool :=
-    match (r f) with
-    | None => false
-    | Some f_info =>
-        match f_info b.(BlockD.bid) with
-        | None => false
-        | Some (b_in_info,b_out_info) =>
-            VarSet.subset (prop_live_set_bkw b.(BlockD.instructions) (add_jump_var_if_applicable b b_out_info)) b_in_info 
-        end
-    end.
-
-  Definition check_live_out_subset (p: SmartContractD.t) (r: sc_live_info_t) (f: FunctionName.t) (b: BlockD.t) : bool :=
-    match (r f) with
-    | None => false
-    | Some f_info =>
-        match (f_info b.(BlockD.bid)) with
-        | None => false
-        | Some (b_in_info,b_out_info) =>
-            match b.(BlockD.exit_info) with
-            | ExitInfoD.Terminated =>
-                VarSet.subset VarSet.empty b_out_info
-            | ExitInfoD.ReturnBlock rs => 
-                VarSet.subset (list_to_set (extract_yul_vars rs)) b_out_info
-            | ExitInfoD.Jump next_bid =>
-                match (SmartContractD.get_block p f next_bid) with
-                | None => false
-                | Some next_b =>
-                    match (f_info next_bid) with
-                    | None => false
-                    | Some (next_b_in_info,next_b_out_info) =>
-                        VarSet.subset (apply_inv_phi (BlockD.phi_function next_b b.(BlockD.bid)) next_b_in_info) b_out_info
-                    end
-                end
-            | ExitInfoD.ConditionalJump cond_var next_bid_if_true next_bid_if_false =>
-                match (SmartContractD.get_block p f next_bid_if_true) with
-                | None => false
-                | Some next_b_if_true =>
-                    match (SmartContractD.get_block p f next_bid_if_false) with
-                    | None => false
-                    | Some next_b_if_false =>
-                        match (f_info next_bid_if_true) with
-                        | None => false
-                        | Some (next_b_ift_in_info,next_b_ift_out_info) =>
-                            match (f_info next_bid_if_false) with
-                            | None => false
-                            | Some (next_b_iff_in_info,next_b_iff_out_info) =>
-                                VarSet.subset (VarSet.union
-                                                 (apply_inv_phi (BlockD.phi_function next_b_if_true b.(BlockD.bid)) next_b_ift_in_info)
-                                                 (apply_inv_phi (BlockD.phi_function next_b_if_false b.(BlockD.bid)) next_b_iff_in_info)) b_out_info 
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end.
-
-  
-  Definition check_live_subset (p: SmartContractD.t) (r: sc_live_info_t) (f: FunctionName.t) (b: BlockD.t) : bool :=
-    if (check_live_in_subset r f b) then check_live_out_subset p r f b else false.
-
-  Fixpoint check_blocks_subset  (n: nat) (bs: list BlockD.t) (fname: FunctionName.t) (p: SmartContractD.t) (r: sc_live_info_t) : nat * bool :=
-    match n with
-    | 0 => (0,false)
-    | S n' =>
-        match bs with
-        | nil => (n',true)
-        | b::bs' => if (check_live_subset p r fname b)
-                    then check_blocks_subset n' bs' fname p r
-                    else (0,false)
-        end
-    end.
-
-
-  Fixpoint check_functions_subset (n: nat) (fs: list FunctionD.t) (p: SmartContractD.t) (r: sc_live_info_t) :=
-    match n with
-    | 0 => false
-    | S n' =>
-        match fs with
-        | nil => true
-        | f::fs' => match (check_blocks_subset n' f.(FunctionD.blocks) f.(FunctionD.name) p r) with
-                    | (_,false) => false
-                    | (n'',true) => check_functions_subset n'' fs' p r
-                    end
-        end
-    end.
-
-    Fixpoint list_of_string (s : string) : list ascii :=
-  match s with
-  | EmptyString => []
-  | String c s => c :: (list_of_string s)
-  end.
-
-
-  Fixpoint parseDecNumber' (x : list ascii) (acc : nat) :=
-  match x with
-  | [] => Some acc
-  | d::ds => let n := nat_of_ascii d in
-             if (andb (Nat.leb 48 n) (Nat.leb n 57)) then
-               parseDecNumber' ds (10*acc+(n-48))
-             else None
-  end.
-
-  Definition parseDecNumber (x : string) : option nat :=
-  parseDecNumber' (list_of_string x) 0.
-
-  
-  Definition check_smart_contract_subset (sn: string) (p: SmartContractD.t) (r: sc_live_info_t) :=
-    match (parseDecNumber sn) with
-    | None => false
-    | Some n => check_functions_subset n p.(SmartContractD.functions) p r
-    end.
-  (* end of version with subset *)
-  
-  Fixpoint nodupb {A : Type} (eqb : A -> A -> bool) (l : list A) : bool :=
-    match l with
-    | nil => true
-    | h :: t => (negb (existsb (eqb h) t)) && (nodupb eqb t)
-    end.
-
-  Lemma nodup_NoDup {A: Type}:
-    forall (eqb: A -> A -> bool),
-      (forall a b, eqb a b = true -> a = b) ->
-      forall l,
-        nodupb eqb l = true -> NoDup l.
-  Proof.
-    intros eqb H_eqb_eq.
-    induction l as [|a l'].
-    - intros.
-      apply NoDup_nil_2.
-    - intros H_nodupb.
-      apply NoDup_cons_2.
-      + simpl in H_nodupb.
-        apply andb_prop in H_nodupb.
-        destruct H_nodupb as [H_nodupb_l H_nodupb_r].
-        rewrite negb_true_iff in H_nodupb_l.
-        pose proof (@existb_True A).
-        Admitted.
-  
-  Definition all_block_ids_are_different (f: FunctionD.t): bool :=
-    nodupb (fun b1 b2 => Nat.eqb b1.(BlockD.bid) b2.(BlockD.bid)) f.(FunctionD.blocks).
-
-  Definition check_valid_function (f: FunctionD.t): bool :=
-    all_block_ids_are_different f.
-  
-  Definition check_valid_functions (l: list FunctionD.t): bool :=
-    fold_right (fun b a => a && check_valid_function b) true l.
-
-  Definition check_function_names_are_different (l: list FunctionD.t): bool :=
-    nodupb (fun f1 f2 => String.eqb f1.(FunctionD.name) f2.(FunctionD.name)) l.
-
-  Definition smart_contrac (p: SmartContractD.t): bool :=
-    check_function_names_are_different p.(SmartContractD.functions) &&
-    check_valid_functions p.(SmartContractD.functions).
+  (* Checks that liveness information of all blocks of all functions [fs] of the program [p] *)
+  Definition check_program (p: CFGProgD.t) (r: prog_live_info_t) :=
+    check_functions p.(functions) p r.
 
 
 
