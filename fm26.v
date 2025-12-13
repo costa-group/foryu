@@ -68,7 +68,7 @@ Module FM26 (D: DIALECT).
     same_pp fname bid pc sf1 sf2 /\
       forall v',
         v' <> v -> (* equality is required for variable different from v *)
-        D.eqb (LocalsD.get sf1.(StackFrameD.locals) v') (LocalsD.get sf2.(StackFrameD.locals) v') = true.
+        LocalsD.get sf1.(StackFrameD.locals) v'= LocalsD.get sf2.(StackFrameD.locals) v'.
 
   (* states that two states are equivalent up to the value of
   valriable v in the top frame *)  
@@ -113,7 +113,7 @@ Module FM26 (D: DIALECT).
             CFGProgD.get_block p fname bid = Some b ->
             Liveness_sndD.accessed_vars b pc s ->
             VarSet.In v s ->
-            D.eqb (LocalsD.get sf1.(StackFrameD.locals) v) (LocalsD.get sf2.(StackFrameD.locals) v) = true
+            LocalsD.get sf1.(StackFrameD.locals) v = LocalsD.get sf2.(StackFrameD.locals) v
     | _,_ => False (* one of the call stacks is empty *)
     end.
 
@@ -140,7 +140,7 @@ Module FM26 (D: DIALECT).
     unfold equiv_frames_up_to_v in H_equiv_frames.
     unfold same_pp in H_equiv_frames.
     destruct H_equiv_frames as [ [H_fname_sf1 [H_fname_sf2 [H_bid_sf1 [H_bid_sf2 [H_pc_sf1 H_pc_sf2 ]]]]] H_equiv_varmap].
-      
+     
     repeat split; try assumption.
     - lia.
     - exists [].
@@ -151,6 +151,10 @@ Module FM26 (D: DIALECT).
       repeat split; try (assumption || lia).       
       + rewrite H_call_stack_st1. simpl. lia.
       + rewrite H_call_stack_st1. simpl. lia.
+      + unfold equiv_locals_up_to_v.
+        intros v' H_neq_v'_v.
+        rewrite DialectFactsD.eqb_eq.
+        apply (H_equiv_varmap v' H_neq_v'_v).
   Qed.
   
   (* this lemma states that live_in provides a sound
@@ -184,7 +188,9 @@ Module FM26 (D: DIALECT).
       split.
       + unfold same_pp.       
         repeat split; try (assumption || intuition).
-      + apply H_equiv_varmap.
+      + intros v0 s0 b0 H_get_block H_acc H_In_v0_s0.
+        rewrite <- DialectFactsD.eqb_eq.
+        apply (H_equiv_varmap v0 s0 b0 H_get_block H_acc H_In_v0_s0).
   Qed.
   
   (* This function is the liveness checker, it simple uses the one
