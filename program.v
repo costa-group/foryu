@@ -293,6 +293,12 @@ Module PhiInfo (D: DIALECT).
     exact Heq_anonymous.
   Defined.
 
+  Definition construct_ (l: list (VarID.t * SimpleExprD.t)) :  InBlockPhiInfo :=
+    let vars := List.map (fun p => fst p) l in
+    let exps := List.map (fun p => snd p) l in
+    construct vars exps.
+
+
 End PhiInfo.
 
 
