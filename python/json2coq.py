@@ -143,18 +143,18 @@ class JSON_Smart_Contract:
 
     def translate_block_id(self, block_id):
         """ Extracts the block number from the string 'BlockN' """
-        return int(block_id[5:])
+        return f"{int(block_id[5:])}%N"
 
     def is_var(self, var: str):
         m = re.match(r"^v([0-9]+)$", var)
         return m is not None
 
     def translate_var(self, var: str):
-        """ Translates a variable like 'v0' into '0%nat' """
+        """ Translates a variable like 'v0' into '0%N' """
         m = re.match(r"^v([0-9]+)$", var)
         assert m is not None
         var_i = int(m[1])
-        return f"{var_i}%nat"
+        return f"{var_i}%N"
 
     def is_constant(self, v: str):
         m = re.match(r"^0x[0-9A-Fa-f]+$", v)
@@ -163,17 +163,17 @@ class JSON_Smart_Contract:
     def translatate_constant(self, v: str) -> str:
         """ Translates a constant value, remains the same """
         assert self.is_constant(v), f"{v} no es un valor"
-        return v
+        return f"(U256.to_t {v})"
 
     def translate_var_list(self, var_list):
         """ Returns a string with the Coq list of variable indices
-            ["v0", "v1"]  --> "0%nat; 1%nat"
+            ["v0", "v1"]  --> "0%N; 1%N"
         """
         vars_i = []
         for var in var_list:
             var_i = int(var[1:])  # To check they are integers
             assert var_i >= 0
-            vars_i.append(f"{var_i}%nat")
+            vars_i.append(f"{var_i}%N")
         return "; ".join(vars_i)
 
     def translate_var_constant_list(self, vc_list):
@@ -196,9 +196,9 @@ class JSON_Smart_Contract:
             raise AssertionError(f"A block with 1 entry: {entries}")
 
         if len(entries) == 0:
-            return "EVMBlock.PhiInfoD.empty"
+            return "EVMPhiInfo.empty"
 
-        block_entries = list(map(lambda x: f"{self.translate_block_id(x)}%nat", entries))
+        block_entries = list(map(lambda x: f"{self.translate_block_id(x)}%N", entries))
         phi_d = {key: [] for key in block_entries}
 
         for phi in phis:
@@ -210,20 +210,24 @@ class JSON_Smart_Contract:
                 phi_d[block_entries[pos]].append(f"({dest_v}, {orig_v})")
 
         # Generate Coq text for PhiInfo
-        fun_str = "fun blockid => "
+        phis_let = ""
         for pos, (k,v) in enumerate(phi_d.items()):
             phis_str = '; '.join(v)
+            phis_let += f"let phi_info_{pos} := (EVMPhiInfo.construct_ [{phis_str}]) in "
+
+        fun_str = f"{phis_let} fun blockid => "
+        for pos, (k,v) in enumerate(phi_d.items()):
             if pos == 0:
-                fun_str += f"if BlockID.eqb blockid {k} then [{phis_str}] "
+                fun_str += f"if BlockID.eqb blockid {k} then phi_info_{pos} "
             else:
-                fun_str += f"else if BlockID.eqb blockid {k} then [{phis_str}] "
-        fun_str += "else []"
+                fun_str += f"else if BlockID.eqb blockid {k} then  phi_info_{pos} "
+        fun_str += "else EVMPhiInfo.empty_in_phi_info"
         return fun_str
 
     def translate_exit_info(self, exit):
         # TODO: FIXME
         if exit['type'] in ['Terminated', "MainExit"]:
-            return "EVMBlock.ExitInfoD.Terminated"
+            return "EVMBlock.ExitInfoD.Terminate"
         elif exit['type'] == 'FunctionReturn':
             # JSON: { "returnValues": ["v10"], "type": "FunctionReturn" }
             # Coq:  ReturnBlock (return_values : list SimpleExprD.t) (* I believe they are always vars *)
@@ -235,13 +239,13 @@ class JSON_Smart_Contract:
             assert len(exit['targets']) == 2
             target_true = self.translate_block_id(exit['targets'][0])
             target_false = self.translate_block_id(exit['targets'][1])
-            return f"EVMBlock.ExitInfoD.ConditionalJump {var} {target_true}%nat {target_false}%nat"
+            return f"EVMBlock.ExitInfoD.ConditionalJump {var} {target_true}%N {target_false}%N"
         elif exit['type'] == 'Jump':
             # JSON: {'targets': [BlockID], 'type': 'Jump' }
             # Coq:  Jump (target : BlockID.t)
             assert len(exit['targets']) == 1, f"JUMP exit block with more than one target: {exit}"
             target = self.translate_block_id(exit['targets'][0])
-            return f"EVMBlock.ExitInfoD.Jump {target}%nat"
+            return f"EVMBlock.ExitInfoD.Jump {target}%N"
         else:
             raise Exception(f'Exit_info not supported: <<{exit}>>')
 
@@ -340,15 +344,15 @@ class JSON_Smart_Contract:
         #    Record t : Type := {
         #     input : list SimpleExprD.t;
         #     output : list YULVariable.t; (* Output variables *)
-        #     op : (FunctionName.t + D.opcode_t) + aux_inst_t;
-        # {| EVMInstruction.input := [inr 0x2; inr 0x0202];
-        #    EVMInstruction.output := [ 1%nat ];
-        #    EVMInstruction.op := inl (inr EVM_opcode.MUL) |}.
+        #     op : (FuncName.t + D.opcode_t) + aux_inst_t;
+        # {| EVMInstr.input := [inr 0x2; inr 0x0202];
+        #    EVMInstr.output := [ 1%N ];
+        #    EVMInstr.op := inl (inr EVM_opcode.MUL) |}.
 
         if instruction['op'] == 'PhiFunction':
             raise ValueError('PhiFunctions should be removed before translating instructions')
         elif instruction['op'] == 'LiteralAssignment':
-            instr = 'inr EVMInstruction.ASSIGN'
+            instr = 'inr EVMInstr.ASSIGN'
         elif instruction['op'] in JSON_Smart_Contract.evm_opcode:
             instr = f"inl (inr {JSON_Smart_Contract.evm_opcode[instruction['op']]})"
         else:
@@ -358,10 +362,11 @@ class JSON_Smart_Contract:
         in_v = self.translate_var_constant_list(instruction['in'])
         out_v = self.translate_var_list(instruction['out'])
 
-        return (f"                  {{| EVMInstruction.input := [ {in_v} ];\n"
-                f"                      EVMInstruction.output := [ {out_v} ];\n"
-                f"                      EVMInstruction.op := {instr}\n"
-                f"                  |}}")
+        return f" (EVMInstr.construct [ {in_v} ] [ {out_v} ] ({instr})) "
+        # return (f"                  {{| EVMInstr.input := [ {in_v} ];\n"
+        #         f"                      EVMInstr.output := [ {out_v} ];\n"
+        #         f"                      EVMInstr.op := {instr}\n"
+        #         f"                  |}}")
 
     def translate_instructions(self, instructions):
         return ";\n".join([self.translate_instruction(i) for i in instructions])
@@ -374,13 +379,13 @@ class JSON_Smart_Contract:
 
     def translate_block(self, block):
         """ Generates a string representing a Coq block from a JSON block """
-        template = """
-                {{| EVMBlock.bid := {}%nat;
-                   EVMBlock.phi_function := {};
-                   EVMBlock.exit_info := {};
-                   EVMBlock.instructions := [ 
-    {}]
-                |}}"""
+        template = """ (EVMBlock.construct {} ({}) ({}) [{}]) """
+                # {{| EVMBlock.bid := {}%N;
+                #    EVMBlock.phi_function := {};
+                #    EVMBlock.exit_info := {};
+                #    EVMBlock.instructions := [ 
+    # {}]
+    #             |}}"""
         bid = self.translate_block_id(block['id'])
         phi_functions, instr = self.split_block(block['instructions'])
         phi_function = self.generate_phi(phi_functions, block.get('entries', []))
@@ -393,26 +398,18 @@ class JSON_Smart_Contract:
 
     def translate_function(self, f_name, func):
         """ Generates the Coq representation of a function """
-        template = """      {{| EVMFunction.name := "{}";
-             EVMFunction.arguments := [{}];
-             EVMFunction.num_outputs := {};
-             EVMFunction.blocks := [
-    {}
-             ];
-             EVMFunction.entry_block_id := {}%nat
-          |}}"""
+        template = """ (EVMCFGFun.construct "{}" [{}] [{}] {}) """
         blocks = self.translate_blocks(func['blocks'])
         arguments = self.translate_var_list(func['arguments'])
-        num_outputs = func['numReturns']
         entry_block_id = self.translate_block_id(func['entry'])
-        return template.format(f_name, arguments, num_outputs, blocks, entry_block_id)
+        return template.format(f_name, arguments, blocks, entry_block_id)
 
     def translate_smart_contract(self):
         """Generates the Coq representation of a smart contract """
-        template = """Definition sc_tr : EVMSmartContract.t :=
-       {{| EVMSmartContract.name := "{}";
-           EVMSmartContract.functions := [\n{}];
-           EVMSmartContract.main := "{}" 
+        template = """Definition sc_tr : EVMCFGProg.t :=
+       {{| EVMCFGProg.name := "{}";
+           EVMCFGProg.functions := [\n{}];
+           EVMCFGProg.main := "{}" 
        |}}."""
         functs_coq = []
         entry_fname = None
@@ -438,10 +435,10 @@ class JSON_Smart_Contract:
 
     def translate_liveness_block(self, blockid, liveness_block):
         """ Generates the string Coq representation of a block
-            | 0%nat => Some (EVMLiveness.list_to_set [], EVMLiveness.list_to_set [ 0%nat ] )
+            | 0%N => Some (EVMLiveness.list_to_set [], EVMLiveness.list_to_set [ 0%N ] )
         """
         template = "\n         | {} => Some (EVMLiveness.list_to_set [ {} ], EVMLiveness.list_to_set [ {} ])"
-        tr_blockid = f"{blockid}%nat"
+        tr_blockid = f"{blockid}%N"
         tr_liveness_input = "; ".join(map(lambda x: self.translate_var(x), liveness_block['in']))
         tr_liveness_output = "; ".join(map(lambda x: self.translate_var(x), liveness_block['out']))
         return template.format(tr_blockid, tr_liveness_input, tr_liveness_output)
@@ -461,7 +458,7 @@ class JSON_Smart_Contract:
 
     def translate_liveness_info(self):
         """ Generates the string Coq representation of the liveness information in the function's blocks """
-        template = """Definition liveness_info : FunctionName.t -> option EVMLiveness.fun_live_info_t :=
+        template = """Definition liveness_info : FuncName.t -> option EVMLiveness.func_live_info_t :=
 fun fname =>
    match fname with 
    | {}
@@ -488,15 +485,20 @@ $ coqc -R . FORYU filename.v
 Require Export FORYU.program.
 Require Export FORYU.semantics.
 Require Export FORYU.liveness.
+Require Export FORYU.evm_dialect.
+Require Import NArith.
+Require Import Coq.ZArith.ZArith.
+Require Import Arith.
 Import ListNotations.
 
 Module EVMLiveness := Liveness(EVMDialect).
 Module EVMSmallStep := EVMLiveness.SmallStepD.
-Module EVMSmartContract := EVMSmallStep.SmartContractD.
-Module EVMFunction := EVMSmartContract.FunctionD.
-Module EVMBlock := EVMFunction.BlockD.
-Module EVMInstruction := EVMBlock.InstructionD.
+Module EVMCFGProg := EVMSmallStep.CFGProgD.
+Module EVMCFGFun := EVMCFGProg.CFGFunD.
+Module EVMBlock := EVMCFGFun.BlockD.
+Module EVMInstr := EVMBlock.InstrD.
 Module EVMState := EVMSmallStep.StateD.
+Module EVMPhiInfo := EVMBlock.PhiInfoD.
 
 Module TestTranslation.
 
@@ -512,7 +514,7 @@ Module TestTranslation.
 End TestTranslation."""
         checker_def = "Definition check := EVMLiveness.check_smart_contract_subset sc_tr liveness_info."
         if checker == "optimal":
-            checker_def = "Definition check := EVMLiveness.check_smart_contract sc_tr liveness_info."
+            checker_def = "Definition check := EVMLiveness.check_program sc_tr liveness_info."
         return template.format(self.sc_main_filename, datetime.now(), self.translate_smart_contract(),
                                self.translate_liveness_info(), checker_def)
 
