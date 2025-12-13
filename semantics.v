@@ -128,24 +128,14 @@ Module SmallStep (D: DIALECT).
         end
     end.
 
-  Definition apply_renamings (renamings : InBlockPhiInfo) (sf: StackFrameD.t) :=
-    match renamings with
-    | in_phi_info out_vars in_sexprs _ _ => 
-        let out_vals := eval_sexpr in_sexprs sf in
-        LocalsD.set_all sf.(locals) out_vars out_vals
-    end.
-
-  Definition handle_jump (p: CFGProgD.t) (bid: BlockID.t) (sf: StackFrameD.t) (rsf: list StackFrameD.t) (s: StateD.t): StateD.t :=
-    match CFGProgD.get_block p sf.(fname) bid with
-    | None => error s  "Target block not found in the smart contract"
-    | Some next_b =>
-        let phi_renamings := next_b.(phi_function) sf.(curr_bid) in   (* This is the phi-function of next_b that refers to the current block *)
-        match (apply_renamings phi_renamings sf) with
-        | Some locals' =>                    
+  Definition handle_jump_aux (p: CFGProgD.t) (next_bid: BlockID.t) (sf: StackFrameD.t) (rsf: list StackFrameD.t) (s: StateD.t) (out_vars: list VarID.t) (in_sexprs: list SimpleExprD.t): StateD.t :=
+    let out_vals := eval_sexpr in_sexprs sf in
+    match LocalsD.set_all sf.(locals) out_vars out_vals with
+    | Some locals' =>                    
             let sf' := {| 
                         fname := sf.(fname);
                         locals := locals';
-                        curr_bid := bid; 
+                        curr_bid := next_bid; 
                         pc := 0; 
                       |} in
             let s' : StateD.t := {|
@@ -154,8 +144,17 @@ Module SmallStep (D: DIALECT).
                                   StateD.dialect_state := s.(StateD.dialect_state)
                                 |} in
             s'
-        | None => error s "Error while applying phi-function"
-        end
+    | None => error s "Error while applying phi-function"
+    end.
+
+  Definition handle_jump (p: CFGProgD.t) (next_bid: BlockID.t) (sf: StackFrameD.t) (rsf: list StackFrameD.t) (s: StateD.t): StateD.t :=
+    match CFGProgD.get_block p sf.(fname) next_bid with
+    | None => error s  "Target block not found in the smart contract"
+    | Some next_b =>
+      match next_b.(phi_function) sf.(curr_bid) with   (* This is the phi-function of next_b that refers to the current block *)
+      | in_phi_info out_vars in_sexprs _ _ => 
+        handle_jump_aux p next_bid sf rsf s out_vars in_sexprs
+      end
     end.
 
   Definition handle_cond_jump (p: CFGProgD.t) (cond_var:  VarID.t) (bid_if_true bid_if_false: BlockID.t)  (sf: StackFrameD.t) (rsf: list StackFrameD.t) (s: StateD.t): StateD.t :=
@@ -173,7 +172,7 @@ Module SmallStep (D: DIALECT).
         match CFGProgD.get_block p sf'.(fname) sf'.(curr_bid) with
         | None => error s "Failed to calling block"
         | Some b =>
-            match List.nth_error b.(instructions) sf.(StackFrameD.pc) with
+            match List.nth_error b.(instructions) sf'.(StackFrameD.pc) with
             | None => let s' := error s "Failed to find call instruction" in s'
             | Some instr =>
                 let s' := StateD.set_call_stack s (sf'::rsf') in
@@ -235,3 +234,4 @@ Module SmallStep (D: DIALECT).
 
 
 End SmallStep.
+

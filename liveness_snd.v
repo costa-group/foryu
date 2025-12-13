@@ -24,7 +24,7 @@ Module Liveness_snd (D: DIALECT).
   Module CallStackD := StateD.CallStackD.
   Module StackFrameD := CallStackD.StackFrameD.
   Module LocalsD := StackFrameD.LocalsD.
-  Module CFGProgD := CFGProg(D).
+  Module CFGProgD := SmallStepD.CFGProgD.
   Module CFGFunD := CFGProgD.CFGFunD.
   Module BlockD := CFGProgD.BlockD.
   Module PhiInfoD := BlockD.PhiInfoD.
@@ -32,6 +32,7 @@ Module Liveness_snd (D: DIALECT).
   Module ExitInfoD := BlockD.ExitInfoD.
   Module SimpleExprD := ExitInfoD.SimpleExprD.
   Module DialectFactsD := DialectFacts(D).
+  
   
   Import LivenessD.
   Import SmallStepD.
@@ -258,6 +259,39 @@ Module Liveness_snd (D: DIALECT).
           apply IHl'.
           apply H_In_v_ex_a_l'.
   Qed.
+
+
+  Lemma varset_eq_imp_subset:
+    forall s1 s2,
+      VarSet.Equal s1 s2 -> VarSet.Subset s1 s2.
+  Proof.
+    intros s1 s2 H_eq.
+    unfold VarSet.Equal in H_eq.
+    unfold VarSet.Subset.
+    apply H_eq.
+  Qed.
+
+    Lemma varset_subset_union:
+    forall s1 s2 s3,
+      VarSet.Subset (VarSet.union s2 s3) s1 -> VarSet.Subset s2 s1 /\ VarSet.Subset s3 s1.
+  Proof.
+    intros s1 s2 s3 H_sub.
+    unfold VarSet.Subset in H_sub.
+    split.
+    - unfold VarSet.Subset.
+      intros a H_In_a_s2.
+      apply H_sub.
+      rewrite VarSet.union_spec.
+      left.
+      exact H_In_a_s2.
+    - unfold VarSet.Subset.
+      intros a H_In_a_s3.
+      apply H_sub.
+      rewrite VarSet.union_spec.
+      right.
+      exact H_In_a_s3.
+  Qed.
+
 
   (* VarSet.remove produces equal sets when applied to equal sets *)
   Lemma remove_preserves_equal:
@@ -1377,7 +1411,7 @@ Lemma check_live_out_complete:
   without refering to live_in and live_ot. Using snd_info, we can
   replace snd_all_blocks_info by one that is based on live_in and
   live_out --- should be done later *)
-  Lemma check_prog_w_valid_smart_contract_correct:
+  Lemma check_valid_prog_correct:
     forall p r,
       CFGProgD.valid_program p ->
       snd_all_blocks_info p r <-> check_program p r = true.
@@ -1701,7 +1735,8 @@ Lemma check_live_out_complete:
   Qed.
   
 
-    (* If [get_instr] succeeds, then the [pc] is smaller that the length of the list of instruction *)
+
+  (* If [get_instr] succeeds, then the [pc] is smaller that the length of the list of instruction *)
   Lemma get_instruction_succ:
     forall p fname bid b pc instr,
       CFGProgD.get_block p fname bid = Some b ->
@@ -1723,7 +1758,7 @@ Lemma check_live_out_complete:
     rewrite H_nth_some in H_nth_not_none.
     exact H_nth_not_none.
   Qed.
-  
+
   (* If [get_instr] succeeds, then the [pc] is smaller that the length of the list of instruction *)
   Lemma get_next_instruction_succ:
     forall st p instruction sf rsf b,
@@ -1737,6 +1772,37 @@ Lemma check_live_out_complete:
     rewrite H_call_stack in H_get_next.
     apply (get_instruction_succ p sf.(fname) sf.(curr_bid) b sf.(pc) instruction H_block_exists H_get_next).
   Qed.
+
+
+      (* If [get_instr] succeeds, then the [pc] is smaller that the length of the list of instruction *)
+  Lemma get_instruction_fail:
+    forall p fname bid b pc,
+      CFGProgD.get_block p fname bid = Some b ->
+      CFGProgD.get_instr p fname bid pc = None ->
+      pc >= (length b.(instructions)).
+  Proof.
+    intros p fname bid b pc H_b_exists H_get_instr.
+    unfold CFGProgD.get_instr in H_get_instr.
+    rewrite H_b_exists in H_get_instr.
+    Search (nth_error).
+    rewrite (nth_error_None b.(instructions) pc) in H_get_instr.
+    apply H_get_instr.
+  Qed.
+
+    (* If [get_instr] succeeds, then the [pc] is smaller that the length of the list of instruction *)
+  Lemma get_next_instruction_fail:
+    forall st p sf rsf b,
+      st.(StateD.call_stack) = sf::rsf ->
+      CFGProgD.get_block p sf.(fname) sf.(curr_bid) = Some b ->
+      SmallStepD.get_next_instr st p = None ->
+      sf.(pc) >= (length b.(instructions)).
+  Proof.
+    intros st p sf rsf b H_call_stack H_block_exists H_get_next.
+    unfold SmallStepD.get_next_instr in H_get_next.
+    rewrite H_call_stack in H_get_next.
+    apply (get_instruction_fail p sf.(fname) sf.(curr_bid) b sf.(pc) H_block_exists H_get_next).
+  Qed.
+
 
   (* Equivalent states have equal status *)
   Lemma equiv_states_eq_status:
@@ -2477,7 +2543,7 @@ Lemma check_live_out_complete:
 
   Lemma live_at_set_status_snd:
     forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid: BlockID.t) (pc: nat) (s: VarSet.t) (st1 st2 st1': StateD.t) (v: VarID.t) (status: Status.t),
-    
+      
       equiv_states_up_to_not_live_v_or_eq_states p i fname bid pc s st1 st2 v ->
       equiv_vars_in_top_frame p st1 st2 ->
       set_status st1 status = st1' ->
@@ -2645,8 +2711,10 @@ Lemma check_live_out_complete:
       equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
       error st1 msg = st1' ->
       ~ VarSet.In v s ->
-        exists st2' bid' pc' s',
+        exists st2' bid' b' pc' s',
           error st2 msg = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b' 
           /\
             equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
           /\
@@ -2663,8 +2731,9 @@ Lemma check_live_out_complete:
           Liveness_snd.StateD.status := Status.Error msg;
           Liveness_snd.StateD.dialect_state := dialect_state st2
         |} as st2' eqn:E_st2'.
-      exists st2', bid, pc, s.
+      exists st2', bid, b, pc, s.
       repeat split.
+      - exact H_b_exists.
       - rewrite E_st2'.
         rewrite <- H_error_st1.
         unfold equiv_states_up_to_not_live_v_or_eq_states.
@@ -2689,7 +2758,7 @@ Lemma check_live_out_complete:
         unfold equiv_vars_in_top_frame.
         simpl.
  
-        destruct (call_stack st1); destruct (call_stack st2); try destruct H_equiv_top_frames_st1_st2 as [_H1 [H2 [H3 H4]]]; repeat split; try (reflexivity || assumption).        
+        destruct (call_stack st1); destruct (call_stack st2); try destruct H_equiv_top_frames_st1_st2 as [H1 [H2 [H3 H4]]]; repeat split; try (reflexivity || assumption).        
     Qed.
 
     Lemma app_nil_hd:
@@ -2719,8 +2788,10 @@ Lemma check_live_out_complete:
       split_at_i i st2.(call_stack) [] tl sf2 ->
       execute_assignment p values instr.(output) sf1 tl st1 = st1' ->
       ~ VarSet.In v s ->
-        exists st2' bid' pc' s',
+        exists st2' bid' b' pc' s',
           execute_assignment p values instr.(output) sf2 tl st2 = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
           /\
             equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
           /\
@@ -2812,8 +2883,9 @@ Lemma check_live_out_complete:
         injection H_get_instr' as H_get_instr'.
         subst instr'.
         
-        exists st2', bid, (S pc), s.
+        exists st2', bid, b, (S pc), s.
         repeat split; try reflexivity.
+        * exact H_b_exists.
         * rewrite E_st2'.
           rewrite <- H_exec_assign.
           unfold equiv_states_up_to_not_live_v_or_eq_states.
@@ -2987,8 +3059,10 @@ Lemma check_live_out_complete:
       split_at_i i st2.(call_stack) (top_sf::hl) tl sf2 ->
       execute_assignment p values instr.(output) top_sf (hl++(sf1::tl)) st1 = st1' ->
       ~ VarSet.In v s ->
-        exists st2' bid' pc' s',
+        exists st2' bid' b' pc' s',
           execute_assignment p values instr.(output) top_sf (hl++(sf2::tl)) st2 = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
           /\
             equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
           /\
@@ -3030,9 +3104,9 @@ Lemma check_live_out_complete:
       destruct H_split_st2_facts as [H_hl2_eq [H_tl2_eq H_sf2_eq]].
       subst hl' tl' sf1' sf2'.
 
-      exists st2', bid, pc, s.
-      split; try reflexivity.
-      split.
+      exists st2', bid, b, pc, s.
+      repeat split; try reflexivity.
+      + exact H_b_exists.
       + rewrite  E_st2'.
        
         rewrite <- H_exec_assign.
@@ -3095,8 +3169,10 @@ Lemma check_live_out_complete:
       split_at_i i st2.(call_stack) [] tl sf2 ->
       execute_opcode p opcode values instr.(output) sf1 tl st1 = st1' ->
       ~ VarSet.In v s ->
-        exists st2' bid' pc' s',
+        exists st2' bid' b' pc' s',
           execute_opcode p opcode values instr.(output) sf2 tl st2 = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
           /\
             equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
           /\
@@ -3113,7 +3189,7 @@ Lemma check_live_out_complete:
     remember (execute_assignment p out_vals_st1 (output instr) sf1 tl st1) as st1_aux eqn:E_exec_assign_st1.
     symmetry in E_exec_assign_st1. 
      
-    pose proof (live_at_exec_assignment_1_snd p i fname bid b pc s instr st1 st2 st1_aux sf1 sf2 tl out_vals_st1 v H_b_exists H_get_instr H_live_at_pc H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 E_exec_assign_st1 H_not_In_v_s) as [st2_aux' [bid' [pc' [s' [H_exec_assign_st2 [H_equiv_st1_aux_st2_aux' H_equiv_vars_st1_aux_st2_aux']]]]]].
+    pose proof (live_at_exec_assignment_1_snd p i fname bid b pc s instr st1 st2 st1_aux sf1 sf2 tl out_vals_st1 v H_b_exists H_get_instr H_live_at_pc H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 E_exec_assign_st1 H_not_In_v_s) as [st2_aux' [bid' [b' [pc' [s' [H_exec_assign_st2 [H_b'_exists [H_equiv_st1_aux_st2_aux' H_equiv_vars_st1_aux_st2_aux']]]]]]]].
 
     rewrite H_exec_assign_st2.
    
@@ -3124,10 +3200,10 @@ Lemma check_live_out_complete:
 
     rewrite H_set_dialect_st2.
     
-    pose proof (live_at_set_status_snd p i fname bid' pc' s' st1_aux' st2_aux'' st1' v  status_st1 H_equiv_st1_aux'_st2_aux'' H_equiv_vars_st1_aux'_st2_aux'' H_exec_opcode) as [st2' H].
+    pose proof (live_at_set_status_snd p i fname bid' pc' s' st1_aux' st2_aux'' st1' v  status_st1 H_equiv_st1_aux'_st2_aux'' H_equiv_vars_st1_aux'_st2_aux'' H_exec_opcode) as [st2' [H1 [H2 H3]]].
 
-    exists st2', bid', pc', s'.
-    apply H.
+    exists st2', bid', b', pc', s'.
+    repeat split; try assumption.
   Qed.
 
   Lemma live_at_exec_opcode_2_snd:
@@ -3140,8 +3216,10 @@ Lemma check_live_out_complete:
       split_at_i i st2.(call_stack) (top_sf::hl) tl sf2 ->
       execute_opcode p opcode values instr.(output) top_sf (hl++(sf1::tl)) st1 = st1' ->
       ~ VarSet.In v s ->
-        exists st2' bid' pc' s',
+        exists st2' bid' b' pc' s',
           execute_opcode p opcode values instr.(output) top_sf (hl++(sf2::tl)) st2 = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
           /\
             equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
           /\
@@ -3158,7 +3236,7 @@ Lemma check_live_out_complete:
     remember (execute_assignment p out_vals_st1 (output instr) top_sf (hl' ++ sf1 :: tl) st1) as st1_aux eqn:E_exec_assign_st1.
     symmetry in E_exec_assign_st1.
      
-    pose proof (live_at_exec_assignment_2_snd p i fname bid b pc s instr st1 st2 st1_aux top_sf sf1 sf2 hl' tl out_vals_st1 v H_b_exists H_get_instr H_live_at_pc H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 E_exec_assign_st1 H_not_In_v_s) as [st2_aux' [bid' [pc' [s' [H_exec_assign_st2 [H_equiv_st1_aux_st2_aux' H_equiv_vars_st1_aux_st2_aux']]]]]].
+    pose proof (live_at_exec_assignment_2_snd p i fname bid b pc s instr st1 st2 st1_aux top_sf sf1 sf2 hl' tl out_vals_st1 v H_b_exists H_get_instr H_live_at_pc H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 E_exec_assign_st1 H_not_In_v_s) as [st2_aux' [bid' [b' [pc' [s' [H_exec_assign_st2 [H_b'_exists [H_equiv_st1_aux_st2_aux' H_equiv_vars_st1_aux_st2_aux']]]]]]]].
 
     rewrite H_exec_assign_st2.
    
@@ -3169,10 +3247,10 @@ Lemma check_live_out_complete:
 
     rewrite H_set_dialect_st2.
     
-    pose proof (live_at_set_status_snd p i fname bid' pc' s' st1_aux' st2_aux'' st1' v  status_st1 H_equiv_st1_aux'_st2_aux'' H_equiv_vars_st1_aux'_st2_aux'' H_exec_opcode) as [st2' H].
+    pose proof (live_at_set_status_snd p i fname bid' pc' s' st1_aux' st2_aux'' st1' v  status_st1 H_equiv_st1_aux'_st2_aux'' H_equiv_vars_st1_aux'_st2_aux'' H_exec_opcode) as [st2' [H1 [H2 H3]]].
 
-    exists st2', bid', pc', s'.
-    apply H.
+    exists st2', bid', b', pc', s'.
+    repeat split; try assumption.
   Qed.
 
 
@@ -3186,8 +3264,10 @@ Lemma check_live_out_complete:
       split_at_i i st2.(call_stack) [] tl sf2 ->
       execute_func p func_name values instr.(output) sf1 tl st1 = st1' ->
       ~ VarSet.In v s ->
-        exists st2' bid' pc' s',
+        exists st2' bid' b' pc' s',
           execute_func p func_name values instr.(output) sf2 tl st2 = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
           /\
             equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
           /\
@@ -3217,7 +3297,7 @@ Lemma check_live_out_complete:
         Liveness_snd.StateD.dialect_state := dialect_state st2
       |} as st2' eqn:E_st2'.
 
-      exists st2', bid, pc, s.
+      exists st2', bid, b, pc, s.
 
       assert(H_equiv_st1_st2' := H_equiv_st1_st2).
       destruct H_equiv_st1_st2' as [H_lt_i [H_len_call_stack [H_status [H_dialect [hl' [tl' [sf1' [sf2' [H_split_i_st1' [H_split_i_st2' H_equiv_sf1_sf2']]]]]]]]]].
@@ -3231,7 +3311,7 @@ Lemma check_live_out_complete:
       rewrite H_fname_sf2 in E_st2'.
 
       repeat split; try reflexivity.
-
+      * exact H_b_exists.
       * left.
         rewrite E_st2'.
         rewrite <- H_exec_func.
@@ -3290,8 +3370,10 @@ Lemma check_live_out_complete:
       split_at_i i st2.(call_stack) (top_sf::hl) tl sf2 ->
       execute_func p func_name values instr.(output) top_sf (hl++(sf1::tl)) st1 = st1' ->
       ~ VarSet.In v s ->
-        exists st2' bid' pc' s',
+        exists st2' bid' b' pc' s',
           execute_func p func_name values instr.(output) top_sf (hl++(sf2::tl)) st2 = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
           /\
             equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
           /\
@@ -3321,7 +3403,7 @@ Lemma check_live_out_complete:
                  Liveness_snd.StateD.dialect_state := dialect_state st2
          |} as st2' eqn:E_st2'.
 
-      exists st2', bid, pc, s.
+      exists st2', bid, b, pc, s.
 
       assert(H_equiv_st1_st2' := H_equiv_st1_st2).
       destruct H_equiv_st1_st2' as [H_lt_i [H_len_call_stack [H_status [H_dialect [hl'' [tl' [sf1' [sf2' [H_split_i_st1' [H_split_i_st2' H_equiv_sf1_sf2']]]]]]]]]].
@@ -3332,7 +3414,7 @@ Lemma check_live_out_complete:
       subst hl'' tl' sf1' sf2'.
 
       repeat split; try reflexivity.
-
+      * exact H_b_exists.
       * left.
         rewrite E_st2'.
         rewrite <- H_exec_func.
@@ -3393,8 +3475,10 @@ Lemma check_live_out_complete:
         SmallStepD.get_next_instr st1 p = Some instr ->
         SmallStepD.execute_instr instr st1 p = st1' ->
         ~ VarSet.In v s ->
-        exists st2' bid' pc' s',
+        exists st2' bid' b' pc' s',
           SmallStepD.execute_instr instr st2 p = st2' (* we can make an execution *)
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
           /\
             equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
           /\
@@ -3469,3140 +3553,1368 @@ Lemma check_live_out_complete:
         apply (live_at_exec_assignment_2_snd p i fname bid b pc s instr st1 st2 st1' top_sf sf1 sf2 hl' tl values v H_b_exists H_get_instr H_live_at_pc H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_exec_inst_st1 H_not_In_v_s).
   Qed.
         
-  
-(* revised up to here *)
-   
-  Lemma live_at_handle_block_finish_snd:   
-    forall (p: SmartContractD.t) (i: nat) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t),
-      SmartContractD.get_block p fname bid = Some b ->
-      live_at_pc' p fname bid pc s ->
-      forall  (st1 st2 st1': StateD.t) (v: YULVariable.t),
+
+
+
+  Lemma equiv_states_up_to_i_v_impl:
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t) (st1 st2 : StateD.t) (v: VarID.t),
+        CFGProgD.get_block p fname bid = Some b ->
+        live_at_pc p fname bid pc s ->
+        ~ VarSet.In v s ->
         equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
-        SmallStepD.get_next_instruction st1 p = None ->
-        SmallStepD.handle_block_finish st1 p = st1' ->
+
+            equiv_states_up_to_not_live_v_or_eq_states p i fname bid pc s st1 st2 v (* we reach state equivalent to st1' *)
+          /\
+            equiv_vars_in_top_frame p st1 st2. (* the top frames are equivalent wrt the accessed variables *)
+  Proof.
+    intros p i fname bid b pc s st1 st2 v H_b_exists H_live_at H_not_In_v_s H_equiv_st1_st2.
+
+    split.
+    - unfold equiv_states_up_to_not_live_v_or_eq_states.
+      left.
+      split.
+      + assumption.
+      + split; try assumption.
+
+    - destruct_equiv_states H_equiv_st1_st2.
+      destruct_split_i H_split_i_st1 st1.
+      destruct_split_i H_split_i_st2 st2.
+      destruct_equiv_frames H_equiv_sf1_sf2.
+
+      unfold equiv_vars_in_top_frame.
+      rewrite H_call_stack_st1.
+      rewrite H_call_stack_st2.
+
+      destruct hl as [|top_sf hl'] eqn:E_hl.
+
+      + simpl.
+        repeat split.
+        * rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
+        * rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
+        * rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
+        * intros v0 s0 b0 H_b0_exists H_accessed H_not_In_v0_s0.
+          rewrite H_fname_sf1 in H_b0_exists.
+          rewrite H_bid_sf1 in H_b0_exists.
+          subst_var_by_inj H_b_exists H_b0_exists b0.
+          rewrite H_pc_sf1 in H_accessed.
+          apply H_equiv_sf1_sf2.
+          apply (accessed_var_instr_neq_v p fname bid b pc s0 v0 s v H_b_exists H_live_at H_not_In_v_s H_accessed H_not_In_v0_s0).
+
+      + simpl.
+        repeat split; try reflexivity.
+        * intros v0 s0 b0 H_b0_exists H_accessed H_not_In_v0_s0.
+          rewrite DialectFactsD.eqb_eq.
+          reflexivity.
+    Qed.  
+
+
+  Lemma live_at_handle_teminate_snd:
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t) (st1 st2 st1': StateD.t) (sf1 sf2: StackFrameD.t) (rsf: CallStackD.t) (v: VarID.t),
+      CFGProgD.get_block p fname bid = Some b ->
+      live_at_pc p fname bid pc s ->
+      equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
+      handle_terminate p sf1 rsf st1 = st1' ->
+      ~ VarSet.In v s ->
+        exists st2' bid' b' pc' s',
+          handle_terminate p sf2 rsf st2 = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
+          /\
+            equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
+          /\
+            equiv_vars_in_top_frame p st1' st2'. (* the top frames are equivalent wrt the accessed variables *)
+  Proof.
+    intros p i fname bid b pc s st1 st2 st1' sf1 sf2 rsf v.
+    intros H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_terminate_st1 H_not_In_v_s.  
+
+    pose proof (equiv_states_up_to_i_v_impl p i fname bid b pc s st1 st2 v H_b_exists H_live_at_pc H_not_In_v_s H_equiv_st1_st2) as [H_equiv_or_eq H_equiv_vars_in_top].
+
+    unfold handle_terminate in H_handle_terminate_st1.
+    unfold handle_terminate.
+
+    pose proof (live_at_set_status_snd p i fname bid pc s st1 st2 st1' v Status.Terminated H_equiv_or_eq H_equiv_vars_in_top H_handle_terminate_st1) as [st2' [H1 [H2 H3]]]. 
+    exists st2', bid, b, pc, s.
+    repeat split; assumption.
+    Qed.  
+
+  Lemma at_end_implied_pc_ge_len_bs:
+    forall (p: CFGProgD.t) (fname: FuncName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (st1: StateD.t) (sf: StackFrameD.t) (rsf: CallStackD.t) (s: VarSet.t),
+      CFGProgD.get_block p fname bid = Some b ->
+      live_at_pc p fname bid pc s ->
+      SmallStepD.get_next_instr st1 p = None ->
+      st1.(call_stack) = sf::rsf ->
+      sf.(StackFrameD.fname) = fname ->
+      sf.(curr_bid) = bid ->
+      sf.(StackFrameD.pc) = pc ->
+      pc >= length b.(instructions).
+  Proof.
+  intros p fname bid b pc st1 sf rsf s.
+  intros H_b_exists H_live_at_pc H_get_instr H_call_stack H_fname H_bid H_pc.    
+
+  assert( H_live_at_pc' :=  H_live_at_pc).
+  destruct H_live_at_pc' as [fname bid b0 pc s sout H_b0_exists H_live_out H_pc_at_end H_sout | fname bid b0 pc s sout instr' H_b0_exists H_live_at_S_pc H_lt_pc' H_get_instr' H_sout]. 
+
+  + subst_var_by_inj H_b_exists H_b0_exists b0.
+    lia.
+
+  + subst_var_by_inj H_b_exists H_b0_exists b0.
+    rewrite <- H_fname in H_b_exists.
+    rewrite <- H_bid in H_b_exists.
+
+    pose proof (get_next_instruction_fail st1 p sf rsf b H_call_stack H_b_exists H_get_instr) as H_pc_ge.
+    rewrite H_pc in H_pc_ge.
+    lia.
+  Qed.
+
+  Lemma imp_falase_conc : forall a b, ~a -> (b -> a) -> ~b.
+  Proof.
+    tauto.
+  Qed.
+
+  (* The specification of function [list_to_set] *)
+  Lemma add_jump_var_if_applicable_semi_spec:
+    forall v s s' b,
+      ~VarSet.In v s -> VarSet.Equal s (add_jump_var_if_applicable b s') -> ~VarSet.In v s'.
+  Proof.
+    intros v s s' b H_not_In_v_s H_s.
+    unfold add_jump_var_if_applicable in H_s.
+    destruct (exit_info b); try exact (not_In_preserves_eq s s' v H_s H_not_In_v_s).
+    pose proof (not_In_preserves_eq s (VarSet.add cond_var_id s') v H_s H_not_In_v_s) as H_not_In_v_add.
+    rewrite VarSet.add_spec in H_not_In_v_add.
+    apply Decidable.not_or in H_not_In_v_add.
+    destruct H_not_In_v_add as [_ H_not_In_v_s'].
+    exact H_not_In_v_s'.
+  Qed.
+
+  Lemma live_at_handle_jump_aux_1_snd:
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid next_bid: BlockID.t) (b next_b: BlockD.t) (pc: nat) (s s' s'': VarSet.t) (st1 st2 st1': StateD.t) (sf1 sf2: StackFrameD.t) (tl: CallStackD.t) (v: VarID.t) (out_vars: list VarID.t) (in_sexprs: list SimpleExprD.t) (H_no_dup: List.NoDup out_vars) (H_same_len: length out_vars = length in_sexprs),
+      CFGProgD.get_block p fname bid = Some b ->
+      CFGProgD.get_block p fname next_bid = Some next_b ->
+      live_at_pc p fname bid pc s ->
+      live_out p fname bid s' ->
+      live_in p fname next_bid s'' ->
+      VarSet.Equal s (add_jump_var_if_applicable b s') ->
+      VarSet.Subset (VarSet.union (VarSet.diff s'' (list_to_set out_vars)) (list_to_set (extract_yul_vars in_sexprs))) s' ->
+      equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
+      split_at_i i st1.(call_stack) [] tl sf1 ->
+      split_at_i i st2.(call_stack) [] tl sf2 ->
+      SmallStepD.handle_jump_aux p next_bid sf1 tl st1 out_vars in_sexprs = st1' ->
+      ~ VarSet.In v s ->
+        exists st2' bid' b' pc' s',
+          handle_jump_aux p next_bid sf2 tl st2 out_vars in_sexprs = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
+          /\
+            equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
+          /\
+            equiv_vars_in_top_frame p st1' st2'. (* the top frames are equivalent wrt the accessed variables *)
+  Proof.
+    intros p i fname bid next_bid b next_b pc s s' s'' st1 st2 st1' sf1 sf2 tl v out_vars in_sexprs H_no_dup H_same_len.
+    intros H_b_exists H_next_b_exists H_live_at_pc H_live_out H_live_in H_s H_subset H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_jump_aux_st1 H_not_In_v_s.
+
+          assert (H_not_In_v_input: ~ In (inl v) in_sexprs).
+          (*{*)
+            pose proof (add_jump_var_if_applicable_semi_spec v s s' b H_not_In_v_s H_s) as H_not_In_v_s'.
+            unfold VarSet.Subset in H_subset.
+            pose proof (H_subset v) as H_subset.
+            pose proof (imp_falase_conc (VarSet.In v s') (VarSet.In v (VarSet.union (VarSet.diff s'' (list_to_set out_vars)) (list_to_set (extract_yul_vars in_sexprs)))) H_not_In_v_s' H_subset) as H_not_in_v_union.
+            rewrite VarSet.union_spec in H_not_in_v_union.
+            apply Decidable.not_or in H_not_in_v_union.
+            destruct H_not_in_v_union as [_  H_not_in_v_ext].
+            rewrite <- list_to_set_spec in H_not_in_v_ext.
+            rewrite <- extract_yul_vars_spec in H_not_in_v_ext.
+            exact H_not_in_v_ext.
+          (*}*)
+
+          unfold handle_jump_aux in H_handle_jump_aux_st1.
+          unfold handle_jump_aux.
+          
+          assert(H_equiv_st1_st2' := H_equiv_st1_st2).
+          destruct H_equiv_st1_st2' as [H_lt_i [H_len_call_stack [H_status [H_dialect [hl' [tl' [sf1' [sf2' [H_split_i_st1' [H_split_i_st2' H_equiv_sf1_sf2']]]]]]]]]].
+          destruct_equiv_frames H_equiv_sf1_sf2'.
+
+          pose proof (split_on_same_i i st1.(call_stack) [] hl' tl tl' sf1 sf1' H_split_i_st1 H_split_i_st1') as [H_l'_1 [H_tl_1 H_sf1]]. 
+    pose proof (split_on_same_i i st2.(call_stack) [] hl' tl tl' sf2 sf2' H_split_i_st2 H_split_i_st2') as [H_l'_2 [H_tl_2 H_sf2]]. 
+          subst hl' tl' sf1' sf2'.
+
+          rewrite <- (eval_sexpr_snd in_sexprs fname bid pc v sf1 sf2 H_equiv_sf1_sf2' H_not_In_v_input).                      
+
+          remember (eval_sexpr in_sexprs sf1) as values eqn:E_values.
+
+          destruct (set_all (locals sf1) out_vars values) as [locals1'|] eqn:E_set_all_st1.
+
+          - pose proof (set_all_some out_vars values sf1.(locals) sf2.(locals) locals1' E_set_all_st1) as [locals2' E_set_all_st2].
+            rewrite E_set_all_st2.
+
+            
+            remember {|
+                     Liveness_snd.StateD.call_stack :=
+                     {|
+                       Liveness_snd.StackFrameD.fname := StackFrameD.fname sf2;
+                       Liveness_snd.StackFrameD.locals := locals2';
+                       Liveness_snd.StackFrameD.curr_bid := next_bid;
+                       Liveness_snd.StackFrameD.pc := 0
+                     |} :: tl;
+                     Liveness_snd.StateD.status := Status.Running;
+              Liveness_snd.StateD.dialect_state := dialect_state st2
+            |} as st2' eqn:E_st2'.
+                  
+            exists st2', next_bid, next_b, 0, s''.
+
+            rewrite <- H_handle_jump_aux_st1.
+            unfold equiv_states_up_to_not_live_v_or_eq_states.
+
+            (* split on wether v is in the phi_outvars *)
+                  
+            unfold equiv_locals_up_to_v.                  
+            pose proof (varlist_in_dec out_vars v) as H_v_output.
+            destruct H_v_output as [H_v_in_output | H_v_not_in_output].
+            + repeat split; try assumption.
+              * rewrite E_st2'.
+                right.
+                rewrite (set_all_preserves_eq_up_to_eq out_vars sf1.(locals) sf2.(locals) v values locals1' locals2' H_v_in_output H_equiv_locals E_set_all_st1 E_set_all_st2).
+                rewrite H_fname_sf1.
+                rewrite H_fname_sf2.
+                rewrite H_dialect.
+                reflexivity.
+              * unfold equiv_states_up_to_i_v.
+                destruct H_split_i_st1' as [_ [_ H_len_tl_st1]].              
+                repeat split.
+                ** rewrite E_st2'.
+                   unfold equiv_vars_in_top_frame.
+                   simpl.
+                   rewrite H_fname_sf1. rewrite H_fname_sf2.
+                   repeat split; try reflexivity.
+                   
+                   intros v0 s0 b0 H_b0_exists H_acc H_In_v0_s0.
+                   subst_var_by_inj H_next_b_exists H_b0_exists b0.
+                   pose proof (live_at_pc_zero_eq_live_in p fname next_bid next_b s'' H_next_b_exists H_live_in) as H_list_at_pc_0.
+
+                   unfold VarSet.Subset in H_subset.
+                   pose proof (H_subset v) as H_subset.
+                   pose proof (add_jump_var_if_applicable_semi_spec v s s' b H_not_In_v_s H_s) as H_not_In_v_s'.
+                   pose proof (imp_falase_conc (VarSet.In v s') (VarSet.In v (VarSet.union (VarSet.diff s'' (list_to_set out_vars)) (list_to_set (extract_yul_vars in_sexprs)))) H_not_In_v_s' H_subset) as H_not_in_v_union.
+                   rewrite VarSet.union_spec in H_not_in_v_union.
+                   apply Decidable.not_or in H_not_in_v_union.
+                   destruct H_not_in_v_union as [H_not_in_v_diff _].
+                   rewrite VarSet.diff_spec in H_not_in_v_diff.
+                   rewrite <- list_to_set_spec in H_not_in_v_diff.
+                   apply Decidable.not_and in H_not_in_v_diff as [H_not_in_v_diff_l | H_not_in_v_diff_r].
+
+                   *** rewrite (set_all_preserves_eq_up_to_eq out_vars sf1.(locals) sf2.(locals) v values locals1' locals2' H_v_in_output H_equiv_locals E_set_all_st1 E_set_all_st2).
+                       rewrite DialectFactsD.eqb_eq.
+                       reflexivity.
+                   *** rewrite (set_all_preserves_eq_up_to_eq out_vars sf1.(locals) sf2.(locals) v values locals1' locals2' H_v_in_output H_equiv_locals E_set_all_st1 E_set_all_st2).
+                       rewrite DialectFactsD.eqb_eq.
+                       reflexivity.
+                   *** apply varset_in_dec.
+            + destruct H_split_i_st1' as [_ [_ H_len_tl_st1]].
+              repeat split; try (reflexivity || assumption).
+              * unfold equiv_states_up_to_i_v.
+                left.
+                simpl.                
+                repeat split.
+                ** rewrite H_len_tl_st1.
+                   lia.
+                ** rewrite E_st2'.
+                   simpl.
+                   reflexivity.
+                ** rewrite E_st2'.
+                   simpl.
+                   reflexivity.
+                ** rewrite E_st2'.
+                   simpl.
+                   apply H_dialect.
+                ** exists [], tl.
+                   exists {|
+                       Liveness_snd.StackFrameD.fname := StackFrameD.fname sf1;
+                       Liveness_snd.StackFrameD.locals := locals1';
+                       Liveness_snd.StackFrameD.curr_bid := next_bid;
+                       Liveness_snd.StackFrameD.pc := 0
+                     |}.
+                   exists {|
+                       Liveness_snd.StackFrameD.fname := StackFrameD.fname sf2;
+                       Liveness_snd.StackFrameD.locals := locals2';
+                       Liveness_snd.StackFrameD.curr_bid := next_bid;
+                       Liveness_snd.StackFrameD.pc := 0
+                     |}.
+                   repeat split.
+                   *** simpl.
+                       rewrite H_len_tl_st1.
+                       lia.
+                   *** exact H_len_tl_st1.
+                   *** rewrite E_st2'.
+                       simpl.
+                       rewrite H_len_tl_st1.
+                       lia.
+                   *** rewrite E_st2'.
+                       simpl.
+                       reflexivity.
+                   *** exact H_len_tl_st1.
+                   *** simpl.
+                       exact H_fname_sf1.
+                   *** simpl.
+                       exact H_fname_sf2.
+                   *** simpl.
+                       exact (set_all_preserves_eq_up_to out_vars sf1.(locals) sf2.(locals) v values locals1' locals2' H_v_not_in_output H_equiv_locals E_set_all_st1 E_set_all_st2).
+                ** exact (live_at_pc_zero_eq_live_in p fname next_bid next_b s'' H_next_b_exists H_live_in).
+                ** unfold VarSet.Subset in H_subset.
+                   pose proof (H_subset v) as H_subset.
+                   pose proof (add_jump_var_if_applicable_semi_spec v s s' b H_not_In_v_s H_s) as H_not_In_v_s'.
+                   pose proof (imp_falase_conc (VarSet.In v s') (VarSet.In v (VarSet.union (VarSet.diff s'' (list_to_set out_vars)) (list_to_set (extract_yul_vars in_sexprs)))) H_not_In_v_s' H_subset) as H_not_in_v_union.
+                   rewrite VarSet.union_spec in H_not_in_v_union.
+                   apply Decidable.not_or in H_not_in_v_union.
+                   destruct H_not_in_v_union as [H_not_in_v_diff _].
+                   rewrite VarSet.diff_spec in H_not_in_v_diff.
+                   rewrite <- list_to_set_spec in H_not_in_v_diff.
+                   apply Decidable.not_and in H_not_in_v_diff as [H_not_in_v_diff_l | H_not_in_v_diff_r].
+                   *** exact H_not_in_v_diff_l.
+                   *** contradiction.
+                   *** apply varset_in_dec.
+              * unfold equiv_vars_in_top_frame.
+                rewrite E_st2'.
+                simpl.
+                rewrite H_fname_sf1. rewrite H_fname_sf2.
+                repeat split; try reflexivity.
+                intros v0 s0 b0 H_b0_exists H_acc H_In_v0_s0.
+                subst_var_by_inj H_next_b_exists H_b0_exists b0.
+                
+                pose proof (set_all_preserves_eq_up_to out_vars sf1.(locals) sf2.(locals) v values locals1' locals2' H_v_not_in_output H_equiv_locals E_set_all_st1 E_set_all_st2) as H_equiv_to_to_v_local1'_locals2'.
+                unfold equiv_locals_up_to_v in H_equiv_to_to_v_local1'_locals2'.
+                pose proof (live_at_pc_zero_eq_live_in p fname next_bid next_b s'' H_next_b_exists H_live_in) as H_live_at_pc_0.
+
+                unfold VarSet.Subset in H_subset.
+                pose proof (H_subset v) as H_subset.
+                pose proof (add_jump_var_if_applicable_semi_spec v s s' b H_not_In_v_s H_s) as H_not_In_v_s'.
+                pose proof (imp_falase_conc (VarSet.In v s') (VarSet.In v (VarSet.union (VarSet.diff s'' (list_to_set out_vars)) (list_to_set (extract_yul_vars in_sexprs)))) H_not_In_v_s' H_subset) as H_not_in_v_union.
+                rewrite VarSet.union_spec in H_not_in_v_union.
+                apply Decidable.not_or in H_not_in_v_union.
+                destruct H_not_in_v_union as [H_not_in_v_diff _].
+                rewrite VarSet.diff_spec in H_not_in_v_diff.
+                rewrite <- list_to_set_spec in H_not_in_v_diff.
+                apply Decidable.not_and in H_not_in_v_diff as [H_not_in_v_diff_l | H_not_in_v_diff_r].
+                ** pose proof (accessed_var_instr_neq_v p fname next_bid next_b 0 s0 v0 s'' v H_next_b_exists H_live_at_pc_0 H_not_in_v_diff_l H_acc H_In_v0_s0) as H_v0_neq_v.
+                   
+                   exact (H_equiv_to_to_v_local1'_locals2' v0 H_v0_neq_v).
+
+                ** contradiction.
+                ** apply varset_in_dec.
+                
+          - pose proof (set_all_none out_vars values sf1.(locals) sf2.(locals) E_set_all_st1) as E_set_all_st2.
+            rewrite E_set_all_st2.
+            apply (live_at_error_1_snd p i fname bid b pc s st1 st2 st1' v "Error while applying phi-function" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_jump_aux_st1 H_not_In_v_s).
+  Qed.
+
+
+  Lemma live_at_handle_jump_1_snd:
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid next_bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t) (st1 st2 st1': StateD.t) (sf1 sf2: StackFrameD.t) (tl: CallStackD.t) (v: VarID.t),
+      CFGProgD.get_block p fname bid = Some b ->
+      b.(exit_info) = ExitInfoD.Jump next_bid ->
+      live_at_pc p fname bid pc s ->
+      SmallStepD.get_next_instr st1 p = None ->
+      equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
+      split_at_i i st1.(call_stack) [] tl sf1 ->
+      split_at_i i st2.(call_stack) [] tl sf2 ->
+      handle_jump p next_bid sf1 tl st1 = st1' ->
+      ~ VarSet.In v s ->
+        exists st2' bid' b' pc' s',
+          handle_jump p next_bid sf2 tl st2 = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
+          /\
+            equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
+          /\
+            equiv_vars_in_top_frame p st1' st2'. (* the top frames are equivalent wrt the accessed variables *)
+  Proof.
+    intros p i fname bid next_bid b pc s st1 st2 st1' sf1 sf2 tl v.
+    intros H_b_exists H_exit_info H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_jump_st1 H_not_In_v_s. 
+
+    unfold handle_jump in H_handle_jump_st1.
+    unfold handle_jump.
+
+    assert(H_equiv_st1_st2' := H_equiv_st1_st2).
+    destruct H_equiv_st1_st2' as [H_lt_i [H_len_call_stack [H_status [H_dialect [hl' [tl' [sf1' [sf2' [H_split_i_st1' [H_split_i_st2' H_equiv_sf1_sf2']]]]]]]]]].
+    destruct_equiv_frames H_equiv_sf1_sf2'.
+
+    pose proof (split_on_same_i i st1.(call_stack) [] hl' tl tl' sf1 sf1' H_split_i_st1 H_split_i_st1') as [H_l'_1 [H_tl_1 H_sf1]]. 
+    pose proof (split_on_same_i i st2.(call_stack) [] hl' tl tl' sf2 sf2' H_split_i_st2 H_split_i_st2') as [H_l'_2 [H_tl_2 H_sf2]]. 
+    subst hl' tl' sf1' sf2'.
+
+    destruct_split_i H_split_i_st1 st1.
+    simpl in H_call_stack_st1.
+    rewrite H_fname_sf1 in H_handle_jump_st1.
+    rewrite H_bid_sf1 in H_handle_jump_st1.
+    rewrite H_fname_sf2.
+    rewrite H_bid_sf2.
+
+    destruct (CFGProgD.get_block p fname next_bid) as [next_b|] eqn:E_get_b_next.
+    
+    (* block found *)
+    - destruct (next_b.(phi_function) bid) as [out_vars in_sexprs H_no_dup H_same_len] eqn:E_phi.
+
+      pose proof (at_end_implied_pc_ge_len_bs p fname bid b pc st1 sf1 tl s H_b_exists H_live_at_pc H_get_instr H_call_stack_st1 H_fname_sf1 H_bid_sf1 H_pc_sf1).
+
+      assert( H_live_at_pc' :=  H_live_at_pc).
+          
+      destruct H_live_at_pc' as [fname bid b0 pc s sout H_b0_exists H_live_out H_pc_at_end H_sout | fname bid b0 pc s sout instr' H_b0_exists H_live_at_S_pc H_lt_pc' H_get_instr' H_sout]. 
+
+      + subst_var_by_inj H_b_exists H_b0_exists b0.
+        assert(H_live_out' := H_live_out).
+        destruct H_live_out' as [ fname bid b0 rs' sout0 H_b0_exists H_is_ret H_sout0| fname bid b0 sout0 H_b0_exists H_is_termin | fname bid next_bid' b0 next_b0 s' sout0 H_b0_exists H_is_jump H_live_in_next_pc H_next_b0_exists H_sout0 | fname bid  next_bid_if_true next_bid_if_false cvar b0 next_b0_if_true next_b0_if_false s1' s2' sout0 H_b0_exists H_is_cjump H_live_at_pc_if_true H_live_at_pc_if_false H_next_b0_if_true H_next_b0_if_false H_sout0].
+ 
+        * subst_var_by_inj H_b_exists H_b0_exists b0. 
+          unfold BlockD.is_return_block in H_is_ret.
+          rewrite H_exit_info in H_is_ret.
+          discriminate H_is_ret.
+        * subst_var_by_inj H_b_exists H_b0_exists b0.                   
+          unfold BlockD.is_terminated_block in H_is_termin.
+          rewrite H_exit_info in H_is_termin.
+          discriminate H_is_termin.
+        
+        * subst_var_by_inj H_b_exists H_b0_exists b0.
+          unfold is_jump_block in H_is_jump.
+          rewrite H_exit_info in H_is_jump.
+          injection H_is_jump as H_is_jump.
+          subst next_bid'.
+
+          unfold apply_inv_phi in H_sout0.
+          subst_var_by_inj E_get_b_next H_next_b0_exists next_b0.
+          
+          rewrite E_phi in H_sout0.
+
+          rewrite <- varset_equal_sym in H_sout0.
+          pose proof (varset_eq_imp_subset (VarSet.union (VarSet.diff s' (list_to_set out_vars)) (list_to_set (extract_yul_vars in_sexprs))) sout0 H_sout0) as H_subset.          
+          apply (live_at_handle_jump_aux_1_snd p i fname bid next_bid b next_b pc sout sout0 s' st1 st2 st1' sf1 sf2 tl v out_vars in_sexprs H_no_dup H_same_len H_b_exists E_get_b_next H_live_at_pc H_live_out H_live_in_next_pc H_sout H_subset H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_jump_st1 H_not_In_v_s).
+
+        * subst_var_by_inj H_b_exists H_b0_exists b0.                   
+          unfold BlockD.is_cond_jump_block in H_is_cjump.
+          rewrite H_exit_info in H_is_cjump.
+          discriminate H_is_cjump.
+ 
+      
+      + subst_var_by_inj H_b_exists H_b0_exists b0.
+      
+       rewrite <- H_fname_sf1 in H_b_exists.
+       rewrite <- H_bid_sf1 in H_b_exists.
+      
+        pose proof (get_next_instruction_fail st1 p sf1 tl b H_call_stack_st1 H_b_exists H_get_instr) as H_pc_ge.
+        rewrite H_pc_sf1 in H_pc_ge.
+        lia.
+
+    (* block not found found *)
+    - apply (live_at_error_1_snd p i fname bid b pc s st1 st2 st1' v "Target block not found in the smart contract" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_jump_st1 H_not_In_v_s).
+Qed.
+
+
+    Lemma live_at_handle_jump_2_snd:
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid next_bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t) (st1 st2 st1': StateD.t) (top_sf sf1 sf2: StackFrameD.t) (hl tl: CallStackD.t) (v: VarID.t),
+      CFGProgD.get_block p fname bid = Some b ->
+      live_at_pc p fname bid pc s ->
+      SmallStepD.get_next_instr st1 p = None ->
+      equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
+      split_at_i i st1.(call_stack) (top_sf::hl) tl sf1 ->
+      split_at_i i st2.(call_stack) (top_sf::hl) tl sf2 ->
+      handle_jump p next_bid top_sf (hl++(sf1::tl)) st1 = st1' ->
+      ~ VarSet.In v s ->
+        exists st2' bid' b' pc' s',
+          handle_jump p next_bid top_sf (hl++(sf2::tl)) st2 = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
+          /\
+            equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
+          /\
+            equiv_vars_in_top_frame p st1' st2'. (* the top frames are equivalent wrt the accessed variables *)
+  Proof.
+    intros p i fname bid next_bid b pc s st1 st2 st1' top_sf sf1 sf2 hl tl v.
+    intros H_b_exists H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_jump_st1 H_not_In_v_s. 
+
+    unfold handle_jump in H_handle_jump_st1.
+    unfold handle_jump.
+
+    (* destruct equivalence facts *)
+    assert(H_equiv_st1_st2' := H_equiv_st1_st2).
+    destruct H_equiv_st1_st2' as [H_lt_i [H_len_call_stack [H_status [H_dialect [hl' [tl' [sf1' [sf2' [H_split_i_st1' [H_split_i_st2' H_equiv_sf1_sf2']]]]]]]]]].
+    destruct_equiv_frames H_equiv_sf1_sf2'.
+    destruct_split_i H_split_i_st1 st1.
+    destruct_split_i H_split_i_st2 st2.
+    destruct_split_i H_split_i_st1' st1'.
+    destruct_split_i H_split_i_st2' st2'.
+    pose proof (split_on_same_i i (call_stack st1) (top_sf :: hl) hl' tl tl' sf1 sf1' H_split_i_st1 H_split_i_st1') as H_split_st1_facts.
+    pose proof (split_on_same_i i (call_stack st2) (top_sf :: hl) hl' tl tl' sf2 sf2' H_split_i_st2 H_split_i_st2') as H_split_st2_facts.
+    destruct H_split_st1_facts as [H_hl1_eq [H_tl1_eq H_sf1_eq]].
+    destruct H_split_st2_facts as [H_hl2_eq [H_tl2_eq H_sf2_eq]].
+    subst hl' tl' sf1' sf2'.
+    
+    destruct (CFGProgD.get_block p (StackFrameD.fname top_sf) next_bid) as [next_b|] eqn:H_next_b_exists.
+
+    (* block found *)
+    - destruct (phi_function next_b (curr_bid top_sf)) as [out_vars in_sexprs H_no_dup H_same_len] eqn:E_phi.
+
+      unfold handle_jump_aux  in H_handle_jump_st1.
+      unfold handle_jump_aux.
+
+      destruct (set_all (locals top_sf) out_vars (eval_sexpr in_sexprs top_sf)) as [locals'|] eqn:E_set_all.
+
+      (* set_all succ *)
+      + remember {|
+            Liveness_snd.StateD.call_stack :=
+              {|
+                Liveness_snd.StackFrameD.fname := StackFrameD.fname top_sf;
+                Liveness_snd.StackFrameD.locals := locals';
+                Liveness_snd.StackFrameD.curr_bid := next_bid;
+                Liveness_snd.StackFrameD.pc := 0
+              |} :: hl ++ sf2 :: tl;
+            Liveness_snd.StateD.status := Status.Running;
+            Liveness_snd.StateD.dialect_state := dialect_state st2
+          |} as st2' eqn:E_st2'.
+
+        exists st2', bid, b, pc, s.
+        repeat split.
+        * exact H_b_exists.
+        * unfold equiv_states_up_to_not_live_v_or_eq_states.
+          left.
+          repeat split; try assumption.
+          ** rewrite <- H_handle_jump_st1.
+             simpl.
+             rewrite length_app.
+             simpl.
+             rewrite H_len_tl_st1.
+             lia.
+          ** rewrite E_st2'.
+             rewrite <- H_handle_jump_st1.
+             simpl.
+             repeat rewrite length_app.
+             simpl.
+             reflexivity.
+          ** rewrite E_st2'.
+             rewrite <- H_handle_jump_st1.
+             simpl.
+             reflexivity.
+          ** rewrite E_st2'.
+             rewrite <- H_handle_jump_st1.
+             simpl.
+             exact H_dialect.
+          ** exists ({|
+                     Liveness_snd.StackFrameD.fname := StackFrameD.fname top_sf;
+                     Liveness_snd.StackFrameD.locals := locals';
+                     Liveness_snd.StackFrameD.curr_bid := next_bid;
+                     Liveness_snd.StackFrameD.pc := 0
+                      |} :: hl).
+             exists tl, sf1, sf2.
+             repeat split; try assumption.
+             *** rewrite <- H_handle_jump_st1.
+                 simpl.
+                 rewrite length_app.
+                 simpl.
+                 rewrite H_len_tl_st1.
+                 lia.
+             *** rewrite <- H_handle_jump_st1.
+                 simpl.
+                 reflexivity.
+             *** rewrite E_st2'.
+                 simpl.
+                 rewrite length_app.
+                 simpl.
+                 rewrite H_len_tl_st1.
+                 lia.
+             *** rewrite E_st2'.
+                 simpl.
+                 reflexivity.
+
+        * rewrite <- H_handle_jump_st1.
+          rewrite E_st2'.
+          unfold equiv_vars_in_top_frame.
+          simpl.
+          repeat split; try reflexivity.
+          intros v0 s0 b0 H_b0_exists H_acc H_In_v0_s0.
+          rewrite DialectFactsD.eqb_eq.
+          reflexivity.
+          
+                 (* set_all fail *)
+      + apply (live_at_error_1_snd p i fname bid b pc s st1 st2 st1' v "Error while applying phi-function" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_jump_st1 H_not_In_v_s).
+      
+    (* block not found *)
+    - apply (live_at_error_1_snd p i fname bid b pc s st1 st2 st1' v "Target block not found in the smart contract" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_jump_st1 H_not_In_v_s).
+  Qed.
+
+
+  Lemma live_at_handle_cond_jump_1_snd:
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid bid_if_true bid_if_false: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t) (st1 st2 st1': StateD.t) (sf1 sf2: StackFrameD.t) (tl: CallStackD.t) (cv v: VarID.t),
+      CFGProgD.get_block p fname bid = Some b ->
+      b.(exit_info) = ExitInfoD.ConditionalJump cv bid_if_true bid_if_false ->
+      live_at_pc p fname bid pc s ->
+      SmallStepD.get_next_instr st1 p = None ->
+      equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
+      split_at_i i st1.(call_stack) [] tl sf1 ->
+      split_at_i i st2.(call_stack) [] tl sf2 ->
+      handle_cond_jump p cv bid_if_true bid_if_false sf1 tl st1 = st1' ->
+      ~ VarSet.In v s ->
+        exists st2' bid' b' pc' s',
+          handle_cond_jump p cv bid_if_true bid_if_false sf2 tl st2 = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
+          /\
+            equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
+          /\
+            equiv_vars_in_top_frame p st1' st2'. (* the top frames are equivalent wrt the accessed variables *)
+  Proof.
+    intros p i fname bid bid_if_true bid_if_false b pc s st1 st2 st1' sf1 sf2 tl cv v.
+    intros H_b_exists H_exit_info H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s.
+
+    unfold handle_cond_jump in H_handle_cond_jump_st1.
+    unfold handle_cond_jump.
+    
+    assert(H_equiv_st1_st2' := H_equiv_st1_st2).
+    destruct H_equiv_st1_st2' as [H_lt_i [H_len_call_stack [H_status [H_dialect [hl' [tl' [sf1' [sf2' [H_split_i_st1' [H_split_i_st2' H_equiv_sf1_sf2']]]]]]]]]].
+    destruct_equiv_frames H_equiv_sf1_sf2'.
+
+    pose proof (split_on_same_i i st1.(call_stack) [] hl' tl tl' sf1 sf1' H_split_i_st1 H_split_i_st1') as [H_l'_1 [H_tl_1 H_sf1]]. 
+    pose proof (split_on_same_i i st2.(call_stack) [] hl' tl tl' sf2 sf2' H_split_i_st2 H_split_i_st2') as [H_l'_2 [H_tl_2 H_sf2]]. 
+    subst hl' tl' sf1' sf2'.
+    
+    destruct_split_i H_split_i_st1 st1.
+    simpl in H_call_stack_st1.
+
+    assert(H_neq_varid_sym: forall a b : VarID.t, a <> b <-> b <> a). intros. lia.
+
+    assert( H_live_at_pc' :=  H_live_at_pc).          
+    destruct H_live_at_pc' as [fname bid b0 pc s sout H_b0_exists H_live_out H_pc_at_end H_sout | fname bid b0 pc s sout instr' H_b0_exists H_live_at_S_pc H_lt_pc' H_get_instr' H_sout].
+
+    - subst_var_by_inj H_b_exists H_b0_exists b0.
+      assert (H_sout' := H_sout).
+      unfold add_jump_var_if_applicable in H_sout.
+      rewrite H_exit_info in H_sout.
+      pose proof (not_In_preserves_eq sout (VarSet.add cv s) v H_sout H_not_In_v_s) as H_not_In_v_cv_sout.
+      rewrite VarSet.add_spec in H_not_In_v_cv_sout.
+      apply Decidable.not_or in H_not_In_v_cv_sout.
+      destruct H_not_In_v_cv_sout as [H_v_neq_cv H_not_In_v_s_aux].
+
+      rewrite H_neq_varid_sym in H_v_neq_cv.
+
+      unfold equiv_locals_up_to_v in H_equiv_locals.
+      pose proof (H_equiv_locals cv H_v_neq_cv) as H_equiv_cv.
+      rewrite DialectFactsD.eqb_eq in H_equiv_cv.
+      rewrite <- H_equiv_cv.
+
+
+      assert(H_live_out' := H_live_out).
+      destruct H_live_out' as [ fname bid b0 rs' sout0 H_b0_exists H_is_ret H_sout0| fname bid b0 sout0 H_b0_exists H_is_termin | fname bid next_bid' b0 next_b0 s' sout0 H_b0_exists H_is_jump H_live_in_next_pc H_next_b0_exists H_sout0 | fname bid  next_bid_if_true next_bid_if_false cvar b0 next_b0_if_true next_b0_if_false s1' s2' sout0 H_b0_exists H_is_cjump H_live_at_pc_if_true H_live_at_pc_if_false H_next_b0_if_true H_next_b0_if_false H_sout0].
+ 
+        + subst_var_by_inj H_b_exists H_b0_exists b0. 
+          unfold BlockD.is_return_block in H_is_ret.
+          rewrite H_exit_info in H_is_ret.
+          discriminate H_is_ret.
+          
+        + subst_var_by_inj H_b_exists H_b0_exists b0.                   
+          unfold BlockD.is_terminated_block in H_is_termin.
+          rewrite H_exit_info in H_is_termin.
+          discriminate H_is_termin.
+
+        + subst_var_by_inj H_b_exists H_b0_exists b0.                 
+          unfold BlockD.is_jump_block in H_is_jump.
+          rewrite H_exit_info in H_is_jump.
+          discriminate H_is_jump.
+
+        + subst_var_by_inj H_b_exists H_b0_exists b0.                 
+          unfold BlockD.is_cond_jump_block in H_is_cjump.
+          rewrite H_exit_info in H_is_cjump.
+          injection H_is_cjump as H_cvar H_next_1 H_next_2.
+          subst cvar next_bid_if_true next_bid_if_false.
+
+          unfold handle_jump in H_handle_cond_jump_st1.
+          unfold handle_jump.
+          rewrite H_fname_sf2.
+          rewrite H_fname_sf1 in H_handle_cond_jump_st1.
+          rewrite H_bid_sf2.
+          rewrite H_bid_sf1 in H_handle_cond_jump_st1.
+          rewrite H_next_b0_if_true.
+          rewrite H_next_b0_if_true in H_handle_cond_jump_st1.
+          rewrite H_next_b0_if_false.
+          rewrite H_next_b0_if_false in H_handle_cond_jump_st1.
+
+          
+          destruct (next_b0_if_true.(phi_function) bid) as [out_vars_1 in_sexprs_1 H_no_dup_1 H_same_len_1] eqn:E_phi_1.
+          destruct (next_b0_if_false.(phi_function) bid) as [out_vars_2 in_sexprs_2 H_no_dup_2 H_same_len_2] eqn:E_phi_2.
+
+          rewrite varset_equal_sym in H_sout0.
+          apply varset_eq_imp_subset in H_sout0.
+          apply varset_subset_union in H_sout0.
+          destruct H_sout0 as [H_sout0_l H_sout0_r].
+          unfold apply_inv_phi in H_sout0_l.
+          unfold apply_inv_phi in H_sout0_r.
+
+          destruct (D.is_true_value (get (locals sf1) cv)) eqn:E_cv.
+ 
+          * apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_true b next_b0_if_true pc sout sout0 s1' st1 st2 st1' sf1 sf2 tl v out_vars_1 in_sexprs_1 H_no_dup_1   H_same_len_1 H_b_exists H_next_b0_if_true H_live_at_pc H_live_out H_live_at_pc_if_true H_sout' H_sout0_l H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
+            
+          * apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_false b next_b0_if_false pc sout sout0 s2' st1 st2 st1' sf1 sf2 tl v out_vars_2 in_sexprs_2 H_no_dup_2  H_same_len_2 H_b_exists H_next_b0_if_false H_live_at_pc H_live_out H_live_at_pc_if_false H_sout' H_sout0_r H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
+
+      
+    - subst_var_by_inj H_b_exists H_b0_exists b0.
+      
+      rewrite <- H_fname_sf1 in H_b_exists.
+      rewrite <- H_bid_sf1 in H_b_exists.
+      
+      pose proof (get_next_instruction_fail st1 p sf1 tl b H_call_stack_st1 H_b_exists H_get_instr) as H_pc_ge.
+      rewrite H_pc_sf1 in H_pc_ge.
+      lia.
+
+  Qed.
+
+      Lemma live_at_handle_cond_jump_2_snd:
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid bid_if_true bid_if_false: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t) (st1 st2 st1': StateD.t) (top_sf sf1 sf2: StackFrameD.t) (hl tl: CallStackD.t) (cv v: VarID.t),
+      CFGProgD.get_block p fname bid = Some b ->
+      live_at_pc p fname bid pc s ->
+      SmallStepD.get_next_instr st1 p = None ->
+      equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
+      split_at_i i st1.(call_stack) (top_sf::hl) tl sf1 ->
+      split_at_i i st2.(call_stack) (top_sf::hl) tl sf2 ->
+      handle_cond_jump p cv bid_if_true bid_if_false top_sf (hl++(sf1::tl)) st1 = st1' ->
+      ~ VarSet.In v s ->
+        exists st2' bid' b' pc' s',
+          handle_cond_jump p cv bid_if_true bid_if_false top_sf (hl++(sf2::tl)) st2 = st2' 
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
+          /\
+            equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
+          /\
+            equiv_vars_in_top_frame p st1' st2'. (* the top frames are equivalent wrt the accessed variables *)
+  Proof.
+    intros p i fname bid bid_if_true bid_if_false b pc s st1 st2 st1' top_sf sf1 sf2 hl tl cv v.
+    intros H_b_exists H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s.
+
+    unfold handle_cond_jump in H_handle_cond_jump_st1.
+    unfold handle_cond_jump.
+
+    destruct (D.is_true_value (get (locals top_sf) cv)) eqn:E_cv.
+
+    - apply (live_at_handle_jump_2_snd p i fname bid bid_if_true b pc s st1 st2 st1' top_sf sf1 sf2 hl tl v H_b_exists H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
+
+    - apply (live_at_handle_jump_2_snd p i fname bid bid_if_false b pc s st1 st2 st1' top_sf sf1 sf2 hl tl v H_b_exists H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
+  Qed.
+
+
+  Lemma live_at_handle_return_1_snd:
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t) (st1 st2 st1': StateD.t) (sf1 sf2: StackFrameD.t) (tl: CallStackD.t) (v: VarID.t) (rs: list SimpleExprD.t),
+      CFGProgD.get_block p fname bid = Some b ->
+      b.(exit_info) = ExitInfoD.ReturnBlock rs ->
+      live_at_pc p fname bid pc s ->
+      SmallStepD.get_next_instr st1 p = None ->
+      equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
+      split_at_i i st1.(call_stack) [] tl sf1 ->
+      split_at_i i st2.(call_stack) [] tl sf2 ->
+      handle_return p rs sf1 tl st1 = st1' ->
+      ~ VarSet.In v s ->
+        exists st2' bid' b' pc' s',
+          handle_return p rs sf2 tl st2 = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
+          /\
+            equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
+          /\
+            equiv_vars_in_top_frame p st1' st2'. (* the top frames are equivalent wrt the accessed variables *)
+  Proof.
+    intros p i fname bid b pc s st1 st2 st1' sf1 sf2 tl v rs.
+    intros H_b_exists H_exit_info H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_return_st1 H_not_In_v_s. 
+ 
+    unfold handle_return in H_handle_return_st1.
+    unfold handle_return.
+ 
+    assert(H_equiv_st1_st2' := H_equiv_st1_st2).
+    destruct H_equiv_st1_st2' as [H_lt_i [H_len_call_stack [H_status [H_dialect [hl' [tl' [sf1' [sf2' [H_split_i_st1' [H_split_i_st2' H_equiv_sf1_sf2']]]]]]]]]].
+    destruct_equiv_frames H_equiv_sf1_sf2'.
+
+    pose proof (split_on_same_i i st1.(call_stack) [] hl' tl tl' sf1 sf1' H_split_i_st1 H_split_i_st1') as [H_l'_1 [H_tl_1 H_sf1]]. 
+    pose proof (split_on_same_i i st2.(call_stack) [] hl' tl tl' sf2 sf2' H_split_i_st2 H_split_i_st2') as [H_l'_2 [H_tl_2 H_sf2]]. 
+    subst hl' tl' sf1' sf2'.
+
+     
+    destruct_split_i H_split_i_st1 st1.
+   
+    (* destruct on wether sf1/sf2 are the only frames *)
+    destruct tl as [|ret_sf tl'] eqn:E_tl.
+
+    
+    (* it is the top frame *)
+    - apply (live_at_error_1_snd p i fname bid b pc s st1 st2 st1' v "Missing return stack frame" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_return_st1 H_not_In_v_s).
+
+    - 
+      destruct (CFGProgD.get_block p (StackFrameD.fname ret_sf) (curr_bid ret_sf)) as [ret_b|] eqn:E_ret_b_exists.
+
+      (* block found *)
+      + destruct (nth_error (instructions ret_b) (StackFrameD.pc ret_sf)) as [instr|] eqn:E_ret_instr.
+         
+
+        (* instruction found *)
+        * assert( H_live_at_pc' :=  H_live_at_pc).
+          
+          destruct H_live_at_pc' as [fname bid b0 pc s sout H_b0_exists H_live_out H_pc_at_end H_sout | fname bid b0 pc s sout instr' H_b0_exists H_live_at_S_pc H_lt_pc' H_get_instr' H_sout]. 
+
+          ** subst_var_by_inj H_b_exists H_b0_exists b0.
+             assert(H_live_out' := H_live_out).
+             destruct H_live_out' as [ fname bid b0 rs' sout0 H_b0_exists H_is_ret H_sout0| fname bid b0 sout0 H_b0_exists H_is_termin | fname bid next_bid' b0 next_b0 s' sout0 H_b0_exists H_is_jump H_live_in_next_pc H_next_b0_exists H_sout0 | fname bid  next_bid_if_true next_bid_if_false cvar b0 next_b0_if_true next_b0_if_false s1' s2' sout0 H_b0_exists H_is_cjump H_live_at_pc_if_true H_live_at_pc_if_false H_next_b0_if_true H_next_b0_if_false H_sout0].
+ 
+             *** subst_var_by_inj H_b_exists H_b0_exists b0. 
+                 unfold BlockD.is_return_block in H_is_ret.
+                 rewrite H_exit_info in H_is_ret.
+                 injection H_is_ret as H_is_ret.
+                 subst rs'.
+                 
+                 unfold add_jump_var_if_applicable in H_sout.
+                 rewrite H_exit_info in H_sout.
+                 rewrite <- H_sout in H_sout0.
+                 pose proof (not_In_preserves_eq sout (list_to_set (extract_yul_vars rs)) v H_sout0 H_not_In_v_s) as H_not_In_v_rs.
+                 rewrite <- list_to_set_spec in H_not_In_v_rs.
+                 rewrite <- extract_yul_vars_spec in H_not_In_v_rs.
+
+                 rewrite <- (eval_sexpr_snd rs fname bid pc v sf1 sf2 H_equiv_sf1_sf2' H_not_In_v_rs).
+  
+                 unfold execute_assignment .
+                 unfold execute_assignment in H_handle_return_st1.
+                 
+                 destruct (set_all (locals ret_sf) (output instr) (eval_sexpr rs sf1)) as [locals'|] eqn:E_set_all.
+
+                 **** remember {|
+                          Liveness_snd.StateD.call_stack :=
+                            {|
+                              Liveness_snd.StackFrameD.fname := StackFrameD.fname ret_sf;
+                              Liveness_snd.StackFrameD.locals := locals';
+                              Liveness_snd.StackFrameD.curr_bid := curr_bid ret_sf;
+                              Liveness_snd.StackFrameD.pc := StackFrameD.pc ret_sf + 1
+                            |} :: tl';
+                          Liveness_snd.StateD.status := status st2;
+                          Liveness_snd.StateD.dialect_state := dialect_state st2
+                        |} as st2' eqn:E_st2'.
+
+                      exists st2', bid, b, pc, sout.
+                      repeat split.
+                      ***** exact H_b_exists.
+                      ***** unfold equiv_states_up_to_not_live_v_or_eq_states.
+                            right.
+                            rewrite E_st2'.
+                            rewrite <- H_handle_return_st1.
+                            rewrite H_dialect.
+                            rewrite H_status.
+                            reflexivity.
+                      ***** rewrite E_st2'.
+                            rewrite <- H_handle_return_st1.
+                            unfold equiv_vars_in_top_frame.
+                            simpl.
+                            repeat split; try reflexivity.
+                            intros.
+                            rewrite DialectFactsD.eqb_eq.
+                            reflexivity.
+                 **** apply (live_at_error_1_snd p i fname bid b pc sout st1 st2 st1' v "Mismatch length in output variables and input values" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_return_st1 H_not_In_v_s).
+
+             *** subst_var_by_inj H_b_exists H_b0_exists b0.
+                 unfold BlockD.is_terminated_block in H_is_termin.
+                 rewrite H_exit_info in H_is_termin.
+                 discriminate H_is_termin.
+        
+             *** subst_var_by_inj H_b_exists H_b0_exists b0.
+                 unfold is_jump_block in H_is_jump.
+                 rewrite H_exit_info in H_is_jump.
+                 discriminate H_is_jump.
+
+             *** subst_var_by_inj H_b_exists H_b0_exists b0.
+                 unfold is_cond_jump_block in H_is_cjump.
+                 rewrite H_exit_info in H_is_cjump.
+                 discriminate H_is_cjump.
+
+          ** subst_var_by_inj H_b_exists H_b0_exists b0.
+      
+             rewrite <- H_fname_sf1 in H_b_exists.
+             rewrite <- H_bid_sf1 in H_b_exists.
+      
+             pose proof (get_next_instruction_fail st1 p sf1 (ret_sf :: tl') b H_call_stack_st1 H_b_exists H_get_instr) as H_pc_ge.
+             rewrite H_pc_sf1 in H_pc_ge.
+             lia.
+             
+        (* instruction not found *)
+        * apply (live_at_error_1_snd p i fname bid b pc s st1 st2 st1' v "Failed to find call instruction" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_return_st1 H_not_In_v_s).
+      
+          
+      (* block not found *)
+      + apply (live_at_error_1_snd p i fname bid b pc s st1 st2 st1' v "Failed to calling block" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_return_st1 H_not_In_v_s).
+  Qed.
+
+
+  Lemma live_at_handle_return_2_snd:
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t) (st1 st2 st1': StateD.t) (top_sf sf1 sf2: StackFrameD.t) (hl tl: CallStackD.t) (v: VarID.t) (rs: list SimpleExprD.t),
+      CFGProgD.get_block p fname bid = Some b ->
+      live_at_pc p fname bid pc s ->
+      SmallStepD.get_next_instr st1 p = None ->
+      equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
+      split_at_i i st1.(call_stack) (top_sf::hl) tl sf1 ->
+      split_at_i i st2.(call_stack) (top_sf::hl) tl sf2 ->
+      handle_return p rs top_sf (hl ++ sf1 :: tl) st1 = st1' ->
+      ~ VarSet.In v s ->
+        exists st2' bid' b' pc' s',
+          handle_return p rs top_sf (hl ++ sf2 :: tl) st2 = st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
+          /\
+            equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
+          /\
+            equiv_vars_in_top_frame p st1' st2'. (* the top frames are equivalent wrt the accessed variables *)
+  Proof.
+    intros p i fname bid b pc s st1 st2 st1' top_sf sf1 sf2 hl tl v rs.
+    intros H_b_exists H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_return_st1 H_not_In_v_s.
+
+    (* destruct equivalence facts *)
+    assert(H_equiv_st1_st2' := H_equiv_st1_st2).
+    destruct H_equiv_st1_st2' as [H_lt_i [H_len_call_stack [H_status [H_dialect [hl' [tl' [sf1' [sf2' [H_split_i_st1' [H_split_i_st2' H_equiv_sf1_sf2']]]]]]]]]].
+    destruct_equiv_frames H_equiv_sf1_sf2'.
+    destruct_split_i H_split_i_st1 st1.
+    destruct_split_i H_split_i_st2 st2.
+    destruct_split_i H_split_i_st1' st1'.
+    destruct_split_i H_split_i_st2' st2'.
+    pose proof (split_on_same_i i (call_stack st1) (top_sf :: hl) hl' tl tl' sf1 sf1' H_split_i_st1 H_split_i_st1') as H_split_st1_facts.
+    pose proof (split_on_same_i i (call_stack st2) (top_sf :: hl) hl' tl tl' sf2 sf2' H_split_i_st2 H_split_i_st2') as H_split_st2_facts.
+    destruct H_split_st1_facts as [H_hl1_eq [H_tl1_eq H_sf1_eq]].
+    destruct H_split_st2_facts as [H_hl2_eq [H_tl2_eq H_sf2_eq]].
+    subst hl' tl' sf1' sf2'. 
+
+    unfold handle_return in H_handle_return_st1.
+    unfold handle_return.
+
+    (* wether we return to sf1/sf2 or not *)
+    destruct hl as [|top_sf' hl'] eqn:E_hl'.
+
+    - (* return to the frame of sf1/sf2 *)
+      simpl.
+      simpl in H_handle_return_st1.
+
+      rewrite H_fname_sf2.
+      rewrite H_bid_sf2.
+      rewrite H_pc_sf2.
+      
+      rewrite H_fname_sf1 in H_handle_return_st1.
+      rewrite H_bid_sf1 in H_handle_return_st1.
+      rewrite H_pc_sf1 in H_handle_return_st1.
+
+      rewrite H_b_exists.
+      rewrite H_b_exists in H_handle_return_st1.
+
+      destruct (nth_error (instructions b) pc) as [instr|] eqn:E_nth.
+
+      
+      (* instruction found *)
+      + unfold execute_assignment.
+        unfold execute_assignment in H_handle_return_st1.
+
+        destruct (set_all (locals sf1) (output instr) (eval_sexpr rs top_sf)) as [locals1'|] eqn:E_set_all_st1.
+
+         * pose proof (set_all_some (output instr) (eval_sexpr rs top_sf) sf1.(locals) sf2.(locals) locals1' E_set_all_st1) as [locals2' E_set_all_st2].
+
+               rewrite E_set_all_st2.
+
+               (* split on wether v is in the phi_outvars *)                  
+               unfold equiv_locals_up_to_v.                  
+               pose proof (varlist_in_dec (output instr) v) as H_v_output.
+               destruct H_v_output as [H_v_in_output | H_v_not_in_output].
+
+               (* v in outpt *)
+              ** rewrite <- (set_all_preserves_eq_up_to_eq (output instr) (locals sf1) (locals sf2) v  (eval_sexpr rs top_sf) locals1' locals2' H_v_in_output H_equiv_locals E_set_all_st1 E_set_all_st2).
+
+
+                 remember {|
+                         Liveness_snd.StateD.call_stack :=
+                           {|
+                             Liveness_snd.StackFrameD.fname := StackFrameD.fname sf2;
+                             Liveness_snd.StackFrameD.locals := locals1';
+                             Liveness_snd.StackFrameD.curr_bid := curr_bid sf2;
+                             Liveness_snd.StackFrameD.pc := StackFrameD.pc sf2 + 1
+                           |} :: tl;
+                         Liveness_snd.StateD.status := status st2;
+                         Liveness_snd.StateD.dialect_state := dialect_state st2
+                       |} as st2' eqn:E_st2'.
+                       exists st2', bid, b, (S pc), s.
+
+                       repeat split.
+                      *** exact H_b_exists.
+                      *** unfold equiv_states_up_to_not_live_v_or_eq_states.
+                              right.
+                              rewrite E_st2'.
+                              rewrite <- H_handle_return_st1.
+                              rewrite H_status.
+                              rewrite H_dialect.
+                              rewrite H_fname_sf1.
+                              rewrite H_fname_sf2.
+                              rewrite H_bid_sf1.
+                              rewrite H_bid_sf2.
+                              rewrite H_pc_sf1.
+                              rewrite H_pc_sf2.                              
+                              reflexivity.
+                      *** rewrite E_st2'.
+                              rewrite <- H_handle_return_st1.
+                              unfold equiv_vars_in_top_frame.
+                              simpl.
+                              rewrite H_fname_sf1.
+                              rewrite H_fname_sf2.
+                              rewrite H_bid_sf1.
+                              rewrite H_bid_sf2.
+                              rewrite H_pc_sf1.
+                              rewrite H_pc_sf2.                              
+                              repeat split; try reflexivity.
+                              intros.
+                              rewrite DialectFactsD.eqb_eq.
+                              reflexivity.
+               (* v not in outpt *)
+                             ** pose proof (set_all_preserves_eq_up_to (output instr) (locals sf1) (locals sf2) v  (eval_sexpr rs top_sf) locals1' locals2' H_v_not_in_output H_equiv_locals E_set_all_st1 E_set_all_st2) as H_equiv_locals1'_locals2'.
+
+                              assert(H_pc_is_not_at_end := E_nth).
+                              apply some_implies_neq_none in H_pc_is_not_at_end.
+                              rewrite (nth_error_Some (SmallStepD.BlockD.instructions b) pc) in H_pc_is_not_at_end.
+
+                              assert( H_live_at_pc' :=  H_live_at_pc).
+          
+                              destruct H_live_at_pc' as [fname bid b0 pc s sout H_b0_exists H_live_out H_pc_at_end H_sout | fname bid b0 pc s sout instr' H_b0_exists H_live_at_S_pc H_lt_pc' H_get_instr' H_sout].
+
+                             *** subst_var_by_inj H_b_exists H_b0_exists b0.
+                                     rewrite H_pc_at_end in H_pc_is_not_at_end.
+                                     lia.
+                             *** remember {|
+                                        Liveness_snd.StateD.call_stack :=
+                                          {|
+                                            Liveness_snd.StackFrameD.fname := StackFrameD.fname sf2;
+                                            Liveness_snd.StackFrameD.locals := locals2';
+                                            Liveness_snd.StackFrameD.curr_bid := curr_bid sf2;
+                                            Liveness_snd.StackFrameD.pc := StackFrameD.pc sf2 + 1
+                                          |} :: tl;
+                                        Liveness_snd.StateD.status := status st2;
+                                        Liveness_snd.StateD.dialect_state := dialect_state st2
+                                      |} as st2' eqn:E_st2'.
+
+                                      exists st2', bid, b, (S pc), s.
+
+                                      repeat split; try reflexivity.
+                                     **** exact H_b_exists.
+                                     **** unfold equiv_states_up_to_not_live_v_or_eq_states.
+                                              left.
+                                              repeat split.
+                                             ***** rewrite <- H_handle_return_st1.
+                                                       simpl.
+                                                       rewrite H_len_tl_st1.
+                                                       lia.
+                                             ***** rewrite <- H_handle_return_st1.
+                                                       rewrite E_st2'.
+                                                       simpl.
+                                                       reflexivity.
+                                             ***** rewrite <- H_handle_return_st1.
+                                                       rewrite E_st2'.
+                                                       simpl.
+                                                       exact H_status.
+                                             ***** rewrite <- H_handle_return_st1.
+                                                      rewrite E_st2'.
+                                                      simpl.
+                                                      exact H_dialect.
+                                             ***** exists [], tl.
+                                                       exists {|
+                                                           Liveness_snd.StackFrameD.fname := StackFrameD.fname sf2;
+                                                           Liveness_snd.StackFrameD.locals := locals1';
+                                                           Liveness_snd.StackFrameD.curr_bid := curr_bid sf2;
+                                                           Liveness_snd.StackFrameD.pc := StackFrameD.pc sf2 + 1
+                                                         |}.
+                                                   exists {|
+                                                       Liveness_snd.StackFrameD.fname := StackFrameD.fname sf1;
+                                                       Liveness_snd.StackFrameD.locals := locals2';
+                                                       Liveness_snd.StackFrameD.curr_bid := curr_bid sf1;
+                                                       Liveness_snd.StackFrameD.pc := StackFrameD.pc sf1 + 1
+                                                     |}.
+                                                   repeat split.
+                                                  ****** rewrite <- H_handle_return_st1.
+                                                             simpl.
+                                                             rewrite H_len_tl_st1.
+                                                             lia.
+                                                  ****** rewrite <- H_handle_return_st1.
+                                                             simpl.
+                                                             rewrite H_fname_sf1.
+                                                             rewrite H_fname_sf2.
+                                                             rewrite H_bid_sf1 .
+                                                             rewrite H_bid_sf2. 
+                                                             rewrite H_pc_sf1.
+                                                             rewrite H_pc_sf2.
+                                                             reflexivity.
+                                                  ****** exact H_len_tl_st1.
+                                                  ****** rewrite E_st2'.
+                                                             simpl.
+                                                             rewrite H_len_tl_st1.
+                                                             lia.
+                                                  ****** rewrite E_st2'.
+                                                             simpl.
+                                                             rewrite H_fname_sf1 .
+                                                             rewrite H_fname_sf2.
+                                                             rewrite H_bid_sf1. 
+                                                             rewrite H_bid_sf2. 
+                                                             rewrite H_pc_sf1.
+                                                             rewrite H_pc_sf2.
+                                                             reflexivity.
+                                                  ****** exact H_len_tl_st1.
+                                                  ****** simpl. exact H_fname_sf2.
+                                                  ****** simpl. exact H_bid_sf2.
+                                                  ****** simpl. rewrite H_pc_sf2. rewrite Nat.add_comm. simpl. reflexivity.
+                                                  ****** simpl. exact H_fname_sf1.
+                                                  ****** simpl. exact H_bid_sf1.
+                                                  ****** simpl. rewrite H_pc_sf1. rewrite Nat.add_comm. simpl. reflexivity.
+                                                  ****** simpl. exact H_equiv_locals1'_locals2'.
+                                          ***** exact H_live_at_S_pc.
+                                          ***** subst_var_by_inj H_b_exists H_b0_exists b0.
+                                                    subst_var_by_inj E_nth H_get_instr' instr'.
+                                                    unfold prop_live_set_bkw_instr in H_sout.
+                                                    pose proof (not_In_preserves_eq sout (VarSet.union (VarSet.diff s (list_to_set (output instr))) (list_to_set (extract_yul_vars (input instr)))) v H_sout H_not_In_v_s) as H_not_in_union.
+                                                    rewrite VarSet.union_spec in H_not_in_union.
+                                                    apply Decidable.not_or in H_not_in_union.
+                                                    destruct H_not_in_union as [H_not_in_union _].
+                                                    rewrite VarSet.diff_spec in H_not_in_union.
+                                                    apply Decidable.not_and in H_not_in_union as [H_not_in_union_l | H_not_in_union_l].
+
+                                                   ****** exact H_not_in_union_l.
+                                                   ****** rewrite <- list_to_set_spec in H_not_in_union_l.
+                                                              contradiction.
+
+
+                                                   ****** apply varset_in_dec.
+                                   **** rewrite E_st2'.
+                                            rewrite <- H_handle_return_st1.
+                                            unfold equiv_vars_in_top_frame.
+                                            simpl.
+                                            rewrite H_fname_sf1.
+                                            rewrite H_fname_sf2.
+                                            rewrite H_bid_sf1.
+                                            rewrite H_bid_sf2.
+                                            rewrite H_pc_sf1.
+                                            rewrite H_pc_sf2.
+                                            repeat split; try reflexivity.
+                                            intros v0 s0 b1 H_b1_exists H_acc H_In_v0_s0.
+
+                                            subst_var_by_inj H_b_exists H_b0_exists b0.
+                                            subst_var_by_inj H_b_exists H_b1_exists b1.
+                                            subst_var_by_inj E_nth H_get_instr' instr'.
+                                            unfold prop_live_set_bkw_instr in H_sout.
+                                            pose proof (not_In_preserves_eq sout (VarSet.union (VarSet.diff s (list_to_set (output instr))) (list_to_set (extract_yul_vars (input instr)))) v H_sout H_not_In_v_s) as H_not_in_union.
+                                            rewrite VarSet.union_spec in H_not_in_union.
+                                            apply Decidable.not_or in H_not_in_union.
+                                            destruct H_not_in_union as [H_not_in_union _].
+                                            rewrite VarSet.diff_spec in H_not_in_union.
+                                            apply Decidable.not_and in H_not_in_union as [H_not_in_union_l | H_not_in_union_l].
+                                            
+                                           ****** rewrite Nat.add_comm in H_acc. simpl in H_acc.
+                                                      pose proof (accessed_var_instr_neq_v p fname bid b (S pc) s0 v0 s v H_b_exists H_live_at_S_pc H_not_in_union_l H_acc H_In_v0_s0) as H_v0_neq_v.
+                                                      apply (H_equiv_locals1'_locals2' v0 H_v0_neq_v).
+                                           ****** rewrite <- list_to_set_spec in H_not_in_union_l.
+                                                      contradiction.
+
+                                           ****** apply varset_in_dec.
+         * rewrite (set_all_none (output instr) (eval_sexpr rs top_sf) sf1.(locals) sf2.(locals) E_set_all_st1).
+
+           apply (live_at_error_1_snd p i fname bid b pc s st1 st2 st1' v "Mismatch length in output variables and input values" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_return_st1 H_not_In_v_s).
+      
+      (* instruction not found *)
+      + apply (live_at_error_1_snd p i fname bid b pc s st1 st2 st1' v "Failed to find call instruction" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_return_st1 H_not_In_v_s).
+
+    - simpl.
+      simpl in H_handle_return_st1.
+
+      destruct (CFGProgD.get_block p (StackFrameD.fname top_sf') (curr_bid top_sf')) as [next_b|] eqn:E_next_b_exists.
+
+      + destruct (nth_error (instructions next_b) (StackFrameD.pc top_sf')) as [instr|] eqn:E_instr.
+
+        * unfold execute_assignment.
+          unfold execute_assignment in H_handle_return_st1.
+          destruct (set_all (locals top_sf') (output instr) (eval_sexpr rs top_sf)) as [locals'|] eqn:E_set_all.
+
+          ** remember {|
+                 Liveness_snd.StateD.call_stack :=
+                   {|
+                     Liveness_snd.StackFrameD.fname := StackFrameD.fname top_sf';
+                     Liveness_snd.StackFrameD.locals := locals';
+                     Liveness_snd.StackFrameD.curr_bid := curr_bid top_sf';
+                     Liveness_snd.StackFrameD.pc := StackFrameD.pc top_sf' + 1
+                   |} :: hl' ++ sf2 :: tl;
+                 Liveness_snd.StateD.status := status st2;
+                 Liveness_snd.StateD.dialect_state := dialect_state st2
+               |} as st2' eqn:E_st2'.
+
+             exists st2', bid, b, pc, s.
+             repeat split; try reflexivity.
+             *** exact H_b_exists.
+             *** unfold equiv_states_up_to_not_live_v_or_eq_states.
+                 left.
+                 repeat split; try assumption.
+                 **** rewrite <- H_handle_return_st1.
+                      simpl.
+                      rewrite length_app.
+                      simpl.
+                      rewrite H_len_tl_st1.
+                      lia.
+                 **** rewrite E_st2'.
+                      rewrite <- H_handle_return_st1.
+                      simpl.
+                      repeat rewrite length_app.
+                      simpl.
+                      rewrite H_len_tl_st1.
+                      lia.
+                 **** rewrite E_st2'.
+                      rewrite <- H_handle_return_st1.
+                      simpl.
+                      exact H_status.
+                 **** rewrite E_st2'.
+                      rewrite <- H_handle_return_st1.
+                      simpl.
+                      exact H_dialect.
+                 **** exists ({|
+                                 Liveness_snd.StackFrameD.fname := StackFrameD.fname top_sf';
+                                 Liveness_snd.StackFrameD.locals := locals';
+                                 Liveness_snd.StackFrameD.curr_bid := curr_bid top_sf';
+                                 Liveness_snd.StackFrameD.pc := StackFrameD.pc top_sf' + 1
+                               |} :: hl').
+                      exists tl, sf1, sf2.
+                      repeat split; try assumption.
+                      ***** rewrite <- H_handle_return_st1.
+                            simpl.
+                            rewrite length_app.
+                            simpl.
+                            rewrite H_len_tl_st1.
+                            lia.
+                      ***** rewrite <- H_handle_return_st1.
+                            simpl.
+                            reflexivity.
+                      ***** rewrite E_st2'.
+                            simpl.
+                            rewrite length_app.
+                            simpl.
+                            rewrite H_len_tl_st1.
+                            lia.
+                      ***** rewrite E_st2'.
+                            simpl.
+                            reflexivity.
+             *** unfold equiv_vars_in_top_frame.
+                 rewrite E_st2'.
+                 rewrite <- H_handle_return_st1.
+                 simpl.
+                 repeat split; try reflexivity.
+                 intros.
+                 rewrite DialectFactsD.eqb_eq.
+                 reflexivity.
+                 
+          ** apply (live_at_error_1_snd p i fname bid b pc s st1 st2 st1' v "Mismatch length in output variables and input values" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_return_st1 H_not_In_v_s).
+             
+        * apply (live_at_error_1_snd p i fname bid b pc s st1 st2 st1' v "Failed to find call instruction" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_return_st1 H_not_In_v_s).
+          
+      + apply (live_at_error_1_snd p i fname bid b pc s st1 st2 st1' v "Failed to calling block" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_return_st1 H_not_In_v_s).
+        
+  Qed.
+
+
+    
+  Lemma live_at_handle_block_exit_snd:   
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t),
+      CFGProgD.get_block p fname bid = Some b ->
+      live_at_pc p fname bid pc s ->
+      forall  (st1 st2 st1': StateD.t) (v: VarID.t),
+        equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
+        SmallStepD.get_next_instr st1 p = None ->
+        SmallStepD.handle_block_exit st1 p = st1' ->
         ~ VarSet.In v s ->
         exists st2' bid' b' pc' s',
-          SmallStepD.handle_block_finish st2 p = st2'
+          SmallStepD.handle_block_exit st2 p = st2' (* we can make an execution *)
           /\
-          SmartContractD.get_block p fname bid' = Some b'  /\ 
-          (
-           ( ( equiv_states_up_to_i_v p i fname bid' pc' v st1' st2') /\ live_at_pc' p fname bid' pc' s' /\ ~ VarSet.In v s' )
-           \/
-           st2' = st1'
-          )
+            CFGProgD.get_block p fname bid' = Some b'
           /\
-          equiv_vars_in_top_frame p st1' st2'.
+            equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
+          /\
+            equiv_vars_in_top_frame p st1' st2'. (* the top frames are equivalent wrt the accessed variables *)
   Proof.
-    intros p i fname bid b pc s H_b_exists H_live_at_pc st1 st2 st1' v H_equiv_st1_st2 H_get_instr H_handle_block_finish H_not_In_v_s.
-    assert (H_equiv_st1_st2' := H_equiv_st1_st2).
-    unfold equiv_states_up_to_i_v in H_equiv_st1_st2'.
-    destruct H_equiv_st1_st2' as [H_lt_i [H_len_call_stack [H_status [H_dialect [hl [tl [sf1 [sf2 [H_split_i_st1 [H_split_i_st2 H_equiv_sf1_sf2]]]]]]]]]].
-
-    unfold split_at_i in H_split_i_st1.
-    destruct H_split_i_st1 as [H_lt_i_st1 [H_call_stack_st1 H_len_tl_st1]].
+    intros p i fname bid b pc s H_b_exists H_live_at_pc st1 st2 st1' v H_equiv_st1_st2 H_get_instr H_handle_exit_st1 H_not_In_v_s.
     
-    unfold split_at_i in H_split_i_st2.
-    destruct H_split_i_st2 as [H_lt_i_st2 [H_call_stack_st2 H_len_tl_st2]].
-
-    assert (H_equiv_sf1_sf2' := H_equiv_sf1_sf2).
-    unfold equiv_stack_frames_up_to_v in H_equiv_sf1_sf2'.
-    destruct H_equiv_sf1_sf2' as [H_fname_sf1 [H_bid_sf1 [H_pc_sf1 [H_fname_sf2 [H_bid_sf2 [H_pc_sf2 H_equiv_assign_sf1_sf2]]]]]]. 
+    destruct_equiv_states H_equiv_st1_st2.
+    destruct_split_i H_split_i_st1 st1.
+    destruct_split_i H_split_i_st2 st2.
+    destruct_equiv_frames H_equiv_sf1_sf2.
     
+    unfold SmallStepD.handle_block_exit in H_handle_exit_st1.
+    rewrite H_call_stack_st1 in H_handle_exit_st1.
+    
+    unfold SmallStepD.handle_block_exit.
+    rewrite H_call_stack_st2.
+    
+    (* we split on wether the top frame is i-th one*)
     destruct hl as [|top_sf hl'] eqn:E_hl.
 
     (* the case where the top stack frame is the one with different values for v *)
-    - simpl in H_call_stack_st1.
-      simpl in H_call_stack_st2.
-
-      unfold SmallStepD.handle_block_finish in H_handle_block_finish.
-      rewrite H_call_stack_st1 in H_handle_block_finish.
-      rewrite H_fname_sf1 in H_handle_block_finish.
-      rewrite H_bid_sf1 in H_handle_block_finish.
-      rewrite H_b_exists in H_handle_block_finish.
-
-      unfold SmallStepD.handle_block_finish.
-      rewrite H_call_stack_st2.
+    - simpl.
+      simpl in H_handle_exit_st1. 
+      rewrite H_fname_sf1 in H_handle_exit_st1.
+      rewrite H_bid_sf1 in H_handle_exit_st1.
       rewrite H_fname_sf2.
       rewrite H_bid_sf2.
+      rewrite H_b_exists in H_handle_exit_st1.
       rewrite H_b_exists.
 
+      (* split on the kind of block *)
       destruct (BlockD.exit_info b) as [cond_var target_if_true target_if_false|next_bid|rs|] eqn:E_b_exit_info.
 
+      (* conditional jump *)
+      + apply (live_at_handle_cond_jump_1_snd p i fname bid target_if_true target_if_false b pc s st1 st2 st1' sf1 sf2 tl cond_var v H_b_exists E_b_exit_info H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_exit_st1 H_not_In_v_s).      
+
+      (* direct jump *)
+      + apply (live_at_handle_jump_1_snd p i fname bid next_bid b pc s st1 st2 st1' sf1 sf2 tl v H_b_exists E_b_exit_info H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_exit_st1 H_not_In_v_s).
       
-      (* condition block *)
-      +  assert( H_live_at_pc' :=  H_live_at_pc).
-
-         destruct H_live_at_pc' as [fname bid b0 pc s sout H_b0_exists H_live_out H_pc_at_end H_sout | fname bid b0 pc s sout instr' H_b0_exists H_live_at_S_pc H_lt_pc' H_get_instr' H_sout].
-
-         * rewrite H_b_exists in H_b0_exists.
-           injection H_b0_exists as H_b0_exists.
-           subst b0.
-
-           assert(H_cv_neq_v: cond_var <> v).
-           (*{*)
-             unfold add_jump_var_if_applicable in H_sout.
-             rewrite E_b_exit_info in H_sout.
-             pose proof (not_In_preserves_eq  sout (VarSet.add cond_var s) v H_sout H_not_In_v_s) as H_not_In_v_add_cvar.
-             rewrite VarSet.add_spec in H_not_In_v_add_cvar.
-             apply Decidable.not_or in H_not_In_v_add_cvar as [H_v_neq_cvar _].
-             congruence.
-           (*}.*)
-           
-           rewrite <- (H_equiv_assign_sf1_sf2 cond_var H_cv_neq_v).
-
-           destruct (D.is_true_value (VariableAssignmentD.get (StackFrameD.variable_assignments sf1) cond_var)) eqn:E_cond_var_value.
-
-           (* the condition is true *)
-           ** destruct (SmallStepD.SmartContractD.get_block p fname target_if_true) as [next_b|] eqn:E_next_b.
-
-              (* block found *)
-              *** destruct H_live_out as [ fname bid b0 rs' sout0 H_b0_exists H_is_ret H_sout0| fname bid b0 sout0 H_b0_exists H_is_termin | fname bid next_bid' b0 next_b0 s' sout0 H_b0_exists H_is_jump H_live_in_next_pc H_next_b0_exists H_sout0 | fname bid  next_bid_if_true next_bid_if_false cvar b0 next_b0_if_true next_b0_if_false s1' s2' sout0 H_b0_exists H_is_cjump H_live_at_pc_if_true H_live_at_pc_if_false H_next_b0_if_true H_next_b0_if_false H_sout0].
- 
-                  **** rewrite H_b_exists in H_b0_exists.
-                       injection H_b0_exists as H_b0_exists.
-                       subst b0.
-                       unfold BlockD.is_return_block in H_is_ret.
-                       rewrite E_b_exit_info in H_is_ret.
-                       discriminate H_is_ret.
-                  **** rewrite H_b_exists in H_b0_exists.
-                       injection H_b0_exists as H_b0_exists.
-                       subst b0.
-                       unfold BlockD.is_terminated_block in H_is_termin.
-                       rewrite E_b_exit_info in H_is_termin.
-                       discriminate H_is_termin.
-                       
-                  **** rewrite H_b_exists in H_b0_exists.
-                       injection H_b0_exists as H_b0_exists.
-                       subst b0.
-                       unfold BlockD.is_jump_block in H_is_jump.
-                       rewrite E_b_exit_info in H_is_jump.
-                       discriminate H_is_jump.
-
-                  **** rewrite H_b_exists in H_b0_exists.
-                       injection H_b0_exists as H_b0_exists.
-                       subst b0.
-
-                       unfold BlockD.is_cond_jump_block in H_is_cjump.
-                       rewrite E_b_exit_info in H_is_cjump.
-                       injection H_is_cjump as H_cond_var H_target_if_true H_target_if_false.
-                       subst cvar.
-                       subst target_if_true.
-                       subst target_if_false.
-
-                       remember next_bid_if_true as next_bid eqn:E_next_bid.
-
-                       rewrite E_next_b in H_next_b0_if_true.
-                       injection H_next_b0_if_true as  H_next_b0_if_true.
-                       subst next_b0_if_true.
-                                               
-                       unfold add_jump_var_if_applicable in H_sout.
-                       rewrite E_b_exit_info in H_sout.
-                 
-                       rewrite  (add_preserves_equal sout0 (VarSet.union (apply_inv_phi (BlockD.phi_function next_b bid) s1') (apply_inv_phi (BlockD.phi_function next_b0_if_false bid) s2')) cond_var H_sout0) in H_sout.
-
-                       unfold SmallStepD.apply_renamings in H_handle_block_finish.
-                       unfold SmallStepD.apply_renamings.
-
-                       remember (SmallStepD.get_renaming_sexpr (SmallStepD.SmartContractD.BlockD.phi_function next_b bid)) as phi_invars eqn:E_phi_invars.
-
-                       remember (SmallStepD.get_renaming_var (SmallStepD.SmartContractD.BlockD.phi_function next_b bid)) as phi_outvars eqn:E_phi_outvars.
-
-                       assert (H_not_In_v_input: ~ In (inl v) phi_invars).
-                       (*{*)
-                         pose proof (not_In_preserves_eq sout (VarSet.add cond_var (VarSet.union (apply_inv_phi (BlockD.phi_function next_b bid) s1') (apply_inv_phi (BlockD.phi_function next_b0_if_false bid) s2'))) v H_sout H_not_In_v_s) as H_v_not_in_inv.
-                         unfold apply_inv_phi in H_v_not_in_inv.
-                         rewrite <- E_phi_invars in H_v_not_in_inv.
-                         rewrite <- E_phi_outvars in H_v_not_in_inv.
-                         rewrite VarSet.add_spec in H_v_not_in_inv.
-                         apply Decidable.not_or in H_v_not_in_inv.
-                         destruct H_v_not_in_inv as [_ H_v_not_in_inv].
-                         rewrite VarSet.union_spec in H_v_not_in_inv.
-                         apply Decidable.not_or in H_v_not_in_inv.
-                         destruct H_v_not_in_inv as [H_v_not_in_inv _].
-                         rewrite VarSet.union_spec in H_v_not_in_inv.
-                         apply Decidable.not_or in H_v_not_in_inv.
-                         destruct H_v_not_in_inv as [_ H_v_not_in_inv].
-                         rewrite <- list_to_set_spec in  H_v_not_in_inv.
-                         rewrite <- extract_yul_vars_spec in H_v_not_in_inv.
-                         apply H_v_not_in_inv.
-                       (*}.*)
-
-                       rewrite <- (eval_sexpr_snd phi_invars fname bid pc v sf1 sf2 H_equiv_sf1_sf2 H_not_In_v_input).
-
-                       destruct (SmallStepD.VariableAssignmentD.assign_all (SmallStepD.StackFrameD.variable_assignments sf1) phi_outvars (SmallStepD.eval_sexpr phi_invars sf1)) as [var_assignments_1|] eqn:E_assign_all_1.
-
-                       ***** pose proof (set_all_some phi_outvars (SmallStepD.eval_sexpr phi_invars sf1) (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) var_assignments_1 E_assign_all_1) as [var_assignments_2 E_assign_all_2].
-                       rewrite E_assign_all_2.
-                       
-                       rewrite <- live_at_pc_zero_eq_live_in in H_live_at_pc_if_true.
-                       apply (live_at_pc'_0_equiv_live_at_pc_0 p fname next_bid next_b s1' E_next_b) in H_live_at_pc_if_true.
-
-                       remember {|
-                                  Liveness_snd.StateD.call_stack :=
-                                    {|
-                                      Liveness_snd.StackFrameD.function_name := fname;
-                                      Liveness_snd.StackFrameD.variable_assignments := var_assignments_2;
-                                      Liveness_snd.StackFrameD.curr_block_id := next_bid;
-                                      Liveness_snd.StackFrameD.pc := 0
-                                    |} :: tl;
-                          Liveness_snd.StateD.status := Status.Running;
-                          Liveness_snd.StateD.dialect_state := SmallStepD.StateD.dialect_state st2
-                        |} as st2' eqn:E_st2'.
-
-                       exists st2'.
-                       exists next_bid.
-                       exists next_b.
-                       exists 0%nat.
-                       exists s1'.
-                       repeat split.
-                       ****** apply E_next_b.
-                       ****** (* split on wether v is in the phi_outvars *)
-                            pose proof (varlist_in_dec phi_outvars v) as H_v_output.
-                      
-                            destruct H_v_output as [H_v_in_output | H_v_not_in_output].
-                            ******** right.
-                                     rewrite <- (set_all_preserves_eq_up_to_eq phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2) in E_st2'.
-                            
-                                     rewrite E_st2'.
-                                     rewrite <- H_handle_block_finish.
-                                     rewrite H_dialect.
-                                     reflexivity.
-                                     
-                            ******** left.
-                                     repeat split.
-                                     ********* rewrite <- H_handle_block_finish.
-                                               simpl.
-                                               rewrite H_call_stack_st1 in H_lt_i.
-                                               simpl in H_lt_i.
-                                               apply H_lt_i.
-                                     ********* rewrite <- H_handle_block_finish.
-                                               rewrite E_st2'.
-                                               simpl.
-                                               reflexivity.
-                                     ********* rewrite <- H_handle_block_finish.
-                                               rewrite E_st2'.
-                                               simpl.
-                                               reflexivity.
-                                     ********* rewrite <- H_handle_block_finish.
-                                               rewrite E_st2'.
-                                               simpl.
-                                               apply H_dialect.
-                                     ********* exists [].
-                                               exists tl.
-                                               exists {|
-                                                   Liveness_snd.StackFrameD.function_name := fname;
-                                                   Liveness_snd.StackFrameD.variable_assignments := var_assignments_1;
-                                                   Liveness_snd.StackFrameD.curr_block_id := next_bid;
-                                                   Liveness_snd.StackFrameD.pc := 0
-                                                 |}.
-                                               exists {|
-                                                   Liveness_snd.StackFrameD.function_name := fname;
-                                                   Liveness_snd.StackFrameD.variable_assignments := var_assignments_2;
-                                                   Liveness_snd.StackFrameD.curr_block_id := next_bid;
-                                                   Liveness_snd.StackFrameD.pc := 0
-                                                 |}.
-                                               repeat split.
-                                               ********** rewrite <- H_handle_block_finish.
-                                                          simpl.
-                                                          rewrite H_call_stack_st1 in H_lt_i.
-                                                          simpl in H_lt_i.
-                                                          apply H_lt_i.
-                                               ********** rewrite <- H_handle_block_finish.
-                                                          simpl.     
-                                                          reflexivity.
-                                               ********** apply H_len_tl_st1.
-                                               ********** rewrite E_st2'.
-                                                          simpl.
-                                                          rewrite H_call_stack_st1 in H_lt_i.
-                                                          simpl in H_lt_i.
-                                                          apply H_lt_i.
-                                               ********** rewrite E_st2'.
-                                                          simpl.
-                                                          reflexivity.
-                                               ********** apply H_len_tl_st2.
-                                               ********** simpl.
-                                                          apply (set_all_preserves_eq_up_to phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_not_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2).
-
-                                   ********* apply H_live_at_pc_if_true.
-                                   ********* pose proof (not_In_preserves_eq sout (VarSet.add cond_var (VarSet.union (apply_inv_phi (BlockD.phi_function next_b bid) s1') (apply_inv_phi (BlockD.phi_function next_b0_if_false bid) s2'))) v H_sout H_not_In_v_s) as H_not_In_v_s'.
-                                           unfold apply_inv_phi in H_not_In_v_s'.
-                                           rewrite <- E_phi_invars in H_not_In_v_s'.
-                                           rewrite <- E_phi_outvars in H_not_In_v_s'.
-                                           rewrite VarSet.add_spec in H_not_In_v_s'.
-                                           apply Decidable.not_or in H_not_In_v_s' as [_ H_not_In_v_s'].
-                                           rewrite VarSet.union_spec in H_not_In_v_s'.
-                                           apply Decidable.not_or in H_not_In_v_s' as [H_not_In_v_s' _].
-                                           rewrite VarSet.union_spec in H_not_In_v_s'.
-                                           apply Decidable.not_or in H_not_In_v_s' as [H_not_In_v_s' _].
-                                           rewrite VarSet.diff_spec in H_not_In_v_s'.
-                                           apply Decidable.not_and in H_not_In_v_s' as [H_not_In_v_s' | H_not_In_v_s' ].
-                                           ********** apply H_not_In_v_s'.
-                                           ********** apply Decidable.not_not in H_not_In_v_s'.
-                                                      rewrite <- list_to_set_spec in H_not_In_v_s'.
-                                                      contradiction H_not_In_v_s'.
-                                                      apply varset_in_dec.
-                                           ********** apply varset_in_dec.
-
-                       ****** (* split on wether v is in the phi_outvars *)
-                              pose proof (varlist_in_dec phi_outvars v) as H_v_output.
-                      
-                              destruct H_v_output as [H_v_in_output | H_v_not_in_output].
-
-                              ******* rewrite <- (set_all_preserves_eq_up_to_eq phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2) in E_st2'.
-                            
-                                      rewrite E_st2'.
-                                      rewrite <- H_handle_block_finish.
-                                      rewrite H_dialect.
-                                      unfold equiv_vars_in_top_frame.
-                                      simpl.
-                                      repeat split; try reflexivity.
-
-                             ******* rewrite <- H_handle_block_finish.
-                                     rewrite E_st2'.
-                                     unfold equiv_vars_in_top_frame.
-                                     simpl.
-                                     repeat split; try reflexivity.
-                                     intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
-                                     rewrite E_next_b in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-
-
-                                   assert(H_not_v_In_s'': ~ VarSet.In v s1').
-                                   (*{*)
-                                     pose proof (not_In_preserves_eq sout (VarSet.add cond_var (VarSet.union (apply_inv_phi (BlockD.phi_function next_b bid) s1') (apply_inv_phi (BlockD.phi_function next_b0_if_false bid) s2'))) v H_sout H_not_In_v_s) as H_not_In_v_s'.
-                                     unfold apply_inv_phi in H_not_In_v_s'.
-                                     rewrite <- E_phi_invars in H_not_In_v_s'.
-                                     rewrite <- E_phi_outvars in H_not_In_v_s'.
-                                     rewrite VarSet.add_spec in H_not_In_v_s'.
-                                     apply Decidable.not_or in H_not_In_v_s' as [_ H_not_In_v_s'].
-                                     rewrite VarSet.union_spec in H_not_In_v_s'.
-                                     apply Decidable.not_or in H_not_In_v_s' as [H_not_In_v_s' _].
-                                     rewrite VarSet.union_spec in H_not_In_v_s'.
-                                     apply Decidable.not_or in H_not_In_v_s' as [H_not_In_v_s' _].
-                                     rewrite VarSet.diff_spec in H_not_In_v_s'.
-                                     apply Decidable.not_and in H_not_In_v_s' as [H_not_In_v_s' | H_not_In_v_s' ].
-                                     ******** apply H_not_In_v_s'.
-                                     ******** apply Decidable.not_not in H_not_In_v_s'.
-                                     rewrite <- list_to_set_spec in H_not_In_v_s'.
-                                     contradiction H_not_In_v_s'.
-                                     apply varset_in_dec.
-                                     ******** apply varset_in_dec.
-                                   (*}.*)
-
-
-                                   ******** apply (set_all_preserves_eq_up_to phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_not_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2).
-
-                                   apply (accessed_var_instr_neq_v p fname next_bid next_b 0%nat s0 v0 s1' v E_next_b H_live_at_pc_if_true H_not_v_In_s'' H_accessed_vars H_In_v0_s0).
-
-                       ***** rewrite (assign_all_none phi_outvars (SmallStepD.eval_sexpr phi_invars sf1) (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) E_assign_all_1).
-
-                             remember (SmallStepD.StateD.set_status st2 (Status.Error "Error while applying phi-function")) as st2' eqn:E_st2'.
-
-                             exists st2'.
-                             exists bid.
-                             exists b.
-                             exists pc.
-                             exists sout.
-                             repeat split.
-                             ****** apply H_b_exists.
-                             ****** left.
-                                    repeat split.
-                                    ******* rewrite <- H_handle_block_finish.
-                                            simpl.
-                                            apply H_lt_i.
-                                   ******* rewrite <- H_handle_block_finish.
-                                           rewrite E_st2'.
-                                           simpl.
-                                           apply H_len_call_stack.
-                                   ******* rewrite <- H_handle_block_finish.
-                                           rewrite E_st2'.
-                                           simpl.
-                                           reflexivity.
-                                   ******* rewrite <- H_handle_block_finish.
-                                           rewrite E_st2'.
-                                           simpl.
-                                           apply H_dialect.
-                                   ******* exists [].
-                                           exists tl.
-                                           exists sf1.
-                                           exists sf2.
-                                           repeat split.
-                                           ******** rewrite <- H_handle_block_finish.
-                                                    simpl.
-                                                    apply H_lt_i.
-                                           ******** rewrite <- H_handle_block_finish.
-                                                    simpl.
-                                                    apply H_call_stack_st1.
-                                           ******** apply H_len_tl_st1.
-                                           ******** rewrite E_st2'.
-                                                    simpl.
-                                                    rewrite H_call_stack_st1 in H_lt_i.
-                                                    simpl in H_lt_i.
-                                                    rewrite H_call_stack_st2.
-                                                    simpl.
-                                                    apply H_lt_i.
-                                           ******** rewrite E_st2'.
-                                                    simpl.
-                                                    apply H_call_stack_st2.
-                                           ******** apply H_len_tl_st2.
-                                           ******** apply H_fname_sf1.
-                                           ******** apply H_bid_sf1.
-                                           ******** apply H_pc_sf1.
-                                           ******** apply H_fname_sf2.
-                                           ******** apply H_bid_sf2.
-                                           ******** apply H_pc_sf2.
-                                           ******** apply H_equiv_assign_sf1_sf2.
-                                   ******* apply H_live_at_pc.
-                                   ******* apply H_not_In_v_s.
-                             ****** rewrite <- H_handle_block_finish.
-                                    rewrite E_st2'.
-                                    unfold equiv_vars_in_top_frame.
-                                    simpl.
-                                    rewrite H_call_stack_st1.
-                                    rewrite H_call_stack_st2.
-                                    repeat split.
-                                    ******* rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
-                                    ******* rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
-                                    ******* rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                                    ******* intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
-                                            rewrite H_fname_sf1 in H_b_top_exists.
-                                            rewrite H_bid_sf1 in H_b_top_exists.
-                                            rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-                                            rewrite H_pc_sf1 in H_accessed_vars.
-                                            pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
-                                            apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
-
-              (* block not found *)
-              *** remember (SmallStepD.StateD.set_status st2 (Status.Error "Target block not found in the smart contract")) as st2' eqn:H_st2'.
-                  exists st2'.
-                  exists bid.
-                  exists b.
-                  exists pc.
-                  exists sout.
-                  repeat split.
-                  **** apply H_b_exists.
-                  **** left.
-                       repeat split.
-                       ***** rewrite <- H_handle_block_finish.
-                             simpl.
-                             apply H_lt_i.
-                       ***** rewrite <- H_handle_block_finish.
-                             rewrite H_st2'.
-                             simpl.
-                             apply H_len_call_stack.
-                       ***** rewrite <- H_handle_block_finish.
-                             rewrite H_st2'.
-                             simpl.
-                             reflexivity.
-                       ***** rewrite <- H_handle_block_finish.
-                             rewrite H_st2'.
-                             simpl.
-                             apply H_dialect.
-                       ***** exists [].
-                             exists tl.
-                             exists sf1.
-                             exists sf2.
-                             repeat split.
-                             ****** rewrite <- H_handle_block_finish.
-                                    simpl.
-                                    apply H_lt_i.
-                             ****** rewrite <- H_handle_block_finish.
-                                    simpl.
-                                    apply H_call_stack_st1.
-                             ****** apply H_len_tl_st1.
-                             ****** rewrite H_st2'.
-                                    simpl.
-                                    rewrite H_call_stack_st2.
-                                    simpl.
-                                    rewrite H_call_stack_st1 in H_lt_i.
-                                    simpl in H_lt_i.
-                                    apply H_lt_i.
-                            ****** rewrite H_st2'.
-                                   simpl.
-                                   apply H_call_stack_st2.
-                            ****** apply H_len_tl_st2.
-                            ****** apply H_fname_sf1.
-                            ****** apply H_bid_sf1.
-                            ****** apply H_pc_sf1.
-                            ****** apply H_fname_sf2.
-                            ****** apply H_bid_sf2.
-                            ****** apply H_pc_sf2.
-                            ****** apply H_equiv_assign_sf1_sf2.
-                       ***** apply H_live_at_pc.
-                       ***** apply H_not_In_v_s.
-                  **** rewrite <- H_handle_block_finish.
-                       rewrite H_st2'.
-                       unfold equiv_vars_in_top_frame.
-                       simpl.
-                       rewrite H_call_stack_st1.
-                       rewrite H_call_stack_st2.
-                       repeat split.
-                       ***** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
-                       ***** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
-                       ***** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                       ***** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
-                             rewrite H_fname_sf1 in H_b_top_exists.
-                             rewrite H_bid_sf1 in H_b_top_exists.
-                             rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-                             rewrite H_pc_sf1 in H_accessed_vars.
-                             pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
-                             apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
-
-           (* the condition is false *)
-           ** destruct (SmallStepD.SmartContractD.get_block p fname target_if_false) as [next_b|] eqn:E_next_b.
-
-              (* block found *)
-              *** destruct H_live_out as [ fname bid b0 rs' sout0 H_b0_exists H_is_ret H_sout0| fname bid b0 sout0 H_b0_exists H_is_termin | fname bid next_bid' b0 next_b0 s' sout0 H_b0_exists H_is_jump H_live_in_next_pc H_next_b0_exists H_sout0 | fname bid  next_bid_if_true next_bid_if_false cvar b0 next_b0_if_true next_b0_if_false s1' s2' sout0 H_b0_exists H_is_cjump H_live_at_pc_if_true H_live_at_pc_if_false H_next_b0_if_true H_next_b0_if_false H_sout0].
- 
-                  **** rewrite H_b_exists in H_b0_exists.
-                       injection H_b0_exists as H_b0_exists.
-                       subst b0.
-                       unfold BlockD.is_return_block in H_is_ret.
-                       rewrite E_b_exit_info in H_is_ret.
-                       discriminate H_is_ret.
-                  **** rewrite H_b_exists in H_b0_exists.
-                       injection H_b0_exists as H_b0_exists.
-                       subst b0.
-                       unfold BlockD.is_terminated_block in H_is_termin.
-                       rewrite E_b_exit_info in H_is_termin.
-                       discriminate H_is_termin.
-                       
-                  **** rewrite H_b_exists in H_b0_exists.
-                       injection H_b0_exists as H_b0_exists.
-                       subst b0.
-                       unfold BlockD.is_jump_block in H_is_jump.
-                       rewrite E_b_exit_info in H_is_jump.
-                       discriminate H_is_jump.
-
-                  **** rewrite H_b_exists in H_b0_exists.
-                       injection H_b0_exists as H_b0_exists.
-                       subst b0.
-
-                       unfold BlockD.is_cond_jump_block in H_is_cjump.
-                       rewrite E_b_exit_info in H_is_cjump.
-                       injection H_is_cjump as H_cond_var H_target_if_true H_target_if_false.
-                       subst cvar.
-                       subst target_if_true.
-                       subst target_if_false.
-
-                       remember next_bid_if_false as next_bid eqn:E_next_bid.
-
-                       rewrite E_next_b in H_next_b0_if_false.
-                       injection H_next_b0_if_false as  H_next_b0_if_false.
-                       subst next_b0_if_false.
-                                               
-                       unfold add_jump_var_if_applicable in H_sout.
-                       rewrite E_b_exit_info in H_sout.
-                 
-                       rewrite  (add_preserves_equal sout0 (VarSet.union (apply_inv_phi (BlockD.phi_function next_b0_if_true bid) s1') (apply_inv_phi (BlockD.phi_function next_b bid) s2')) cond_var H_sout0) in H_sout.
-
-                       unfold SmallStepD.apply_renamings in H_handle_block_finish.
-                       unfold SmallStepD.apply_renamings.
-
-                       remember (SmallStepD.get_renaming_sexpr (SmallStepD.SmartContractD.BlockD.phi_function next_b bid)) as phi_invars eqn:E_phi_invars.
-
-                       remember (SmallStepD.get_renaming_var (SmallStepD.SmartContractD.BlockD.phi_function next_b bid)) as phi_outvars eqn:E_phi_outvars.
-
-                       assert (H_not_In_v_input: ~ In (inl v) phi_invars).
-                       (*{*)
-                         pose proof (not_In_preserves_eq sout (VarSet.add cond_var (VarSet.union (apply_inv_phi (BlockD.phi_function next_b0_if_true bid) s1') (apply_inv_phi (BlockD.phi_function next_b bid) s2'))) v H_sout H_not_In_v_s) as H_v_not_in_inv.
-                         unfold apply_inv_phi in H_v_not_in_inv.
-                         rewrite <- E_phi_invars in H_v_not_in_inv.
-                         rewrite <- E_phi_outvars in H_v_not_in_inv.
-                         rewrite VarSet.add_spec in H_v_not_in_inv.
-                         apply Decidable.not_or in H_v_not_in_inv.
-                         destruct H_v_not_in_inv as [_ H_v_not_in_inv].
-                         rewrite VarSet.union_spec in H_v_not_in_inv.
-                         apply Decidable.not_or in H_v_not_in_inv.
-                         destruct H_v_not_in_inv as [_ H_v_not_in_inv].
-                         rewrite VarSet.union_spec in H_v_not_in_inv.
-                         apply Decidable.not_or in H_v_not_in_inv.
-                         destruct H_v_not_in_inv as [_ H_v_not_in_inv].
-                         rewrite <- list_to_set_spec in  H_v_not_in_inv.
-                         rewrite <- extract_yul_vars_spec in H_v_not_in_inv.
-                         apply H_v_not_in_inv.
-                       (*}.*)
-
-                       rewrite <- (eval_sexpr_snd phi_invars fname bid pc v sf1 sf2 H_equiv_sf1_sf2 H_not_In_v_input).
-
-                       destruct (SmallStepD.VariableAssignmentD.assign_all (SmallStepD.StackFrameD.variable_assignments sf1) phi_outvars (SmallStepD.eval_sexpr phi_invars sf1)) as [var_assignments_1|] eqn:E_assign_all_1.
-
-                       ***** pose proof (set_all_some phi_outvars (SmallStepD.eval_sexpr phi_invars sf1) (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) var_assignments_1 E_assign_all_1) as [var_assignments_2 E_assign_all_2].
-                              rewrite E_assign_all_2.
-                       
-                              rewrite <- live_at_pc_zero_eq_live_in in H_live_at_pc_if_false.
-                              apply (live_at_pc'_0_equiv_live_at_pc_0 p fname next_bid next_b s2' E_next_b) in H_live_at_pc_if_false.
-
-                              remember {|
-                                  Liveness_snd.StateD.call_stack :=
-                                    {|
-                                      Liveness_snd.StackFrameD.function_name := fname;
-                                      Liveness_snd.StackFrameD.variable_assignments := var_assignments_2;
-                                      Liveness_snd.StackFrameD.curr_block_id := next_bid;
-                                      Liveness_snd.StackFrameD.pc := 0
-                                    |} :: tl;
-                                  Liveness_snd.StateD.status := Status.Running;
-                                  Liveness_snd.StateD.dialect_state := SmallStepD.StateD.dialect_state st2
-                                |} as st2' eqn:E_st2'.
-                              
-                              exists st2'.
-                              exists next_bid.
-                       exists next_b.
-                       exists 0%nat.
-                       exists s2'.
-                       repeat split.
-                       ****** apply E_next_b.
-                       ****** (* split on wether v is in the phi_outvars *)
-                            pose proof (varlist_in_dec phi_outvars v) as H_v_output.
-                      
-                            destruct H_v_output as [H_v_in_output | H_v_not_in_output].
-                            ******** right.
-                                     rewrite <- (set_all_preserves_eq_up_to_eq phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2) in E_st2'.
-                            
-                                     rewrite E_st2'.
-                                     rewrite <- H_handle_block_finish.
-                                     rewrite H_dialect.
-                                     reflexivity.
-                                     
-                            ******** left.
-                                     repeat split.
-                                     ********* rewrite <- H_handle_block_finish.
-                                               simpl.
-                                               rewrite H_call_stack_st1 in H_lt_i.
-                                               simpl in H_lt_i.
-                                               apply H_lt_i.
-                                     ********* rewrite <- H_handle_block_finish.
-                                               rewrite E_st2'.
-                                               simpl.
-                                               reflexivity.
-                                     ********* rewrite <- H_handle_block_finish.
-                                               rewrite E_st2'.
-                                               simpl.
-                                               reflexivity.
-                                     ********* rewrite <- H_handle_block_finish.
-                                               rewrite E_st2'.
-                                               simpl.
-                                               apply H_dialect.
-                                     ********* exists [].
-                                               exists tl.
-                                               exists {|
-                                                   Liveness_snd.StackFrameD.function_name := fname;
-                                                   Liveness_snd.StackFrameD.variable_assignments := var_assignments_1;
-                                                   Liveness_snd.StackFrameD.curr_block_id := next_bid;
-                                                   Liveness_snd.StackFrameD.pc := 0
-                                                 |}.
-                                               exists {|
-                                                   Liveness_snd.StackFrameD.function_name := fname;
-                                                   Liveness_snd.StackFrameD.variable_assignments := var_assignments_2;
-                                                   Liveness_snd.StackFrameD.curr_block_id := next_bid;
-                                                   Liveness_snd.StackFrameD.pc := 0
-                                                 |}.
-                                               repeat split.
-                                               ********** rewrite <- H_handle_block_finish.
-                                                          simpl.
-                                                          rewrite H_call_stack_st1 in H_lt_i.
-                                                          simpl in H_lt_i.
-                                                          apply H_lt_i.
-                                               ********** rewrite <- H_handle_block_finish.
-                                                          simpl.     
-                                                          reflexivity.
-                                               ********** apply H_len_tl_st1.
-                                               ********** rewrite E_st2'.
-                                                          simpl.
-                                                          rewrite H_call_stack_st1 in H_lt_i.
-                                                          simpl in H_lt_i.
-                                                          apply H_lt_i.
-                                               ********** rewrite E_st2'.
-                                                          simpl.
-                                                          reflexivity.
-                                               ********** apply H_len_tl_st2.
-                                               ********** simpl.
-                                                          apply (set_all_preserves_eq_up_to phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_not_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2).
-
-                                   ********* apply H_live_at_pc_if_false.
-                                   ********* pose proof (not_In_preserves_eq sout (VarSet.add cond_var (VarSet.union (apply_inv_phi (BlockD.phi_function next_b0_if_true bid) s1') (apply_inv_phi (BlockD.phi_function next_b bid) s2'))) v H_sout H_not_In_v_s) as H_not_In_v_s'.
-                                           unfold apply_inv_phi in H_not_In_v_s'.
-                                           rewrite <- E_phi_invars in H_not_In_v_s'.
-                                           rewrite <- E_phi_outvars in H_not_In_v_s'.
-                                           rewrite VarSet.add_spec in H_not_In_v_s'.
-                                           apply Decidable.not_or in H_not_In_v_s' as [_ H_not_In_v_s'].
-                                           rewrite VarSet.union_spec in H_not_In_v_s'.
-                                           apply Decidable.not_or in H_not_In_v_s' as [_ H_not_In_v_s'].
-                                           rewrite VarSet.union_spec in H_not_In_v_s'.
-                                           apply Decidable.not_or in H_not_In_v_s' as [H_not_In_v_s' _].
-                                           rewrite VarSet.diff_spec in H_not_In_v_s'.
-                                           apply Decidable.not_and in H_not_In_v_s' as [H_not_In_v_s' | H_not_In_v_s' ].
-                                           ********** apply H_not_In_v_s'.
-                                           ********** apply Decidable.not_not in H_not_In_v_s'.
-                                                      rewrite <- list_to_set_spec in H_not_In_v_s'.
-                                                      contradiction H_not_In_v_s'.
-                                                      apply varset_in_dec.
-                                           ********** apply varset_in_dec.
-
-                       ****** (* split on wether v is in the phi_outvars *)
-                              pose proof (varlist_in_dec phi_outvars v) as H_v_output.
-                      
-                              destruct H_v_output as [H_v_in_output | H_v_not_in_output].
-
-                              ******* rewrite <- (set_all_preserves_eq_up_to_eq phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2) in E_st2'.
-                            
-                                      rewrite E_st2'.
-                                      rewrite <- H_handle_block_finish.
-                                      rewrite H_dialect.
-                                      unfold equiv_vars_in_top_frame.
-                                      simpl.
-                                      repeat split; try reflexivity.
-
-                             ******* rewrite <- H_handle_block_finish.
-                                     rewrite E_st2'.
-                                     unfold equiv_vars_in_top_frame.
-                                     simpl.
-                                     repeat split; try reflexivity.
-                                     intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
-
-                                     rewrite E_next_b in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-
-
-                                   assert(H_not_v_In_s'': ~ VarSet.In v s2').
-                                   (*{*)
-                                     pose proof (not_In_preserves_eq sout (VarSet.add cond_var (VarSet.union (apply_inv_phi (BlockD.phi_function next_b0_if_true bid) s1') (apply_inv_phi (BlockD.phi_function next_b bid) s2'))) v H_sout H_not_In_v_s) as H_not_In_v_s'.
-                                     unfold apply_inv_phi in H_not_In_v_s'.
-                                     rewrite <- E_phi_invars in H_not_In_v_s'.
-                                     rewrite <- E_phi_outvars in H_not_In_v_s'.
-                                     rewrite VarSet.add_spec in H_not_In_v_s'.
-                                     apply Decidable.not_or in H_not_In_v_s' as [_ H_not_In_v_s'].
-                                     rewrite VarSet.union_spec in H_not_In_v_s'.
-                                     apply Decidable.not_or in H_not_In_v_s' as [_ H_not_In_v_s'].
-                                     rewrite VarSet.union_spec in H_not_In_v_s'.
-                                     apply Decidable.not_or in H_not_In_v_s' as [H_not_In_v_s' _].
-                                     rewrite VarSet.diff_spec in H_not_In_v_s'.
-                                     apply Decidable.not_and in H_not_In_v_s' as [H_not_In_v_s' | H_not_In_v_s' ].
-                                     ******** apply H_not_In_v_s'.
-                                     ******** apply Decidable.not_not in H_not_In_v_s'.
-                                     rewrite <- list_to_set_spec in H_not_In_v_s'.
-                                     contradiction H_not_In_v_s'.
-                                     apply varset_in_dec.
-                                     ******** apply varset_in_dec.
-                                   (*}.*)
-
-
-                                   ******** apply (set_all_preserves_eq_up_to phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_not_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2).
-
-                                   apply (accessed_var_instr_neq_v p fname next_bid next_b 0%nat s0 v0 s2' v E_next_b H_live_at_pc_if_false H_not_v_In_s'' H_accessed_vars H_In_v0_s0).
-
-                       ***** rewrite (assign_all_none phi_outvars (SmallStepD.eval_sexpr phi_invars sf1) (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) E_assign_all_1).
-
-                             remember (SmallStepD.StateD.set_status st2 (Status.Error "Error while applying phi-function")) as st2' eqn:E_st2'.
-
-                             exists st2'.
-                             exists bid.
-                             exists b.
-                             exists pc.
-                             exists sout.
-                             repeat split.
-                             ****** apply H_b_exists.
-                             ****** left.
-                                    repeat split.
-                                    ******* rewrite <- H_handle_block_finish.
-                                            simpl.
-                                            apply H_lt_i.
-                                   ******* rewrite <- H_handle_block_finish.
-                                           rewrite E_st2'.
-                                           simpl.
-                                           apply H_len_call_stack.
-                                   ******* rewrite <- H_handle_block_finish.
-                                           rewrite E_st2'.
-                                           simpl.
-                                           reflexivity.
-                                   ******* rewrite <- H_handle_block_finish.
-                                           rewrite E_st2'.
-                                           simpl.
-                                           apply H_dialect.
-                                   ******* exists [].
-                                           exists tl.
-                                           exists sf1.
-                                           exists sf2.
-                                           repeat split.
-                                           ******** rewrite <- H_handle_block_finish.
-                                                    simpl.
-                                                    apply H_lt_i.
-                                           ******** rewrite <- H_handle_block_finish.
-                                                    simpl.
-                                                    apply H_call_stack_st1.
-                                           ******** apply H_len_tl_st1.
-                                           ******** rewrite E_st2'.
-                                                    simpl.
-                                                    rewrite H_call_stack_st1 in H_lt_i.
-                                                    simpl in H_lt_i.
-                                                    rewrite H_call_stack_st2.
-                                                    simpl.
-                                                    apply H_lt_i.
-                                           ******** rewrite E_st2'.
-                                                    simpl.
-                                                    apply H_call_stack_st2.
-                                           ******** apply H_len_tl_st2.
-                                           ******** apply H_fname_sf1.
-                                           ******** apply H_bid_sf1.
-                                           ******** apply H_pc_sf1.
-                                           ******** apply H_fname_sf2.
-                                           ******** apply H_bid_sf2.
-                                           ******** apply H_pc_sf2.
-                                           ******** apply H_equiv_assign_sf1_sf2.
-                                   ******* apply H_live_at_pc.
-                                   ******* apply H_not_In_v_s.
-                             ****** rewrite <- H_handle_block_finish.
-                                    rewrite E_st2'.
-                                    unfold equiv_vars_in_top_frame.
-                                    simpl.
-                                    rewrite H_call_stack_st1.
-                                    rewrite H_call_stack_st2.
-                                    repeat split.
-                                    ******* rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
-                                    ******* rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
-                                    ******* rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                                    ******* intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
-
-                                            rewrite H_fname_sf1 in H_b_top_exists.
-                                            rewrite H_bid_sf1 in H_b_top_exists.
-                                            rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-                                    
-                                            rewrite H_pc_sf1 in H_accessed_vars.
-                                            pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
-                                            apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
-
-              (* block not found *)
-              *** remember (SmallStepD.StateD.set_status st2 (Status.Error "Target block not found in the smart contract")) as st2' eqn:H_st2'.
-                  exists st2'.
-                  exists bid.
-                  exists b.
-                  exists pc.
-                  exists sout.
-                  repeat split.
-                  **** apply H_b_exists.
-                  **** left.
-                       repeat split.
-                       ***** rewrite <- H_handle_block_finish.
-                             simpl.
-                             apply H_lt_i.
-                       ***** rewrite <- H_handle_block_finish.
-                             rewrite H_st2'.
-                             simpl.
-                             apply H_len_call_stack.
-                       ***** rewrite <- H_handle_block_finish.
-                             rewrite H_st2'.
-                             simpl.
-                             reflexivity.
-                       ***** rewrite <- H_handle_block_finish.
-                             rewrite H_st2'.
-                             simpl.
-                             apply H_dialect.
-                       ***** exists [].
-                             exists tl.
-                             exists sf1.
-                             exists sf2.
-                             repeat split.
-                             ****** rewrite <- H_handle_block_finish.
-                                    simpl.
-                                    apply H_lt_i.
-                             ****** rewrite <- H_handle_block_finish.
-                                    simpl.
-                                    apply H_call_stack_st1.
-                             ****** apply H_len_tl_st1.
-                             ****** rewrite H_st2'.
-                                    simpl.
-                                    rewrite H_call_stack_st2.
-                                    simpl.
-                                    rewrite H_call_stack_st1 in H_lt_i.
-                                    simpl in H_lt_i.
-                                    apply H_lt_i.
-                            ****** rewrite H_st2'.
-                                   simpl.
-                                   apply H_call_stack_st2.
-                            ****** apply H_len_tl_st2.
-                            ****** apply H_fname_sf1.
-                            ****** apply H_bid_sf1.
-                            ****** apply H_pc_sf1.
-                            ****** apply H_fname_sf2.
-                            ****** apply H_bid_sf2.
-                            ****** apply H_pc_sf2.
-                            ****** apply H_equiv_assign_sf1_sf2.
-                       ***** apply H_live_at_pc.
-                       ***** apply H_not_In_v_s.
-                  **** rewrite <- H_handle_block_finish.
-                       rewrite H_st2'.
-                       unfold equiv_vars_in_top_frame.
-                       simpl.
-                       rewrite H_call_stack_st1.
-                       rewrite H_call_stack_st2.
-                       repeat split.
-                       ***** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
-                       ***** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
-                       ***** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                       ***** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
-
-                             rewrite H_fname_sf1 in H_b_top_exists.
-                             rewrite H_bid_sf1 in H_b_top_exists.
-                             rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-
-                             rewrite H_pc_sf1 in H_accessed_vars.
-                             pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
-                             apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
-
-                 
-
-                
-         *  (* cannot be the case of pc<length b *)
-             rewrite H_b_exists in H_b0_exists.
-             injection H_b0_exists as H_b0_exists.
-             subst b0.
-             unfold SmallStepD.get_next_instruction in H_get_instr.
-             rewrite H_call_stack_st1 in H_get_instr.
-             unfold SmallStepD.SmartContractD.get_instruction in H_get_instr.
-             rewrite H_fname_sf1 in H_get_instr.
-             rewrite H_bid_sf1 in H_get_instr.
-             rewrite H_pc_sf1 in H_get_instr.
-             rewrite H_b_exists in H_get_instr.
-             rewrite H_get_instr in H_get_instr'.
-             discriminate H_get_instr'.
-
-
-
-
-       (* conditional jump ends here *)
-
- 
-      (* jump block *)
-      + destruct (SmallStepD.SmartContractD.get_block p fname next_bid) as [next_b|] eqn:E_next_b.
-        
-        * (* block found *)
-
-          assert( H_live_at_pc' :=  H_live_at_pc).
-
-          
-          destruct H_live_at_pc' as [fname bid b0 pc s sout H_b0_exists H_live_out H_pc_at_end H_sout | fname bid b0 pc s sout instr' H_b0_exists H_live_at_S_pc H_lt_pc' H_get_instr' H_sout].
-
-          ** rewrite H_b_exists in H_b0_exists.
-             injection H_b0_exists as H_b0_exists.
-             subst b0.
-             
-             destruct H_live_out as [ fname bid b0 rs' sout0 H_b0_exists H_is_ret H_sout0| fname bid b0 sout0 H_b0_exists H_is_termin | fname bid next_bid' b0 next_b0 s' sout0 H_b0_exists H_is_jump H_live_in_next_pc H_next_b0_exists H_sout0 | fname bid  next_bid_if_true next_bid_if_false cvar b0 next_b0_if_true next_b0_if_false s1' s2' sout0 H_b0_exists H_is_cjump ].
-
-             ***  rewrite H_b_exists in H_b0_exists.
-                  injection H_b0_exists as H_b0_exists.
-                  subst b0.
-                  unfold BlockD.is_return_block in H_is_ret.
-                  rewrite E_b_exit_info in H_is_ret.
-                  discriminate H_is_ret.
-             *** rewrite H_b_exists in H_b0_exists.
-                 injection H_b0_exists as H_b0_exists.
-                 subst b0.
-                 unfold BlockD.is_terminated_block in H_is_termin.
-                 rewrite E_b_exit_info in H_is_termin.
-                 discriminate H_is_termin.
-
-             *** rewrite H_b_exists in H_b0_exists.
-                 injection H_b0_exists as H_b0_exists.
-                 subst b0.
-                 unfold add_jump_var_if_applicable in H_sout.
-                 rewrite E_b_exit_info in H_sout.
-                 rewrite H_sout0 in H_sout.
-
-                 unfold BlockD.is_jump_block in H_is_jump.
-                 rewrite E_b_exit_info in H_is_jump.
-                 injection H_is_jump as H_is_jump.
-                 subst next_bid'.
-
-                 rewrite E_next_b in H_next_b0_exists.
-                 injection H_next_b0_exists as H_next_b0_exists.
-                 subst next_b0.
-                 
-
-                 
-                 unfold SmallStepD.apply_renamings in H_handle_block_finish.
-                 unfold SmallStepD.apply_renamings.
-
-                 remember (SmallStepD.get_renaming_sexpr (SmallStepD.SmartContractD.BlockD.phi_function next_b bid)) as phi_invars eqn:E_phi_invars.
-
-                 remember (SmallStepD.get_renaming_var (SmallStepD.SmartContractD.BlockD.phi_function next_b bid)) as phi_outvars eqn:E_phi_outvars.
-                 
-                 assert (H_not_In_v_input: ~ In (inl v) phi_invars).
-                 (*{*)
-                   pose proof (not_In_preserves_eq sout (apply_inv_phi (BlockD.phi_function next_b bid) s') v H_sout H_not_In_v_s) as H_v_not_in_inv.
-                   unfold apply_inv_phi in H_v_not_in_inv.
-                   rewrite <- E_phi_invars in H_v_not_in_inv.
-                   rewrite <- E_phi_outvars in H_v_not_in_inv.
-
-                   rewrite VarSet.union_spec in H_v_not_in_inv.
-                   apply Decidable.not_or in H_v_not_in_inv.
-                   destruct H_v_not_in_inv as [_ H_v_not_in_inv].
-                   rewrite <- list_to_set_spec in  H_v_not_in_inv.
-                   rewrite <- extract_yul_vars_spec in H_v_not_in_inv.
-                   apply H_v_not_in_inv.
-                 (*}.*)
-
-                 rewrite <- (eval_sexpr_snd phi_invars fname bid pc v sf1 sf2 H_equiv_sf1_sf2 H_not_In_v_input).
-
-                 destruct (SmallStepD.VariableAssignmentD.assign_all (SmallStepD.StackFrameD.variable_assignments sf1) phi_outvars (SmallStepD.eval_sexpr phi_invars sf1)) as [var_assignments_1|] eqn:E_assign_all_1.
-
-                 **** pose proof (set_all_some phi_outvars (SmallStepD.eval_sexpr phi_invars sf1) (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) var_assignments_1 E_assign_all_1) as [var_assignments_2 E_assign_all_2].
-                      rewrite E_assign_all_2.
-
-                      rewrite <- live_at_pc_zero_eq_live_in in H_live_in_next_pc.
-                      apply (live_at_pc'_0_equiv_live_at_pc_0 p fname next_bid next_b s' E_next_b) in H_live_in_next_pc.
-                      
-                      remember {|
-                                  Liveness_snd.StateD.call_stack :=
-                                    {|
-                                      Liveness_snd.StackFrameD.function_name := fname;
-                                      Liveness_snd.StackFrameD.variable_assignments := var_assignments_2;
-                                      Liveness_snd.StackFrameD.curr_block_id := next_bid;
-                                      Liveness_snd.StackFrameD.pc := 0
-                                    |} :: tl;
-                          Liveness_snd.StateD.status := Status.Running;
-                          Liveness_snd.StateD.dialect_state := SmallStepD.StateD.dialect_state st2
-                        |} as st2' eqn:E_st2'.
-                      exists st2'.
-                      exists next_bid.
-                      exists next_b.
-                      exists 0%nat.
-                      exists s'.
-                      repeat split.
-                      ***** apply E_next_b.
-                      ***** (* split on wether v is in the phi_outvars *)
-                            pose proof (varlist_in_dec phi_outvars v) as H_v_output.
-                      
-                            destruct H_v_output as [H_v_in_output | H_v_not_in_output].
-                            ****** right.
-                                   rewrite <- (set_all_preserves_eq_up_to_eq phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2) in E_st2'.
-                            
-                                   rewrite E_st2'.
-                                   rewrite <- H_handle_block_finish.
-                                   rewrite H_dialect.
-                                   reflexivity.
-                            ****** left.
-                                   repeat split.
-                                   ******* rewrite <- H_handle_block_finish.
-                                           simpl.
-                                           rewrite H_call_stack_st1 in H_lt_i.
-                                           simpl in H_lt_i.
-                                           apply H_lt_i.
-                                   ******* rewrite <- H_handle_block_finish.
-                                           rewrite E_st2'.
-                                           simpl.
-                                           reflexivity.
-                                   ******* rewrite <- H_handle_block_finish.
-                                           rewrite E_st2'.
-                                           simpl.
-                                           reflexivity.
-                                   ******* rewrite <- H_handle_block_finish.
-                                           rewrite E_st2'.
-                                           simpl.
-                                           apply H_dialect.
-                                   ******* exists [].
-                                           exists tl.
-                                           exists {|
-                                               Liveness_snd.StackFrameD.function_name := fname;
-                                               Liveness_snd.StackFrameD.variable_assignments := var_assignments_1;
-                                               Liveness_snd.StackFrameD.curr_block_id := next_bid;
-                                               Liveness_snd.StackFrameD.pc := 0
-                                             |}.
-                                           exists {|
-                                               Liveness_snd.StackFrameD.function_name := fname;
-                                               Liveness_snd.StackFrameD.variable_assignments := var_assignments_2;
-                                               Liveness_snd.StackFrameD.curr_block_id := next_bid;
-                                               Liveness_snd.StackFrameD.pc := 0
-                                             |}.
-                                           repeat split.
-                                           ******** rewrite <- H_handle_block_finish.
-                                                    simpl.
-                                                    rewrite H_call_stack_st1 in H_lt_i.
-                                                    simpl in H_lt_i.
-                                                    apply H_lt_i.
-                                           ******** rewrite <- H_handle_block_finish.
-                                                    simpl.     
-                                                    reflexivity.
-                                           ******** apply H_len_tl_st1.
-                                           ******** rewrite E_st2'.
-                                                    simpl.
-                                                    rewrite H_call_stack_st1 in H_lt_i.
-                                                    simpl in H_lt_i.
-                                                    apply H_lt_i.
-                                           ******** rewrite E_st2'.
-                                                    simpl.
-                                                    reflexivity.
-                                           ******** apply H_len_tl_st2.
-                                           ******** simpl.
-                                                    apply (set_all_preserves_eq_up_to phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_not_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2).
-                                   ******* apply H_live_in_next_pc.
-                                   ******* pose proof (not_In_preserves_eq sout (apply_inv_phi (BlockD.phi_function next_b bid) s') v H_sout H_not_In_v_s) as H_not_In_v_s'.
-                                           unfold apply_inv_phi in H_not_In_v_s'.
-                                           rewrite <- E_phi_invars in H_not_In_v_s'.
-                                           rewrite <- E_phi_outvars in H_not_In_v_s'.
-                                           rewrite VarSet.union_spec in H_not_In_v_s'.
-                                           apply Decidable.not_or in H_not_In_v_s' as [H_not_In_v_s' _].
-                                           rewrite VarSet.diff_spec in H_not_In_v_s'.
-                                           apply Decidable.not_and in H_not_In_v_s' as [H_not_In_v_s' | H_not_In_v_s' ].
-                                           ******** apply H_not_In_v_s'.
-                                           ******** apply Decidable.not_not in H_not_In_v_s'.
-                                                    rewrite <- list_to_set_spec in H_not_In_v_s'.
-                                                    contradiction H_not_In_v_s'.
-                                                    apply varset_in_dec.
-                                           ******** apply varset_in_dec.
-
-                      ***** (* split on wether v is in the phi_outvars *)
-                            pose proof (varlist_in_dec phi_outvars v) as H_v_output.
-                      
-                            destruct H_v_output as [H_v_in_output | H_v_not_in_output].
-                      
-                            ****** rewrite <- (set_all_preserves_eq_up_to_eq phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2) in E_st2'.
-                            
-                                   rewrite E_st2'.
-                                   rewrite <- H_handle_block_finish.
-                                   rewrite H_dialect.
-                                   unfold equiv_vars_in_top_frame.
-                                   simpl.
-                                   repeat split; try reflexivity.
-                            
-                            ****** rewrite <- H_handle_block_finish.
-                                   rewrite E_st2'.
-                                   unfold equiv_vars_in_top_frame.
-                                   simpl.
-                                   repeat split; try reflexivity.
-                                   intros v0 s0 b_top H_b_top_exist H_accessed_vars H_In_v0_s0.
-
-                                   rewrite E_next_b in H_b_top_exist. injection H_b_top_exist as H_b_top_exist. subst b_top.
-
-
-                                   assert(H_not_v_In_s'': ~ VarSet.In v s').
-                                   {
-                                     pose proof (not_In_preserves_eq sout (apply_inv_phi (BlockD.phi_function next_b bid) s') v H_sout H_not_In_v_s) as H_not_In_v_s'.
-                                     unfold apply_inv_phi in H_not_In_v_s'.
-                                     rewrite <- E_phi_invars in H_not_In_v_s'.
-                                     rewrite <- E_phi_outvars in H_not_In_v_s'.
-                                     rewrite VarSet.union_spec in H_not_In_v_s'.
-                                     apply Decidable.not_or in H_not_In_v_s' as [H_not_In_v_s' _].
-                                     rewrite VarSet.diff_spec in H_not_In_v_s'.
-                                     apply Decidable.not_and in H_not_In_v_s' as [H_not_In_v_s' | H_not_In_v_s' ].
-                                     ******** apply H_not_In_v_s'.
-                                     ******** apply Decidable.not_not in H_not_In_v_s'.
-                                     rewrite <- list_to_set_spec in H_not_In_v_s'.
-                                     contradiction H_not_In_v_s'.
-                                     apply varset_in_dec.
-                                     ******** apply varset_in_dec.
-                                   }
-
-
-                                   apply (set_all_preserves_eq_up_to phi_outvars (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr phi_invars sf1) var_assignments_1 var_assignments_2 H_v_not_in_output H_equiv_assign_sf1_sf2 E_assign_all_1 E_assign_all_2).
-
-                                   apply (accessed_var_instr_neq_v p fname next_bid next_b 0%nat s0 v0 s' v E_next_b H_live_in_next_pc H_not_v_In_s'' H_accessed_vars H_In_v0_s0).
-
-
-
-                      
-                 **** rewrite (assign_all_none phi_outvars (SmallStepD.eval_sexpr phi_invars sf1) (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) E_assign_all_1).
-
-                      remember (SmallStepD.StateD.set_status st2 (Status.Error "Error while applying phi-function")) as st2' eqn:E_st2'.
-
-                      exists st2'.
-                      exists bid.
-                      exists b.
-                      exists pc.
-                      exists sout.
-                      repeat split.
-                      ***** apply H_b_exists.
-                      ***** left.
-                            repeat split.
-                            ****** rewrite <- H_handle_block_finish.
-                                   simpl.
-                                   apply H_lt_i.
-                            ****** rewrite <- H_handle_block_finish.
-                                   rewrite E_st2'.
-                                   simpl.
-                                   apply H_len_call_stack.
-                            ****** rewrite <- H_handle_block_finish.
-                                   rewrite E_st2'.
-                                   simpl.
-                                   reflexivity.
-                            ****** rewrite <- H_handle_block_finish.
-                                   rewrite E_st2'.
-                                   simpl.
-                                   apply H_dialect.
-                            ****** exists [].
-                                   exists tl.
-                                   exists sf1.
-                                   exists sf2.
-                                   repeat split.
-                                   ******* rewrite <- H_handle_block_finish.
-                                           simpl.
-                                           apply H_lt_i.
-                                   ******* rewrite <- H_handle_block_finish.
-                                           simpl.
-                                           apply H_call_stack_st1.
-                                   ******* apply H_len_tl_st1.
-                                   ******* rewrite E_st2'.
-                                           simpl.
-                                           rewrite H_call_stack_st1 in H_lt_i.
-                                           simpl in H_lt_i.
-                                           rewrite H_call_stack_st2.
-                                           simpl.
-                                           apply H_lt_i.
-                                   ******* rewrite E_st2'.
-                                           simpl.
-                                           apply H_call_stack_st2.
-                                   ******* apply H_len_tl_st2.
-                                   ******* apply H_fname_sf1.
-                                   ******* apply H_bid_sf1.
-                                   ******* apply H_pc_sf1.
-                                   ******* apply H_fname_sf2.
-                                   ******* apply H_bid_sf2.
-                                   ******* apply H_pc_sf2.
-                                   ******* apply H_equiv_assign_sf1_sf2.
-                            ****** apply H_live_at_pc.
-                            ****** apply H_not_In_v_s.
-                      ***** rewrite <- H_handle_block_finish.
-                            rewrite E_st2'.
-                            unfold equiv_vars_in_top_frame.
-                            simpl.
-                            rewrite H_call_stack_st1.
-                            rewrite H_call_stack_st2.
-                            repeat split.
-                            ****** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
-                            ****** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
-                            ****** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                            ****** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
-                                   rewrite H_fname_sf1 in H_b_top_exists.
-                                   rewrite H_bid_sf1 in H_b_top_exists.
-                                   rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-                                   rewrite H_pc_sf1 in H_accessed_vars.
-                                   pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
-                                   apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
-
-             *** rewrite H_b_exists in H_b0_exists.
-                 injection H_b0_exists as H_b0_exists.
-                 subst b0.
-                 unfold BlockD.is_cond_jump_block in H_is_cjump.
-                 rewrite E_b_exit_info in H_is_cjump.
-                 discriminate H_is_cjump.
-
-          ** (* cannot be the case of pc<length b *)
-             rewrite H_b_exists in H_b0_exists.
-             injection H_b0_exists as H_b0_exists.
-             subst b0.
-             unfold SmallStepD.get_next_instruction in H_get_instr.
-             rewrite H_call_stack_st1 in H_get_instr.
-             unfold SmallStepD.SmartContractD.get_instruction in H_get_instr.
-             rewrite H_fname_sf1 in H_get_instr.
-             rewrite H_bid_sf1 in H_get_instr.
-             rewrite H_pc_sf1 in H_get_instr.
-             rewrite H_b_exists in H_get_instr.
-             rewrite H_get_instr in H_get_instr'.
-             discriminate H_get_instr'.
-
-                      
-        * (* block not found *)
-          remember (SmallStepD.StateD.set_status st2 (Status.Error "Target block not found in the smart contract")) as st2' eqn:H_st2'.
-          exists st2'.
-          exists bid.
-          exists b.
-          exists pc.
-          exists s.
-          repeat split.
-          ** apply H_b_exists.
-          ** left.
-             repeat split.
-             *** rewrite <- H_handle_block_finish.
-                 simpl.
-                 apply H_lt_i.
-             *** rewrite <- H_handle_block_finish.
-                 rewrite H_st2'.
-                 simpl.
-                 apply H_len_call_stack.
-             *** rewrite <- H_handle_block_finish.
-                 rewrite H_st2'.
-                 simpl.
-                 reflexivity.
-             *** rewrite <- H_handle_block_finish.
-                 rewrite H_st2'.
-                 simpl.
-                 apply H_dialect.
-             *** exists [].
-                 exists tl.
-                 exists sf1.
-                 exists sf2.
-                 repeat split.
-                 **** rewrite <- H_handle_block_finish.
-                      simpl.
-                      apply H_lt_i.
-                 **** rewrite <- H_handle_block_finish.
-                      simpl.
-                      apply H_call_stack_st1.
-                 **** apply H_len_tl_st1.
-                 **** rewrite H_st2'.
-                      simpl.
-                      rewrite H_call_stack_st2.
-                      simpl.
-                      rewrite H_call_stack_st1 in H_lt_i.
-                      simpl in H_lt_i.
-                      apply H_lt_i.
-                 **** rewrite H_st2'.
-                      simpl.
-                      apply H_call_stack_st2.
-                 **** apply H_len_tl_st2.
-                 **** apply H_fname_sf1.
-                 **** apply H_bid_sf1.
-                 **** apply H_pc_sf1.
-                 **** apply H_fname_sf2.
-                 **** apply H_bid_sf2.
-                 **** apply H_pc_sf2.
-                 **** apply H_equiv_assign_sf1_sf2.
-             *** apply H_live_at_pc.
-             *** apply H_not_In_v_s.
-          ** rewrite <- H_handle_block_finish.
-             rewrite H_st2'.
-             unfold equiv_vars_in_top_frame.
-             simpl.
-             rewrite H_call_stack_st1.
-             rewrite H_call_stack_st2.
-             repeat split.
-             *** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
-             *** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
-             *** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-             *** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
-
-                 rewrite H_fname_sf1 in H_b_top_exists.
-                 rewrite H_bid_sf1 in H_b_top_exists.
-                 rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-                 rewrite H_pc_sf1 in H_accessed_vars.
-                 pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 s v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
-                 apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
-
-
-
-          
-      (* return block *)
-      + destruct tl as [|ret_sf tl'] eqn:E_tl. (* destruct on wether sf1/sf2 are the only frames *)
-        * remember (SmallStepD.StateD.set_status st2 (Status.Error "Missing return stack frame")) as st2' eqn:H_st2'.
-          exists st2'.
-          exists bid.
-          exists b.
-          exists pc.
-          exists s.
-          repeat split.
-          ** apply H_b_exists.
-          ** left.
-             repeat split.
-             *** rewrite <- H_handle_block_finish.
-                 simpl.
-                 apply H_lt_i.
-             *** rewrite <- H_handle_block_finish.
-                 rewrite H_st2'.
-                 simpl.
-                 apply H_len_call_stack.
-             *** rewrite <- H_handle_block_finish.
-                 rewrite H_st2'.
-                 simpl.
-                 reflexivity.
-             *** rewrite <- H_handle_block_finish.
-                 rewrite H_st2'.
-                 simpl.
-                 apply H_dialect.
-             *** exists [].
-                 exists [].
-                 exists sf1.
-                 exists sf2.
-                 repeat split.
-                 **** rewrite <- H_handle_block_finish.
-                      simpl.
-                      apply H_lt_i.
-                 **** rewrite <- H_handle_block_finish.
-                      simpl.
-                      apply H_call_stack_st1.
-                 **** apply H_len_tl_st1.
-                 **** rewrite H_st2'.
-                      simpl.
-                      rewrite H_call_stack_st2.
-                      simpl.
-                      rewrite H_call_stack_st1 in H_lt_i.
-                      simpl in H_lt_i.
-                      apply H_lt_i.
-                 **** rewrite H_st2'.
-                      simpl.
-                      apply H_call_stack_st2.
-                 **** apply H_len_tl_st2.
-                 **** apply H_fname_sf1.
-                 **** apply H_bid_sf1.
-                 **** apply H_pc_sf1.
-                 **** apply H_fname_sf2.
-                 **** apply H_bid_sf2.
-                 **** apply H_pc_sf2.
-                 **** apply H_equiv_assign_sf1_sf2.
-             *** apply H_live_at_pc.
-             *** apply H_not_In_v_s.
-          ** rewrite <- H_handle_block_finish.
-             rewrite H_st2'.
-             unfold equiv_vars_in_top_frame.
-             simpl.
-             rewrite H_call_stack_st1.
-             rewrite H_call_stack_st2.
-             repeat split.
-             *** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
-             *** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
-             *** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-             *** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
-                 rewrite H_fname_sf1 in H_b_top_exists.
-                 rewrite H_bid_sf1 in H_b_top_exists.
-                 rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-                 rewrite H_pc_sf1 in H_accessed_vars.
-                 pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 s v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
-                 apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
-
-        * destruct (SmallStepD.SmartContractD.get_block p (SmallStepD.StackFrameD.function_name ret_sf) (SmallStepD.StackFrameD.curr_block_id ret_sf)) as [ret_b | ] eqn:E_ret_b.
-
-          ** (* return block found *)
-             destruct (nth_error (SmallStepD.BlockD.instructions ret_b) (SmallStepD.StackFrameD.pc ret_sf)) as [instr|] eqn:E_ret_instr.
-
-             *** (* return instruction found *)
-
-               assert( H_live_at_pc' :=  H_live_at_pc).
-               
-               (* we want to show that v is not in the return values *)
-               destruct H_live_at_pc' as [fname bid b0 pc s sout H_b0_exists H_live_out H_pc_at_end H_sout | fname bid b0 pc s sout instr' H_b0_exists H_live_at_S_pc H_lt_pc' H_get_instr' H_sout].
-
-                  **** rewrite H_b_exists in H_b0_exists.
-                       injection H_b0_exists as H_b0_exists.
-                       subst b0.
-                       destruct H_live_out as [ fname bid b0 rs' sout0 H_b0_exists H_is_ret H_sout0| fname bid b0 sout0 H_b0_exists H_is_termin | fname bid next_bid b0 next_b0 s' sout0 H_b0_exists H_is_jump | fname bid  next_bid_if_true next_bid_if_false cvar b0 next_b0_if_true next_b0_if_false s1' s2' sout0 H_b0_exists H_is_cjump ].
-                       ***** rewrite H_b_exists in H_b0_exists.
-                             injection H_b0_exists as H_b0_exists.
-                             subst b0.
-                             unfold BlockD.is_return_block in H_is_ret.
-                             rewrite E_b_exit_info in H_is_ret.
-                             injection H_is_ret as H_is_ret.
-                             subst rs'.
-                             unfold add_jump_var_if_applicable in H_sout.
-                             rewrite E_b_exit_info in H_sout.
-                             rewrite H_sout0 in H_sout.
-                             pose proof (not_In_preserves_eq sout (list_to_set (extract_yul_vars rs)) v H_sout H_not_In_v_s) as H_not_in_v_set_rs.
-                             rewrite <- list_to_set_spec in H_not_in_v_set_rs.
-                             rewrite <- extract_yul_vars_spec in H_not_in_v_set_rs.
-                              
-                             rewrite <- (eval_sexpr_snd rs fname bid pc v sf1 sf2 H_equiv_sf1_sf2 H_not_in_v_set_rs).
-
-                             destruct (SmallStepD.VariableAssignmentD.assign_all (SmallStepD.StackFrameD.variable_assignments ret_sf) (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) (SmallStepD.eval_sexpr rs sf1)) as [prev_sf_var_assignment'|] eqn:E_assign_all.
-                             ****** remember {|
-                                                Liveness_snd.StateD.call_stack :=
-                                                 {|
-                                                   Liveness_snd.StackFrameD.function_name := SmallStepD.StackFrameD.function_name ret_sf;
-                                                   Liveness_snd.StackFrameD.variable_assignments := prev_sf_var_assignment';
-                                                   Liveness_snd.StackFrameD.curr_block_id := SmallStepD.StackFrameD.curr_block_id ret_sf;
-                                                   Liveness_snd.StackFrameD.pc := SmallStepD.StackFrameD.pc ret_sf + 1
-                                                 |} :: tl';
-                                               Liveness_snd.StateD.status := Status.Running;
-                                        Liveness_snd.StateD.dialect_state := SmallStepD.StateD.dialect_state st2
-                                      |} as st2' eqn:H_st2'.
-
-                                      exists st2'. (* we are not going to use it *)
-                                      exists bid. (* we are not going to use it *)
-                                      exists b. (* we are not going to use it *)
-                                      exists pc. (* we are not going to use it *)
-                                      exists VarSet.empty. (* we are not going to use it *)
-                                      repeat split.
-                                      ******* apply H_b_exists.
-                                      ******* right.
-                                              rewrite H_st2'.
-                                              rewrite <- H_handle_block_finish.
-                                              simpl.
-                                              rewrite H_dialect.
-                                              reflexivity.
-                                      ******* rewrite H_st2'.
-                                              rewrite <- H_handle_block_finish.
-                                              simpl.
-                                              unfold equiv_vars_in_top_frame.
-                                              simpl.
-                                              repeat split.
-                                      
-                             ****** remember (SmallStepD.StateD.set_status st2 (Status.Error "Failed to assign return values")) as st2' eqn:H_st2'.
-                                    exists st2'.
-                                    exists bid.
-                                    exists b.
-                                    exists pc.
-                                    exists sout.
-                                    repeat split.
-                                    ******* apply H_b_exists.
-                                    ******* left.
-                                            repeat split.
-                                            ******** rewrite <- H_handle_block_finish.
-                                                     simpl.
-                                                     apply H_lt_i.
-                                            ******** rewrite <- H_handle_block_finish.
-                                                     rewrite H_st2'.
-                                                     simpl.
-                                                     apply H_len_call_stack.
-                                            ******** rewrite <- H_handle_block_finish.
-                                                     rewrite H_st2'.
-                                                     simpl.
-                                                     reflexivity.
-                                            ******** rewrite <- H_handle_block_finish.
-                                                     rewrite H_st2'.
-                                                     simpl.
-                                                     apply H_dialect.
-                                            ******** exists [].
-                                                     exists (ret_sf :: tl').
-                                                     exists sf1.
-                                                     exists sf2.
-                                                     repeat split.
-                                                     ********* rewrite <- H_handle_block_finish.
-                                                               simpl.
-                                                               apply H_lt_i.
-                                                     ********* rewrite <- H_handle_block_finish.
-                                                                simpl.
-                                                                apply H_call_stack_st1.
-                                                     ********* apply H_len_tl_st1.
-                                                     ********* rewrite H_st2'.
-                                                               simpl.
-                                                               rewrite H_call_stack_st2.
-                                                               simpl.
-                                                               rewrite H_call_stack_st1 in H_lt_i.
-                                                               simpl in H_lt_i.
-                                                               apply H_lt_i.
-                                                     ********* rewrite H_st2'.
-                                                               simpl.
-                                                               apply H_call_stack_st2.
-                                                     ********* apply H_len_tl_st2.
-                                                     ********* apply H_fname_sf1.
-                                                     ********* apply H_bid_sf1.
-                                                     ********* apply H_pc_sf1.
-                                                     ********* apply H_fname_sf2.
-                                                     ********* apply H_bid_sf2.
-                                                     ********* apply H_pc_sf2.
-                                                     ********* apply H_equiv_assign_sf1_sf2.
-                                            ******** apply H_live_at_pc.
-                                            ******** apply H_not_In_v_s.
-                                    ******* rewrite <- H_handle_block_finish.
-                                            rewrite H_st2'.
-                                            unfold equiv_vars_in_top_frame.
-                                            simpl.
-                                            rewrite H_call_stack_st1.
-                                            rewrite H_call_stack_st2.
-                                            repeat split.
-                                            ******** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
-                                            ******** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
-                                            ******** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                                            ******** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
-                                                     rewrite H_fname_sf1 in H_b_top_exists.
-                                                     rewrite H_bid_sf1 in H_b_top_exists.
-                                                     rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-                                                     rewrite H_pc_sf1 in H_accessed_vars.
-
-                                                     pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 sout v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
-                                                     apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
-
-                            
-                       ***** rewrite H_b_exists in H_b0_exists.
-                             injection H_b0_exists as H_b0_exists.
-                             subst b0.
-                             unfold BlockD.is_terminated_block in H_is_termin.
-                             rewrite E_b_exit_info in H_is_termin.
-                             discriminate H_is_termin.
-                       ***** rewrite H_b_exists in H_b0_exists.
-                             injection H_b0_exists as H_b0_exists.
-                             subst b0.
-                             unfold BlockD.is_jump_block in H_is_jump.
-                             rewrite E_b_exit_info in H_is_jump.
-                             discriminate H_is_jump.
-                       ***** rewrite H_b_exists in H_b0_exists.
-                             injection H_b0_exists as H_b0_exists.
-                             subst b0.
-                             unfold BlockD.is_cond_jump_block in H_is_cjump.
-                             rewrite E_b_exit_info in H_is_cjump.
-                             discriminate H_is_cjump.
-
-                       
-                  **** (* cannot be the case of pc<length b *)
-                       rewrite H_b_exists in H_b0_exists.
-                       injection H_b0_exists as H_b0_exists.
-                       subst b0.
-                       unfold SmallStepD.get_next_instruction in H_get_instr.
-                       rewrite H_call_stack_st1 in H_get_instr.
-                       unfold SmallStepD.SmartContractD.get_instruction in H_get_instr.
-                       rewrite H_fname_sf1 in H_get_instr.
-                       rewrite H_bid_sf1 in H_get_instr.
-                       rewrite H_pc_sf1 in H_get_instr.
-                       rewrite H_b_exists in H_get_instr.
-                       rewrite H_get_instr in H_get_instr'.
-                       discriminate H_get_instr'.
-               
-             *** (* return instruction not found *)
-                 remember (SmallStepD.StateD.set_status st2 (Status.Error "Failed to find call instruction")) as st2' eqn:H_st2'.
-                 exists st2'.
-                 exists bid.
-                 exists b.
-                 exists pc.
-                 exists s.
-                 repeat split.
-                 **** apply H_b_exists.
-                 **** left.
-                      repeat split.
-                      ***** rewrite <- H_handle_block_finish.
-                            simpl.
-                            apply H_lt_i.
-                      ***** rewrite <- H_handle_block_finish.
-                            rewrite H_st2'.
-                            simpl.
-                            apply H_len_call_stack.
-                      ***** rewrite <- H_handle_block_finish.
-                            rewrite H_st2'.
-                            simpl.
-                            reflexivity.
-                      ***** rewrite <- H_handle_block_finish.
-                            rewrite H_st2'.
-                            simpl.
-                            apply H_dialect.
-                      ***** exists [].
-                            exists (ret_sf :: tl').
-                            exists sf1.
-                            exists sf2.
-                            repeat split.
-                            ****** rewrite <- H_handle_block_finish.
-                                   simpl.
-                                   apply H_lt_i.
-                            ****** rewrite <- H_handle_block_finish.
-                                   simpl.
-                                   apply H_call_stack_st1.
-                            ****** apply H_len_tl_st1.
-                            ****** rewrite H_st2'.
-                                   simpl.
-                                   rewrite H_call_stack_st2.
-                                   simpl.
-                                   rewrite H_call_stack_st1 in H_lt_i.
-                                   simpl in H_lt_i.
-                                   apply H_lt_i.
-                            ****** rewrite H_st2'.
-                                   simpl.
-                                   apply H_call_stack_st2.
-                            ****** apply H_len_tl_st2.
-                            ****** apply H_fname_sf1.
-                            ****** apply H_bid_sf1.
-                            ****** apply H_pc_sf1.
-                            ****** apply H_fname_sf2.
-                            ****** apply H_bid_sf2.
-                            ****** apply H_pc_sf2.
-                            ****** apply H_equiv_assign_sf1_sf2.
-                      ***** apply H_live_at_pc.
-                      ***** apply H_not_In_v_s.
-                 **** rewrite <- H_handle_block_finish.
-                      rewrite H_st2'.
-                      unfold equiv_vars_in_top_frame.
-                      simpl.
-                      rewrite H_call_stack_st1.
-                      rewrite H_call_stack_st2.
-                      repeat split.
-                      ***** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
-                      ***** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
-                      ***** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                      ***** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
-                            rewrite H_fname_sf1 in H_b_top_exists.
-                            rewrite H_bid_sf1 in H_b_top_exists.
-                            rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-                            rewrite H_pc_sf1 in H_accessed_vars.
-                            pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 s v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
-                            apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
-
-
-               
-          ** (* return block not found *)
-             remember (SmallStepD.StateD.set_status st2 (Status.Error "Failed to calling block")) as st2' eqn:H_st2'.
-             exists st2'.
-             exists bid.
-             exists b.
-             exists pc.
-             exists s.
-             repeat split.
-             *** apply H_b_exists.
-             *** left.
-                 repeat split.
-                 **** rewrite <- H_handle_block_finish.
-                      simpl.
-                      apply H_lt_i.
-                 **** rewrite <- H_handle_block_finish.
-                      rewrite H_st2'.
-                      simpl.
-                      apply H_len_call_stack.
-                 **** rewrite <- H_handle_block_finish.
-                      rewrite H_st2'.
-                      simpl.
-                      reflexivity.
-                 **** rewrite <- H_handle_block_finish.
-                      rewrite H_st2'.
-                      simpl.
-                      apply H_dialect.
-                 **** exists [].
-                      exists (ret_sf :: tl').
-                      exists sf1.
-                      exists sf2.
-                      repeat split.
-                      ***** rewrite <- H_handle_block_finish.
-                            simpl.
-                            apply H_lt_i.
-                      ***** rewrite <- H_handle_block_finish.
-                            simpl.
-                            apply H_call_stack_st1.
-                      ***** apply H_len_tl_st1.
-                      ***** rewrite H_st2'.
-                            simpl.
-                            rewrite H_call_stack_st2.
-                            simpl.
-                            rewrite H_call_stack_st1 in H_lt_i.
-                            simpl in H_lt_i.
-                            apply H_lt_i.
-                      ***** rewrite H_st2'.
-                            simpl.
-                            apply H_call_stack_st2.
-                      ***** apply H_len_tl_st2.
-                      ***** apply H_fname_sf1.
-                      ***** apply H_bid_sf1.
-                      ***** apply H_pc_sf1.
-                      ***** apply H_fname_sf2.
-                      ***** apply H_bid_sf2.
-                      ***** apply H_pc_sf2.
-                      ***** apply H_equiv_assign_sf1_sf2.
-                 **** apply H_live_at_pc.
-                 **** apply H_not_In_v_s.
-             *** rewrite <- H_handle_block_finish.
-                 rewrite H_st2'.
-                 unfold equiv_vars_in_top_frame.
-                 simpl.
-                 rewrite H_call_stack_st1.
-                 rewrite H_call_stack_st2.
-                 repeat split.
-                 **** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
-                 **** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
-                 **** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-                 **** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
-                      rewrite H_fname_sf1 in H_b_top_exists.
-                      rewrite H_bid_sf1 in H_b_top_exists.
-                      rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-                      rewrite H_pc_sf1 in H_accessed_vars.
-                      pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 s v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
-                      apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
-
-
-              
-      (* terminated block *)
-      + remember (SmallStepD.StateD.set_status st2 Status.Terminated) as st2' eqn:H_st2'.
-        exists st2'.
-        exists bid.
-        exists b.
-        exists pc.
-        exists s.
-        repeat split.
-        * apply H_b_exists.
-        * left.
-          repeat split.
-          ** rewrite <- H_handle_block_finish.
-             simpl.
-             apply H_lt_i.
-          ** rewrite <- H_handle_block_finish.
-             rewrite H_st2'.
-             simpl.
-             apply H_len_call_stack.
-          ** rewrite <- H_handle_block_finish.
-             rewrite H_st2'.
-             simpl.
-             reflexivity.
-          ** rewrite <- H_handle_block_finish.
-             rewrite H_st2'.
-             simpl.
-             apply H_dialect.
-          ** exists [].
-             exists tl.
-             exists sf1.
-             exists sf2.
-             repeat split.
-             *** rewrite <- H_handle_block_finish.
-                 simpl.
-                 apply H_lt_i.
-             *** rewrite <- H_handle_block_finish.
-                 simpl.
-                 apply H_call_stack_st1.
-             *** apply H_len_tl_st1.
-             *** rewrite H_st2'.
-                 simpl.
-                 rewrite H_call_stack_st2.
-                 simpl.
-                 rewrite H_call_stack_st1 in H_lt_i.
-                 simpl in H_lt_i.
-                 apply H_lt_i.
-             *** rewrite H_st2'.
-                 simpl.
-                 apply H_call_stack_st2.
-             *** apply H_len_tl_st2.
-             *** apply H_fname_sf1.
-             *** apply H_bid_sf1.
-             *** apply H_pc_sf1.
-             *** apply H_fname_sf2.
-             *** apply H_bid_sf2.
-             *** apply H_pc_sf2.
-             *** apply H_equiv_assign_sf1_sf2.
-          ** apply H_live_at_pc.
-          ** apply H_not_In_v_s.
-        * rewrite <- H_handle_block_finish.
-          rewrite H_st2'.
-          unfold equiv_vars_in_top_frame.
-          simpl.
-          rewrite H_call_stack_st1.
-          rewrite H_call_stack_st2.
-          repeat split.
-          ** rewrite H_fname_sf1. rewrite H_fname_sf2. reflexivity.
-          ** rewrite H_bid_sf1. rewrite H_bid_sf2. reflexivity.
-          ** rewrite H_pc_sf1. rewrite H_pc_sf2. reflexivity.
-          ** intros v0 s0 b_top H_b_top_exists H_accessed_vars H_In_v0_s0.
-             rewrite H_fname_sf1 in H_b_top_exists.
-             rewrite H_bid_sf1 in H_b_top_exists.
-             rewrite H_b_exists in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-             rewrite H_pc_sf1 in H_accessed_vars.
-             pose proof (accessed_var_instr_neq_v p fname bid b pc s0 v0 s v H_b_exists H_live_at_pc H_not_In_v_s H_accessed_vars H_In_v0_s0) as H_v0_neq_v.
-             apply (H_equiv_assign_sf1_sf2 v0 H_v0_neq_v).
-
-    (* the case where the top stack frames are identical, and the one with v is deeper *)
-    - simpl in H_call_stack_st1.
-      simpl in H_call_stack_st2.
-
-      unfold SmallStepD.handle_block_finish in H_handle_block_finish.
-      rewrite H_call_stack_st1 in H_handle_block_finish.
-
-      unfold SmallStepD.handle_block_finish.
-      rewrite H_call_stack_st2.
-
-      destruct (SmallStepD.SmartContractD.get_block p (SmallStepD.StackFrameD.function_name top_sf) (SmallStepD.StackFrameD.curr_block_id top_sf)) as [curr_block|] eqn:E_curr_block.
-
-      * destruct (BlockD.exit_info curr_block) as [cond_var target_if_true target_if_false|next_bid|rs|] eqn:E_b_exit_info.
+      (* return *)
+      + apply (live_at_handle_return_1_snd p i fname bid b pc s st1 st2 st1' sf1 sf2 tl v rs H_b_exists E_b_exit_info H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_exit_st1 H_not_In_v_s).
+
+      (* terminiate *)
+      + apply (live_at_handle_teminate_snd p i fname bid b pc s st1 st2 st1' sf1 sf2 tl v H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_exit_st1 H_not_In_v_s).
+
+    (* the case where the top stack frame is not the one *)
+    - rewrite <- app_comm_cons in H_handle_exit_st1.
+      rewrite <- app_comm_cons.
+
+      destruct (CFGProgD.get_block p (StackFrameD.fname top_sf) (curr_bid top_sf)) as [b_top|] eqn:E_get_b_top.
+      
+      (* block found *)
+      + 
+
+        (* split on the kind of block *)
+        destruct (BlockD.exit_info b_top) as [cond_var target_if_true target_if_false|next_bid|rs|] eqn:E_b_exit_info.
 
         (* conditional jump *)
-        ** remember (if D.is_true_value (SmallStepD.VariableAssignmentD.get (SmallStepD.StackFrameD.variable_assignments top_sf) cond_var) then target_if_true else target_if_false) as next_bid eqn:E_cond_chk.
+        * apply (live_at_handle_cond_jump_2_snd p i fname bid target_if_true target_if_false b pc s st1 st2 st1' top_sf sf1 sf2 hl' tl cond_var v H_b_exists H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_exit_st1 H_not_In_v_s).
 
-           destruct (SmallStepD.SmartContractD.get_block p (SmallStepD.StackFrameD.function_name top_sf) next_bid) as [next_b|] eqn:E_next_b.
-
-           (* block found *)
-           *** destruct (SmallStepD.apply_renamings (SmallStepD.SmartContractD.BlockD.phi_function next_b (SmallStepD.StackFrameD.curr_block_id top_sf)) top_sf) as [var_assignments'|] eqn:E_renaming.
-
-               **** remember {|
-                                Liveness_snd.StateD.call_stack :=
-                                  {|
-                                    Liveness_snd.StackFrameD.function_name :=
-                                      SmallStepD.StackFrameD.function_name top_sf;
-                                    Liveness_snd.StackFrameD.variable_assignments := var_assignments';
-                                    Liveness_snd.StackFrameD.curr_block_id := next_bid;
-                                    Liveness_snd.StackFrameD.pc := 0
-                                  |} :: hl' ++ sf2 :: tl;
-                        Liveness_snd.StateD.status := Status.Running;
-                        Liveness_snd.StateD.dialect_state := SmallStepD.StateD.dialect_state st2
-                      |} as st2' eqn:H_st2'.
-
-                    exists st2'.
-                    exists bid.
-                    exists b.
-                    exists pc.
-                    exists s.
-                    repeat split; try reflexivity.
-                    ***** apply H_b_exists.
-                    ***** left.
-                          repeat split; try reflexivity.
-                          ****** rewrite <- H_handle_block_finish.
-                                 simpl.
-                                 rewrite length_app.
-                                 rewrite Nat.add_comm.
-                                 simpl.
-                                 rewrite H_call_stack_st1 in H_lt_i.
-                                 simpl in H_lt_i.
-                                 rewrite length_app in H_lt_i.
-                                 rewrite Nat.add_comm in H_lt_i.
-                                 simpl in H_lt_i.
-                                 apply H_lt_i.
-                          ****** rewrite <- H_handle_block_finish.
-                                 rewrite H_st2'.
-                                 simpl.
-                                 rewrite length_app.
-                                 rewrite length_app.
-                                 rewrite Nat.add_comm.
-                                 rewrite Nat.add_comm.
-                                 simpl.
-                                 reflexivity.
-                          ****** rewrite <- H_handle_block_finish.
-                                 rewrite H_st2'.
-                                 simpl.       
-                                 reflexivity.
-                          ****** rewrite <- H_handle_block_finish.
-                                 rewrite H_st2'.
-                                 simpl.       
-                                 apply H_dialect.
-                          ****** exists ({|
-                                            Liveness_snd.StackFrameD.function_name :=
-                                              SmallStepD.StackFrameD.function_name top_sf;
-                                            Liveness_snd.StackFrameD.variable_assignments := var_assignments';
-                                            Liveness_snd.StackFrameD.curr_block_id := next_bid;
-                                            Liveness_snd.StackFrameD.pc := 0
-                                          |} :: hl').
-                                 exists tl.
-                                 exists sf1.
-                                 exists sf2.
-                                 repeat split.
-                                 ******* rewrite <- H_handle_block_finish.
-                                         simpl.
-                                         rewrite length_app.
-                                         rewrite Nat.add_comm.
-                                         simpl.
-                                         rewrite H_call_stack_st1 in H_lt_i.
-                                         simpl in H_lt_i.
-                                         rewrite length_app in H_lt_i.
-                                         rewrite Nat.add_comm in H_lt_i.
-                                         simpl in H_lt_i.
-                                         apply H_lt_i.
-                                 ******* rewrite <- H_handle_block_finish.
-                                         simpl.
-                                         reflexivity.
-                                 ******* apply H_len_tl_st1.
-                                 ******* rewrite H_st2'.
-                                         simpl.
-                                         rewrite length_app.
-                                         rewrite Nat.add_comm.
-                                         simpl.
-                                         rewrite H_call_stack_st1 in H_lt_i.
-                                         simpl in H_lt_i.
-                                         rewrite length_app in H_lt_i.
-                                         rewrite Nat.add_comm in H_lt_i.
-                                         simpl in H_lt_i.
-                                         apply H_lt_i.
-                                 ******* rewrite H_st2'.
-                                         simpl.
-                                         reflexivity.
-                                 ******* apply H_len_tl_st2.
-                                 ******* apply H_fname_sf1.
-                                 ******* apply H_bid_sf1.
-                                 ******* apply H_pc_sf1.
-                                 ******* apply H_fname_sf2.
-                                 ******* apply H_bid_sf2.
-                                 ******* apply H_pc_sf2.
-                                 ******* apply H_equiv_assign_sf1_sf2.
-                          ****** apply H_live_at_pc.
-                          ****** apply H_not_In_v_s.
-                    ***** rewrite <- H_handle_block_finish.
-                          rewrite H_st2'.
-                          unfold equiv_vars_in_top_frame.
-                          simpl.
-                          repeat split; try reflexivity.      
-
-       
-               **** remember (SmallStepD.StateD.set_status st2 (Status.Error  "Error while applying phi-function")) as st2' eqn:H_st2'.
-        
-                    exists st2'.
-                    exists bid.
-                    exists b.
-                    exists pc.
-                    exists s.
-                    repeat split.
-                    ***** apply H_b_exists.
-                    ***** left.
-                          repeat split.
-                          ****** rewrite <- H_handle_block_finish.
-                                 simpl.
-                                 apply H_lt_i.
-                          ****** rewrite <- H_handle_block_finish.
-                                 rewrite H_st2'.
-                                 simpl.
-                                 apply H_len_call_stack.
-                          ****** rewrite <- H_handle_block_finish.
-                                 rewrite H_st2'.
-                                 simpl.
-                                 reflexivity.
-                          ****** rewrite <- H_handle_block_finish.
-                                 rewrite H_st2'.
-                                 simpl.
-                                 apply H_dialect.
-                          ****** exists (top_sf :: hl').
-                                 exists tl.
-                                 exists sf1.
-                                 exists sf2.
-                                 repeat split.
-                                 ******* rewrite <- H_handle_block_finish.
-                                         simpl.
-                                         apply H_lt_i.
-                                 ******* rewrite <- H_handle_block_finish.
-                                         simpl.
-                                         apply H_call_stack_st1.
-                                 ******* apply H_len_tl_st1.
-                                 ******* rewrite H_st2'.
-                                         simpl.
-                                         rewrite H_call_stack_st2.
-                                         simpl.
-                                         rewrite length_app.
-                                         rewrite Nat.add_comm.
-                                         simpl.
-                                         rewrite H_call_stack_st1 in H_lt_i.
-                                         simpl in H_lt_i.
-                                         rewrite length_app in H_lt_i.
-                                         rewrite Nat.add_comm in H_lt_i.
-                                         simpl in H_lt_i.
-                                         apply H_lt_i.
-                                 ******* rewrite H_st2'.
-                                         simpl.
-                                         apply H_call_stack_st2.
-                                 ******* apply H_len_tl_st2.
-                                 ******* apply H_fname_sf1.
-                                 ******* apply H_bid_sf1.
-                                 ******* apply H_pc_sf1.
-                                 ******* apply H_fname_sf2.
-                                 ******* apply H_bid_sf2.
-                                 ******* apply H_pc_sf2.
-                                 ******* apply H_equiv_assign_sf1_sf2.
-                          ****** apply H_live_at_pc.
-                          ****** apply H_not_In_v_s.
-                    ***** rewrite <- H_handle_block_finish.
-                          rewrite H_st2'.
-                          unfold equiv_vars_in_top_frame.
-                          simpl.
-                          rewrite H_call_stack_st1.
-                          rewrite H_call_stack_st2.
-                          repeat split; try reflexivity.      
-
-           (* block not found *)
-           *** remember (SmallStepD.StateD.set_status st2 (Status.Error "Target block not found in the smart contract")) as st2' eqn:H_st2'.
-        
-               exists st2'.
-               exists bid.
-               exists b.
-               exists pc.
-               exists s.
-               repeat split.
-               **** apply H_b_exists.
-               **** left.
-                    repeat split.
-                    ***** rewrite <- H_handle_block_finish.
-                          simpl.
-                          apply H_lt_i.
-                    ***** rewrite <- H_handle_block_finish.
-                          rewrite H_st2'.
-                          simpl.
-                          apply H_len_call_stack.
-                    ***** rewrite <- H_handle_block_finish.
-                          rewrite H_st2'.
-                          simpl.
-                          reflexivity.
-                    ***** rewrite <- H_handle_block_finish.
-                          rewrite H_st2'.
-                          simpl.
-                          apply H_dialect.
-                    ***** exists (top_sf :: hl').
-                          exists tl.
-                          exists sf1.
-                          exists sf2.
-                          repeat split.
-                          ****** rewrite <- H_handle_block_finish.
-                                 simpl.
-                                 apply H_lt_i.
-                          ****** rewrite <- H_handle_block_finish.
-                                 simpl.
-                                 apply H_call_stack_st1.
-                          ****** apply H_len_tl_st1.
-                          ****** rewrite H_st2'.
-                                 simpl.
-                                 rewrite H_call_stack_st2.
-                                 simpl.
-                                 rewrite length_app.
-                                 rewrite Nat.add_comm.
-                                 simpl.
-                                 rewrite H_call_stack_st1 in H_lt_i.
-                                 simpl in H_lt_i.
-                                 rewrite length_app in H_lt_i.
-                                 rewrite Nat.add_comm in H_lt_i.
-                                 simpl in H_lt_i.
-                                 apply H_lt_i.
-                          ****** rewrite H_st2'.
-                                 simpl.
-                                 apply H_call_stack_st2.
-                          ****** apply H_len_tl_st2.
-                          ****** apply H_fname_sf1.
-                          ****** apply H_bid_sf1.
-                          ****** apply H_pc_sf1.
-                          ****** apply H_fname_sf2.
-                          ****** apply H_bid_sf2.
-                          ****** apply H_pc_sf2.
-                          ****** apply H_equiv_assign_sf1_sf2.
-                    ***** apply H_live_at_pc.
-                    ***** apply H_not_In_v_s.
-               **** rewrite <- H_handle_block_finish.
-                    rewrite H_st2'.
-                    unfold equiv_vars_in_top_frame.
-                    simpl.
-                    rewrite H_call_stack_st1.
-                    rewrite H_call_stack_st2.
-                    repeat split; try reflexivity.      
-
-
-
-
-
-           
-        (* jump *)
-        ** destruct (SmallStepD.SmartContractD.get_block p (SmallStepD.StackFrameD.function_name top_sf) next_bid) as [next_b|].
-
-           (* block found *)
-           *** destruct (SmallStepD.apply_renamings (SmallStepD.SmartContractD.BlockD.phi_function next_b (SmallStepD.StackFrameD.curr_block_id top_sf)) top_sf) as [var_assignments'|] eqn:E_renaming.
-
-               **** remember {|
-                                Liveness_snd.StateD.call_stack :=
-                                  {|
-                                    Liveness_snd.StackFrameD.function_name :=
-                                      SmallStepD.StackFrameD.function_name top_sf;
-                                    Liveness_snd.StackFrameD.variable_assignments := var_assignments';
-                                    Liveness_snd.StackFrameD.curr_block_id := next_bid;
-                                    Liveness_snd.StackFrameD.pc := 0
-                                  |} :: hl' ++ sf2 :: tl;
-                        Liveness_snd.StateD.status := Status.Running;
-                        Liveness_snd.StateD.dialect_state := SmallStepD.StateD.dialect_state st2
-                      |} as st2' eqn:H_st2'.
-
-                    exists st2'.
-                    exists bid.
-                    exists b.
-                    exists pc.
-                    exists s.
-                    repeat split; try reflexivity.
-                    ***** apply H_b_exists.
-                    ***** left.
-                          repeat split; try reflexivity.
-                          ****** rewrite <- H_handle_block_finish.
-                                 simpl.
-                                 rewrite length_app.
-                                 rewrite Nat.add_comm.
-                                 simpl.
-                                 rewrite H_call_stack_st1 in H_lt_i.
-                                 simpl in H_lt_i.
-                                 rewrite length_app in H_lt_i.
-                                 rewrite Nat.add_comm in H_lt_i.
-                                 simpl in H_lt_i.
-                                 apply H_lt_i.
-                          ****** rewrite <- H_handle_block_finish.
-                                 rewrite H_st2'.
-                                 simpl.
-                                 rewrite length_app.
-                                 rewrite length_app.
-                                 rewrite Nat.add_comm.
-                                 rewrite Nat.add_comm.
-                                 simpl.
-                                 reflexivity.
-                          ****** rewrite <- H_handle_block_finish.
-                                 rewrite H_st2'.
-                                 simpl.       
-                                 reflexivity.
-                          ****** rewrite <- H_handle_block_finish.
-                                 rewrite H_st2'.
-                                 simpl.       
-                                 apply H_dialect.
-                          ****** exists ({|
-                                            Liveness_snd.StackFrameD.function_name :=
-                                              SmallStepD.StackFrameD.function_name top_sf;
-                                            Liveness_snd.StackFrameD.variable_assignments := var_assignments';
-                                            Liveness_snd.StackFrameD.curr_block_id := next_bid;
-                                            Liveness_snd.StackFrameD.pc := 0
-                                          |} :: hl').
-                                 exists tl.
-                                 exists sf1.
-                                 exists sf2.
-                                 repeat split.
-                                 ******* rewrite <- H_handle_block_finish.
-                                         simpl.
-                                         rewrite length_app.
-                                         rewrite Nat.add_comm.
-                                         simpl.
-                                         rewrite H_call_stack_st1 in H_lt_i.
-                                         simpl in H_lt_i.
-                                         rewrite length_app in H_lt_i.
-                                         rewrite Nat.add_comm in H_lt_i.
-                                         simpl in H_lt_i.
-                                         apply H_lt_i.
-                                 ******* rewrite <- H_handle_block_finish.
-                                         simpl.
-                                         reflexivity.
-                                 ******* apply H_len_tl_st1.
-                                 ******* rewrite H_st2'.
-                                         simpl.
-                                         rewrite length_app.
-                                         rewrite Nat.add_comm.
-                                         simpl.
-                                         rewrite H_call_stack_st1 in H_lt_i.
-                                         simpl in H_lt_i.
-                                         rewrite length_app in H_lt_i.
-                                         rewrite Nat.add_comm in H_lt_i.
-                                         simpl in H_lt_i.
-                                         apply H_lt_i.
-                                 ******* rewrite H_st2'.
-                                         simpl.
-                                         reflexivity.
-                                 ******* apply H_len_tl_st2.
-                                 ******* apply H_fname_sf1.
-                                 ******* apply H_bid_sf1.
-                                 ******* apply H_pc_sf1.
-                                 ******* apply H_fname_sf2.
-                                 ******* apply H_bid_sf2.
-                                 ******* apply H_pc_sf2.
-                                 ******* apply H_equiv_assign_sf1_sf2.
-                          ****** apply H_live_at_pc.
-                          ****** apply H_not_In_v_s.
-                    ***** rewrite <- H_handle_block_finish.
-                          rewrite H_st2'.
-                          unfold equiv_vars_in_top_frame.
-                          simpl.
-                          repeat split; try reflexivity.      
-
-       
-               **** remember (SmallStepD.StateD.set_status st2 (Status.Error  "Error while applying phi-function")) as st2' eqn:H_st2'.
-        
-                    exists st2'.
-                    exists bid.
-                    exists b.
-                    exists pc.
-                    exists s.
-                    repeat split.
-                    ***** apply H_b_exists.
-                    ***** left.
-                          repeat split.
-                          ****** rewrite <- H_handle_block_finish.
-                                 simpl.
-                                 apply H_lt_i.
-                          ****** rewrite <- H_handle_block_finish.
-                                 rewrite H_st2'.
-                                 simpl.
-                                 apply H_len_call_stack.
-                          ****** rewrite <- H_handle_block_finish.
-                                 rewrite H_st2'.
-                                 simpl.
-                                 reflexivity.
-                          ****** rewrite <- H_handle_block_finish.
-                                 rewrite H_st2'.
-                                 simpl.
-                                 apply H_dialect.
-                          ****** exists (top_sf :: hl').
-                                 exists tl.
-                                 exists sf1.
-                                 exists sf2.
-                                 repeat split.
-                                 ******* rewrite <- H_handle_block_finish.
-                                         simpl.
-                                         apply H_lt_i.
-                                 ******* rewrite <- H_handle_block_finish.
-                                         simpl.
-                                         apply H_call_stack_st1.
-                                 ******* apply H_len_tl_st1.
-                                 ******* rewrite H_st2'.
-                                         simpl.
-                                         rewrite H_call_stack_st2.
-                                         simpl.
-                                         rewrite length_app.
-                                         rewrite Nat.add_comm.
-                                         simpl.
-                                         rewrite H_call_stack_st1 in H_lt_i.
-                                         simpl in H_lt_i.
-                                         rewrite length_app in H_lt_i.
-                                         rewrite Nat.add_comm in H_lt_i.
-                                         simpl in H_lt_i.
-                                         apply H_lt_i.
-                                 ******* rewrite H_st2'.
-                                         simpl.
-                                         apply H_call_stack_st2.
-                                 ******* apply H_len_tl_st2.
-                                 ******* apply H_fname_sf1.
-                                 ******* apply H_bid_sf1.
-                                 ******* apply H_pc_sf1.
-                                 ******* apply H_fname_sf2.
-                                 ******* apply H_bid_sf2.
-                                 ******* apply H_pc_sf2.
-                                 ******* apply H_equiv_assign_sf1_sf2.
-                          ****** apply H_live_at_pc.
-                          ****** apply H_not_In_v_s.
-                    ***** rewrite <- H_handle_block_finish.
-                          rewrite H_st2'.
-                          unfold equiv_vars_in_top_frame.
-                          simpl.
-                          rewrite H_call_stack_st1.
-                          rewrite H_call_stack_st2.
-                          repeat split; try reflexivity.      
-
-
-           (* block not found *)
-           *** remember (SmallStepD.StateD.set_status st2 (Status.Error "Target block not found in the smart contract")) as st2' eqn:H_st2'.
-        
-               exists st2'.
-               exists bid.
-               exists b.
-               exists pc.
-               exists s.
-               repeat split.
-               **** apply H_b_exists.
-               **** left.
-                    repeat split.
-                    ***** rewrite <- H_handle_block_finish.
-                          simpl.
-                          apply H_lt_i.
-                    ***** rewrite <- H_handle_block_finish.
-                          rewrite H_st2'.
-                          simpl.
-                          apply H_len_call_stack.
-                    ***** rewrite <- H_handle_block_finish.
-                          rewrite H_st2'.
-                          simpl.
-                          reflexivity.
-                    ***** rewrite <- H_handle_block_finish.
-                          rewrite H_st2'.
-                          simpl.
-                          apply H_dialect.
-                    ***** exists (top_sf :: hl').
-                          exists tl.
-                          exists sf1.
-                          exists sf2.
-                          repeat split.
-                          ****** rewrite <- H_handle_block_finish.
-                                 simpl.
-                                 apply H_lt_i.
-                          ****** rewrite <- H_handle_block_finish.
-                                 simpl.
-                                 apply H_call_stack_st1.
-                          ****** apply H_len_tl_st1.
-                          ****** rewrite H_st2'.
-                                 simpl.
-                                 rewrite H_call_stack_st2.
-                                 simpl.
-                                 rewrite length_app.
-                                 rewrite Nat.add_comm.
-                                 simpl.
-                                 rewrite H_call_stack_st1 in H_lt_i.
-                                 simpl in H_lt_i.
-                                 rewrite length_app in H_lt_i.
-                                 rewrite Nat.add_comm in H_lt_i.
-                                 simpl in H_lt_i.
-                                 apply H_lt_i.
-                          ****** rewrite H_st2'.
-                                 simpl.
-                                 apply H_call_stack_st2.
-                          ****** apply H_len_tl_st2.
-                          ****** apply H_fname_sf1.
-                          ****** apply H_bid_sf1.
-                          ****** apply H_pc_sf1.
-                          ****** apply H_fname_sf2.
-                          ****** apply H_bid_sf2.
-                          ****** apply H_pc_sf2.
-                          ****** apply H_equiv_assign_sf1_sf2.
-                    ***** apply H_live_at_pc.
-                    ***** apply H_not_In_v_s.
-               **** rewrite <- H_handle_block_finish.
-                    rewrite H_st2'.
-                    unfold equiv_vars_in_top_frame.
-                    simpl.
-                    rewrite H_call_stack_st1.
-                    rewrite H_call_stack_st2.
-                    repeat split; try reflexivity.      
-
-           
+        (* direct jump *)
+        * apply (live_at_handle_jump_2_snd p i fname bid next_bid b pc s st1 st2 st1' top_sf sf1 sf2 hl' tl v H_b_exists H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_exit_st1 H_not_In_v_s).
+            
         (* return *)
-        ** (* we split on wether we return to the frame of sf1/sf2 or not *)
-
-          destruct hl' as [|top_sf' hl''] eqn:E_hl'.
-
-          *** (* return to the frame of sf1/sf2 *)
-              simpl.
-              simpl in H_handle_block_finish.
-
-              rewrite H_fname_sf2.
-              rewrite H_bid_sf2.
-              rewrite H_pc_sf2.
-              rewrite H_fname_sf1 in H_handle_block_finish .
-              rewrite H_bid_sf1 in H_handle_block_finish.
-              rewrite H_pc_sf1 in H_handle_block_finish.
-
-              simpl in H_call_stack_st1.
-              simpl in H_call_stack_st2.
-              destruct (SmallStepD.SmartContractD.get_block p fname bid) as [next_b|] eqn:E_next_b.
-
-             (* block found *)
-              **** injection H_b_exists as H_b_exists.
-                   subst next_b.
-                   destruct (nth_error (SmallStepD.BlockD.instructions b) pc) as [instr|] eqn:E_instr.
-
-                  (* instruction found *)
-                   ***** destruct (SmallStepD.VariableAssignmentD.assign_all (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) (SmallStepD.eval_sexpr rs top_sf)) as [prev_sf_var_assignment_1|] eqn:E_prev_sf_var_assignment_1.
-                         (* assign_all suceeded *)
-                         ****** pose proof (set_all_some (SmallStepD.SmartContractD.BlockD.InstructionD.output instr)  (SmallStepD.eval_sexpr rs top_sf)  (SmallStepD.StackFrameD.variable_assignments sf1)  (SmallStepD.StackFrameD.variable_assignments sf2) prev_sf_var_assignment_1 E_prev_sf_var_assignment_1 ) as [prev_sf_var_assignment_2 E_prev_sf_var_assignment_2].
-                                rewrite E_prev_sf_var_assignment_2.
-
-                                assert(H_pc_is_not_at_end := E_instr).
-                                apply some_neq_none in H_pc_is_not_at_end.
-                                rewrite (nth_error_Some (SmallStepD.BlockD.instructions b) pc) in H_pc_is_not_at_end.
-
-                                assert(H_live_at_pc' := H_live_at_pc).
-                                destruct H_live_at_pc' as [fname bid b0 pc s sout H_b0_exists _ H_pc_at_end | fname bid b0 pc s sout instr' H_b0_exists H_live_at_S_pc H_lt_pc H_get_instr' H_sout].
-
-                                
-                                (* this case is not applicable since pc is not at the end *)
-                                ******* rewrite E_next_b in H_b0_exists.
-                                        injection H_b0_exists as H_b0_exists.
-                                        subst b0.
-                                        rewrite H_pc_at_end in H_pc_is_not_at_end.
-                                        contradiction (Nat.lt_irrefl (length (BlockD.instructions b))).
-                                        
-                                ******* rewrite E_next_b in H_b0_exists.
-                                        injection H_b0_exists as H_b0_exists.
-                                        subst b0.
-
-                                        rewrite E_instr in  H_get_instr'.
-                                        injection H_get_instr' as H_get_instr'.
-                                        subst instr'.
-                                      
-                                        rewrite <- H_dialect.
-
-                                        remember {|
-                                            Liveness_snd.StateD.call_stack :=
-                                              {|
-                                                Liveness_snd.StackFrameD.function_name := fname;
-                                                Liveness_snd.StackFrameD.variable_assignments := prev_sf_var_assignment_2;
-                                                Liveness_snd.StackFrameD.curr_block_id := bid;
-                                                Liveness_snd.StackFrameD.pc := pc + 1
-                                              |} :: tl;
-                                             Liveness_snd.StateD.status := Status.Running;
-                                            Liveness_snd.StateD.dialect_state := SmallStepD.StateD.dialect_state st1
-                                          |} as st2' eqn:H_st2'.
- 
-                                        exists st2'.
-                                        exists bid.
-                                        exists b.
-                                        exists (S pc).
-                                        exists s.
-                                repeat split.
-                                ******** apply E_next_b.
-                                ******** (* now we split on wether v in the output variables *)
-                                         pose proof (varlist_in_dec (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) v) as H_v_output.
-                                         destruct H_v_output as [H_v_in_output | H_v_not_in_output].
-
-                                         ********* right.
-                                         
-                                                   rewrite <- (set_all_preserves_eq_up_to_eq (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) (StackFrameD.variable_assignments sf1) (StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr rs top_sf) prev_sf_var_assignment_1 prev_sf_var_assignment_2 H_v_in_output H_equiv_assign_sf1_sf2  E_prev_sf_var_assignment_1 E_prev_sf_var_assignment_2) in H_st2'.
-                                                   rewrite H_st2'.
-                                                   rewrite <- H_handle_block_finish.
-                                                   reflexivity.
-                                         ********* left.
-                                                   repeat split.
-                                                   ********** rewrite <- H_handle_block_finish.
-                                                              simpl.
-                                                              rewrite H_len_tl_st1.
-                                                              apply Nat.lt_succ_diag_r.
-                                                   ********** rewrite <- H_handle_block_finish.
-                                                              rewrite H_st2'.
-                                                              simpl.
-                                                              reflexivity.
-                                                   ********** rewrite <- H_handle_block_finish.
-                                                              rewrite H_st2'.
-                                                              simpl.
-                                                              reflexivity.
-                                                   ********** rewrite <- H_handle_block_finish.
-                                                              rewrite H_st2'.
-                                                              simpl. 
-                                                              reflexivity.
-                                                   ********** exists [].
-                                                              exists tl.
-                                                              exists {|
-                                                                  Liveness_snd.StackFrameD.function_name := fname;
-                                                                  Liveness_snd.StackFrameD.variable_assignments := prev_sf_var_assignment_1;
-                                                                  Liveness_snd.StackFrameD.curr_block_id := bid;
-                                                                  Liveness_snd.StackFrameD.pc := pc + 1
-                                                                |}.
-                                                              exists {|
-                                                                  Liveness_snd.StackFrameD.function_name := fname;
-                                                                  Liveness_snd.StackFrameD.variable_assignments := prev_sf_var_assignment_2;
-                                                                  Liveness_snd.StackFrameD.curr_block_id := bid;
-                                                                  Liveness_snd.StackFrameD.pc := pc + 1
-                                                                |}.
-                                                              repeat split.
-                                                              *********** rewrite <- H_handle_block_finish.
-                                                                          simpl.
-                                                                          rewrite H_len_tl_st1.
-                                                                          apply Nat.lt_succ_diag_r.
-                                                              *********** rewrite <- H_handle_block_finish.
-                                                                          simpl.
-                                                                          reflexivity.
-                                                              *********** apply H_len_tl_st1.
-                                                              *********** rewrite H_st2'.  
-                                                                          simpl.
-                                                                          rewrite H_len_tl_st2.
-                                                                          apply Nat.lt_succ_diag_r.
-                                                              *********** rewrite H_st2'.
-                                                                          simpl.
-                                                                          reflexivity.
-                                                              *********** apply  H_len_tl_st2.
-                                                              *********** simpl.
-                                                                          rewrite Nat.add_comm.
-                                                                          simpl.
-                                                                          reflexivity.
-                                                              *********** simpl.
-                                                                          rewrite Nat.add_comm.
-                                                                          simpl.
-                                                                          reflexivity.
-                                                              *********** apply (set_all_preserves_eq_up_to (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr rs top_sf) prev_sf_var_assignment_1 prev_sf_var_assignment_2 H_v_not_in_output H_equiv_assign_sf1_sf2 E_prev_sf_var_assignment_1 E_prev_sf_var_assignment_2).
-                                                    ********** apply H_live_at_S_pc.
-                                                    ********** apply (not_In_v_fwd v s sout instr H_sout H_not_In_v_s H_v_not_in_output).
-
-              ******** rewrite H_st2'.
-                       rewrite <- H_handle_block_finish.
-                       unfold equiv_vars_in_top_frame.
-                       simpl.
-                       repeat split.
-                       intros v0 s0 b_top H_b_top_exists H_accessed_vars H_in_v0_s0.           
-
-                       rewrite E_next_b in H_b_top_exists. injection H_b_top_exists as H_b_top_exists. subst b_top.
-
-                       (* wether v in output or not *)
-                       pose proof (varlist_in_dec (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) v) as H_v_output.
-                       destruct H_v_output as [H_v_in_output | H_v_not_in_output].
-
-                        ********* rewrite (set_all_preserves_eq_up_to_eq (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) (StackFrameD.variable_assignments sf1) (StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr rs top_sf) prev_sf_var_assignment_1 prev_sf_var_assignment_2 H_v_in_output H_equiv_assign_sf1_sf2  E_prev_sf_var_assignment_1 E_prev_sf_var_assignment_2).
-                                   reflexivity.
-                        ********* pose proof (not_In_v_fwd v s sout instr H_sout H_not_In_v_s H_v_not_in_output) as H_not_In_v_s'.
-                                  rewrite Nat.add_comm in H_accessed_vars. simpl in H_accessed_vars.
-
-                        pose proof (accessed_var_instr_neq_v p fname bid b (S pc) s0 v0 s v E_next_b H_live_at_S_pc H_not_In_v_s' H_accessed_vars H_in_v0_s0) as H_v0_neq_v.
-                               
-                                  apply (set_all_preserves_eq_up_to (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) (SmallStepD.StackFrameD.variable_assignments sf1) (SmallStepD.StackFrameD.variable_assignments sf2) v (SmallStepD.eval_sexpr rs top_sf) prev_sf_var_assignment_1 prev_sf_var_assignment_2 H_v_not_in_output H_equiv_assign_sf1_sf2  E_prev_sf_var_assignment_1 E_prev_sf_var_assignment_2 v0 H_v0_neq_v).
-
-                         (* assign_all failed *)
-                         ****** rewrite (assign_all_none (SmallStepD.SmartContractD.BlockD.InstructionD.output instr)  (SmallStepD.eval_sexpr rs top_sf)  (SmallStepD.StackFrameD.variable_assignments sf1)  (SmallStepD.StackFrameD.variable_assignments sf2) E_prev_sf_var_assignment_1 ).
-                                remember (SmallStepD.StateD.set_status st2 (Status.Error "Failed to assign return values")) as st2' eqn:H_st2'.
-        
-                                exists st2'.
-                                exists bid.
-                                exists b.
-                                exists pc.
-                                exists s.
-                                repeat split.
-                                ******* apply E_next_b.
-                                ******* left.
-                                        repeat split.
-                                        ******** rewrite <- H_handle_block_finish.
-                                                 simpl.
-                                                 apply H_lt_i.
-                                        ******** rewrite <- H_handle_block_finish.
-                                                 rewrite H_st2'.
-                                                 simpl.
-                                                 apply H_len_call_stack.
-                                        ******** rewrite <- H_handle_block_finish.
-                                                 rewrite H_st2'.
-                                                 simpl.
-                                                 reflexivity.
-                                        ******** rewrite <- H_handle_block_finish.
-                                                 rewrite H_st2'.
-                                                 simpl.
-                                                 apply H_dialect.
-                                        ******** exists [top_sf].
-                                                 exists tl.
-                                                 exists sf1.
-                                                 exists sf2.
-                                                 repeat split.
-                                                 ********* rewrite <- H_handle_block_finish.
-                                                           simpl.
-                                                           apply H_lt_i.
-                                                 ********* rewrite <- H_handle_block_finish.
-                                                           simpl.
-                                                           apply H_call_stack_st1.
-                                                 ********* apply H_len_tl_st1.
-                                                 ********* rewrite H_st2'.
-                                                           simpl.
-                                                           rewrite H_call_stack_st2.
-                                                           simpl.
-                                                           rewrite H_len_tl_st2.
-                                                           apply i_SS_i.
-                                                 ********* rewrite H_st2'.
-                                                           simpl.
-                                                           apply H_call_stack_st2.
-                                                 ********* apply H_len_tl_st2.
-                                                 ********* apply H_fname_sf1.
-                                                 ********* apply H_bid_sf1.
-                                                 ********* apply H_pc_sf1.
-                                                 ********* apply H_fname_sf2.
-                                                 ********* apply H_bid_sf2.
-                                                 ********* apply H_pc_sf2.
-                                                 ********* apply H_equiv_assign_sf1_sf2.
-                                        ******** apply H_live_at_pc.
-                                        ******** apply H_not_In_v_s.
-                                ******* rewrite <- H_handle_block_finish.
-                                       rewrite H_st2'.
-                                       unfold equiv_vars_in_top_frame.
-                                       simpl.
-                                       rewrite H_call_stack_st1.
-                                       rewrite H_call_stack_st2.
-                                       repeat split; try reflexivity.      
-
-
-                  (* instruction not found *)
-                   ***** remember (SmallStepD.StateD.set_status st2 (Status.Error "Failed to find call instruction")) as st2' eqn:H_st2'.
-        
-                          exists st2'.
-                          exists bid.
-                          exists b.
-                          exists pc.
-                          exists s.
-                          repeat split.
-                         ****** apply E_next_b.
-                         ****** left.
-                                  repeat split.
-                                 ******* rewrite <- H_handle_block_finish.
-                                           simpl.
-                                           apply H_lt_i.
-                                 ******* rewrite <- H_handle_block_finish.
-                                           rewrite H_st2'.
-                                           simpl.
-                                           apply H_len_call_stack.
-                                 ******* rewrite <- H_handle_block_finish.
-                                           rewrite H_st2'.
-                                           simpl.
-                                           reflexivity.
-                                 ******* rewrite <- H_handle_block_finish.
-                                           rewrite H_st2'.
-                                           simpl.
-                                           apply H_dialect.
-                                 ******* exists [top_sf].
-                                         exists tl.
-                                         exists sf1.
-                                         exists sf2.
-                                         repeat split.
-                                         ******** rewrite <- H_handle_block_finish.
-                                                  simpl.
-                                                  apply H_lt_i.
-                                         ******** rewrite <- H_handle_block_finish.
-                                                  simpl.
-                                                  apply H_call_stack_st1.
-                                         ******** apply H_len_tl_st1.
-                                         ******** rewrite H_st2'.
-                                                    simpl.
-                                                    rewrite H_call_stack_st2.
-                                                    simpl.
-                                                    rewrite H_len_tl_st2.
-                                                    apply i_SS_i.
-                                          ******** rewrite H_st2'.
-                                                   simpl.
-                                                   apply H_call_stack_st2.
-                                          ******** apply H_len_tl_st2.
-                                          ******** apply H_fname_sf1.
-                                          ******** apply H_bid_sf1.
-                                          ******** apply H_pc_sf1.
-                                          ******** apply H_fname_sf2.
-                                          ******** apply H_bid_sf2.
-                                          ******** apply H_pc_sf2.
-                                          ******** apply H_equiv_assign_sf1_sf2.
-                                 ******* apply H_live_at_pc.
-                                 ******* apply H_not_In_v_s.
-                         ****** rewrite <- H_handle_block_finish.
-                                  rewrite H_st2'.
-                                  unfold equiv_vars_in_top_frame.
-                                  simpl.
-                                  rewrite H_call_stack_st1.
-                                  rewrite H_call_stack_st2.
-                                  repeat split; try reflexivity.      
-
-                   
-             (* block not found *)
-              **** discriminate H_b_exists.
-
-                
-          *** (* return to the frame above of sf1/sf2 -- easy case*)
-              rewrite <- app_comm_cons.
-              rewrite <- app_comm_cons in H_handle_block_finish.
-              
-              destruct (SmallStepD.SmartContractD.get_block p (SmallStepD.StackFrameD.function_name top_sf') (SmallStepD.StackFrameD.curr_block_id top_sf')) as [next_b|] eqn:E_next_b.
-
-             (* block found *)
-              **** destruct (nth_error (SmallStepD.BlockD.instructions next_b) (SmallStepD.StackFrameD.pc top_sf')) as [instr|] eqn:E_instr.
-                   (* instruction found *)
-                   ***** destruct (SmallStepD.VariableAssignmentD.assign_all (SmallStepD.StackFrameD.variable_assignments top_sf') (SmallStepD.SmartContractD.BlockD.InstructionD.output instr) (SmallStepD.eval_sexpr rs top_sf)) as [prev_sf_var_assignment'|] eqn:E_prev_sf_var_assignment'.
-
-                   (* assign_all success *)
-                   ****** remember {|
-                                      Liveness_snd.StateD.call_stack :=
-                                       {|
-                                         Liveness_snd.StackFrameD.function_name := SmallStepD.StackFrameD.function_name top_sf';
-                                         Liveness_snd.StackFrameD.variable_assignments := prev_sf_var_assignment';
-                                         Liveness_snd.StackFrameD.curr_block_id := SmallStepD.StackFrameD.curr_block_id top_sf';
-                                         Liveness_snd.StackFrameD.pc := SmallStepD.StackFrameD.pc top_sf' + 1
-                                       |} :: hl'' ++ sf2 :: tl;
-                              Liveness_snd.StateD.status := Status.Running;
-                              Liveness_snd.StateD.dialect_state := SmallStepD.StateD.dialect_state st2
-                            |} as st2' eqn:H_st2'.
- 
-                          exists st2'.
-                          exists bid.
-                          exists b.
-                          exists pc.
-                          exists s.
-                          repeat split; try reflexivity.
-                          ******* apply H_b_exists.
-                          ******* left.
-                                  repeat split; try reflexivity.
-                                  ******** rewrite <- H_handle_block_finish.
-                                           simpl.
-                                           rewrite length_app.
-                                           rewrite Nat.add_comm.
-                                           simpl.
-                                           rewrite H_len_tl_st1.
-                                           apply i_SS_i_p.
-                                  ******** rewrite <- H_handle_block_finish.
-                                           rewrite H_st2'.
-                                           simpl.
-                                           rewrite length_app.
-                                           rewrite length_app.
-                                           rewrite Nat.add_comm.
-                                           rewrite Nat.add_comm.
-                                           simpl.
-                                           reflexivity.
-                                  ******** rewrite <- H_handle_block_finish.
-                                           rewrite H_st2'.
-                                           simpl.       
-                                           reflexivity.
-                                  ******** rewrite <- H_handle_block_finish.
-                                           rewrite H_st2'.
-                                           simpl.       
-                                           apply H_dialect.
-                                  ******** exists ({|
-                                                      Liveness_snd.StackFrameD.function_name := SmallStepD.StackFrameD.function_name top_sf';
-                                                      Liveness_snd.StackFrameD.variable_assignments := prev_sf_var_assignment';
-                                                      Liveness_snd.StackFrameD.curr_block_id := SmallStepD.StackFrameD.curr_block_id top_sf';
-                                                      Liveness_snd.StackFrameD.pc := SmallStepD.StackFrameD.pc top_sf' + 1
-                                                    |} :: hl'').
-                                           exists tl.
-                                           exists sf1.
-                                           exists sf2.
-                                           repeat split.
-                                           ********* rewrite <- H_handle_block_finish.
-                                                     simpl.
-                                                     rewrite length_app.
-                                                     rewrite Nat.add_comm.
-                                                     simpl.
-                                                     rewrite H_len_tl_st1.
-                                                     apply i_SS_i_p.
-                                           ********* rewrite <- H_handle_block_finish.
-                                                     simpl.
-                                                     reflexivity.
-                                           ********* apply H_len_tl_st1.
-                                           ********* rewrite H_st2'.
-                                                     simpl.
-                                                     rewrite length_app.
-                                                     rewrite Nat.add_comm.
-                                                     simpl.
-                                                     rewrite H_len_tl_st1.
-                                                     apply i_SS_i_p.
-                                           ********* rewrite H_st2'.
-                                                     simpl.
-                                                     reflexivity.
-                                           ********* apply H_len_tl_st2.
-                                           ********* apply H_fname_sf1.
-                                           ********* apply H_bid_sf1.
-                                           ********* apply H_pc_sf1.
-                                           ********* apply H_fname_sf2.
-                                           ********* apply H_bid_sf2.
-                                           ********* apply H_pc_sf2.
-                                           ********* apply H_equiv_assign_sf1_sf2.
-                                  ******** apply H_live_at_pc.
-                                  ******** apply H_not_In_v_s.
-                          ******* rewrite <- H_handle_block_finish.
-                                  rewrite H_st2'.
-                                  unfold equiv_vars_in_top_frame.
-                                  simpl.
-                                  repeat split; try reflexivity.      
-
-                     
-                   (* assign_all fail *)
-                   ****** remember (SmallStepD.StateD.set_status st2 (Status.Error "Failed to assign return values")) as st2' eqn:H_st2'.
-        
-                          exists st2'.
-                          exists bid.
-                          exists b.
-                          exists pc.
-                          exists s.
-                          repeat split.
-                          ******* apply H_b_exists.
-                          ******* left.
-                                  repeat split.
-                                  ******** rewrite <- H_handle_block_finish.
-                                           simpl.
-                                           apply H_lt_i.
-                                  ******** rewrite <- H_handle_block_finish.
-                                           rewrite H_st2'.
-                                           simpl.
-                                           apply H_len_call_stack.
-                                  ******** rewrite <- H_handle_block_finish.
-                                           rewrite H_st2'.
-                                           simpl.
-                                           reflexivity.
-                                  ******** rewrite <- H_handle_block_finish.
-                                           rewrite H_st2'.
-                                           simpl.
-                                           apply H_dialect.
-                                  ******** exists (top_sf :: (top_sf' :: hl'')).
-                                           exists tl.
-                                           exists sf1.
-                                           exists sf2.
-                                           repeat split.
-                                           ********* rewrite <- H_handle_block_finish.
-                                                     simpl.
-                                                     apply H_lt_i.
-                                           ********* rewrite <- H_handle_block_finish.
-                                                     simpl.
-                                                     apply H_call_stack_st1.
-                                           ********* apply H_len_tl_st1.
-                                           ********* rewrite H_st2'.
-                                                     simpl.
-                                                     rewrite H_call_stack_st2.
-                                                     simpl.
-                                                     rewrite length_app.
-                                                     rewrite Nat.add_comm.
-                                                     simpl.
-                                                     rewrite H_call_stack_st1 in H_lt_i.
-                                                     simpl in H_lt_i.
-                                                     rewrite length_app in H_lt_i.
-                                                     rewrite Nat.add_comm in H_lt_i.
-                                                     simpl in H_lt_i.
-                                                     apply H_lt_i.
-                                           ********* rewrite H_st2'.
-                                                     simpl.
-                                                     apply H_call_stack_st2.
-                                           ********* apply H_len_tl_st2.
-                                           ********* apply H_fname_sf1.
-                                           ********* apply H_bid_sf1.
-                                           ********* apply H_pc_sf1.
-                                           ********* apply H_fname_sf2.
-                                           ********* apply H_bid_sf2.
-                                           ********* apply H_pc_sf2.
-                                           ********* apply H_equiv_assign_sf1_sf2.
-                                  ******** apply H_live_at_pc.
-                                  ******** apply H_not_In_v_s.
-                          ******* rewrite <- H_handle_block_finish.
-                                  rewrite H_st2'.
-                                  unfold equiv_vars_in_top_frame.
-                                  simpl.
-                                  rewrite H_call_stack_st1.
-                                  rewrite H_call_stack_st2.
-                                  repeat split; try reflexivity.      
-
-                   (* instruction not found *)
-                   ***** remember (SmallStepD.StateD.set_status st2 (Status.Error "Failed to find call instruction")) as st2' eqn:H_st2'.
-        
-                          exists st2'.
-                          exists bid.
-                          exists b.
-                          exists pc.
-                          exists s.
-                          repeat split.
-                         ****** apply H_b_exists.
-                         ****** left.
-                                  repeat split.
-                                 ******* rewrite <- H_handle_block_finish.
-                                           simpl.
-                                           apply H_lt_i.
-                                 ******* rewrite <- H_handle_block_finish.
-                                           rewrite H_st2'.
-                                           simpl.
-                                           apply H_len_call_stack.
-                                 ******* rewrite <- H_handle_block_finish.
-                                           rewrite H_st2'.
-                                           simpl.
-                                           reflexivity.
-                                 ******* rewrite <- H_handle_block_finish.
-                                           rewrite H_st2'.
-                                           simpl.
-                                           apply H_dialect.
-                                 ******* exists (top_sf :: (top_sf' :: hl'')).
-                                           exists tl.
-                                           exists sf1.
-                                           exists sf2.
-                                           repeat split.
-                                          ******** rewrite <- H_handle_block_finish.
-                                                     simpl.
-                                                     apply H_lt_i.
-                                          ******** rewrite <- H_handle_block_finish.
-                                                     simpl.
-                                                     apply H_call_stack_st1.
-                                          ******** apply H_len_tl_st1.
-                                          ******** rewrite H_st2'.
-                                                     simpl.
-                                                     rewrite H_call_stack_st2.
-                                                     simpl.
-                                                     rewrite length_app.
-                                                     rewrite Nat.add_comm.
-                                                     simpl.
-                                                     rewrite H_call_stack_st1 in H_lt_i.
-                                                     simpl in H_lt_i.
-                                                     rewrite length_app in H_lt_i.
-                                                     rewrite Nat.add_comm in H_lt_i.
-                                                     simpl in H_lt_i.
-                                                     apply H_lt_i.
-                                          ******** rewrite H_st2'.
-                                                     simpl.
-                                                     apply H_call_stack_st2.
-                                          ******** apply H_len_tl_st2.
-                                          ******** apply H_fname_sf1.
-                                          ******** apply H_bid_sf1.
-                                          ******** apply H_pc_sf1.
-                                          ******** apply H_fname_sf2.
-                                          ******** apply H_bid_sf2.
-                                          ******** apply H_pc_sf2.
-                                          ******** apply H_equiv_assign_sf1_sf2.
-                                 ******* apply H_live_at_pc.
-                                 ******* apply H_not_In_v_s.
-                         ****** rewrite <- H_handle_block_finish.
-                                  rewrite H_st2'.
-                                  unfold equiv_vars_in_top_frame.
-                                  simpl.
-                                  rewrite H_call_stack_st1.
-                                  rewrite H_call_stack_st2.
-                                  repeat split; try reflexivity.      
-
-
-              (* block not found *)
-              **** remember (SmallStepD.StateD.set_status st2 (Status.Error "Failed to calling block")) as st2' eqn:H_st2'.
-        
-                   exists st2'.
-                   exists bid.
-                   exists b.
-                   exists pc.
-                   exists s.
-                   repeat split.
-                   ***** apply H_b_exists.
-                   ***** left.
-                         repeat split.
-                         ****** rewrite <- H_handle_block_finish.
-                                simpl.
-                                apply H_lt_i.
-                         ****** rewrite <- H_handle_block_finish.
-                                rewrite H_st2'.
-                                simpl.
-                                apply H_len_call_stack.
-                         ****** rewrite <- H_handle_block_finish.
-                                rewrite H_st2'.
-                                simpl.
-                                reflexivity.
-                         ****** rewrite <- H_handle_block_finish.
-                                rewrite H_st2'.
-                                simpl.
-                                apply H_dialect.
-                         ****** exists (top_sf :: (top_sf' :: hl'')).
-                                exists tl.
-                                exists sf1.
-                                exists sf2.
-                                repeat split.
-                                ******* rewrite <- H_handle_block_finish.
-                                        simpl.
-                                        apply H_lt_i.
-                                ******* rewrite <- H_handle_block_finish.
-                                        simpl.
-                                        apply H_call_stack_st1.
-                                ******* apply H_len_tl_st1.
-                                ******* rewrite H_st2'.
-                                        simpl.
-                                        rewrite H_call_stack_st2.
-                                        simpl.
-                                        rewrite length_app.
-                                        rewrite Nat.add_comm.
-                                        simpl.
-                                        rewrite H_call_stack_st1 in H_lt_i.
-                                        simpl in H_lt_i.
-                                        rewrite length_app in H_lt_i.
-                                        rewrite Nat.add_comm in H_lt_i.
-                                        simpl in H_lt_i.
-                                        apply H_lt_i.
-                                ******* rewrite H_st2'.
-                                        simpl.
-                                        apply H_call_stack_st2.
-                                ******* apply H_len_tl_st2.
-                                ******* apply H_fname_sf1.
-                                ******* apply H_bid_sf1.
-                                ******* apply H_pc_sf1.
-                                ******* apply H_fname_sf2.
-                                ******* apply H_bid_sf2.
-                                ******* apply H_pc_sf2.
-                                ******* apply H_equiv_assign_sf1_sf2.
-                         ****** apply H_live_at_pc.
-                         ****** apply H_not_In_v_s.
-                   ***** rewrite <- H_handle_block_finish.
-                         rewrite H_st2'.
-                         unfold equiv_vars_in_top_frame.
-                         simpl.
-                         rewrite H_call_stack_st1.
-                         rewrite H_call_stack_st2.
-                         repeat split; try reflexivity.      
-
-
-
-        (* terminated *)
-        ** remember (SmallStepD.StateD.set_status st2 Status.Terminated) as st2' eqn:H_st2'.
-           exists st2'.
-           exists bid.
-           exists b.
-           exists pc.
-           exists s.
-           repeat split.
-           *** apply H_b_exists.
-           *** left.
-               repeat split.
-               **** rewrite <- H_handle_block_finish.
-                    simpl.
-                    apply H_lt_i.
-               **** rewrite <- H_handle_block_finish.
-                    rewrite H_st2'.
-                    simpl.
-                    apply H_len_call_stack.
-               **** rewrite <- H_handle_block_finish.
-                    rewrite H_st2'.
-                    simpl.
-                    reflexivity.
-               **** rewrite <- H_handle_block_finish.
-                    rewrite H_st2'.
-                    simpl.
-                    apply H_dialect.
-               **** exists (top_sf :: hl').
-                    exists tl.
-                    exists sf1.
-                    exists sf2.
-                    repeat split.
-                    ***** rewrite <- H_handle_block_finish.
-                          simpl.
-                          apply H_lt_i.
-                    ***** rewrite <- H_handle_block_finish.
-                          simpl.
-                          apply H_call_stack_st1.
-                    ***** apply H_len_tl_st1.
-                    ***** rewrite H_st2'.
-                          simpl.
-                          rewrite H_call_stack_st2.
-                          simpl.
-                          rewrite H_call_stack_st1 in H_lt_i.
-                          simpl in H_lt_i.
-                          rewrite length_app in H_lt_i.
-                          rewrite Nat.add_comm in H_lt_i.
-                          simpl in H_lt_i.                        
-                          rewrite length_app.
-                          rewrite Nat.add_comm.
-                          simpl.
-                          apply H_lt_i.
-                    ***** rewrite H_st2'.
-                          simpl.
-                          apply H_call_stack_st2.
-                    ***** apply H_len_tl_st2.
-                    ***** apply H_fname_sf1.
-                    ***** apply H_bid_sf1.
-                    ***** apply H_pc_sf1.
-                    ***** apply H_fname_sf2.
-                    ***** apply H_bid_sf2.
-                    ***** apply H_pc_sf2.
-                    ***** apply H_equiv_assign_sf1_sf2.
-               **** apply H_live_at_pc.
-               **** apply H_not_In_v_s.
-           *** rewrite <- H_handle_block_finish.
-               rewrite H_st2'.
-               unfold equiv_vars_in_top_frame.
-               simpl.
-               rewrite H_call_stack_st1.
-               rewrite H_call_stack_st2.
-               repeat split; try reflexivity.
+        * apply (live_at_handle_return_2_snd p i fname bid b pc s st1 st2 st1' top_sf sf1 sf2 hl' tl v rs H_b_exists H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_exit_st1 H_not_In_v_s).
+            
+        (* terminiate *)
+        * apply (live_at_handle_teminate_snd p i fname bid b pc s st1 st2 st1' sf1 sf2 tl v H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_exit_st1 H_not_In_v_s).
 
       (* block not found *)
-      * remember (SmallStepD.StateD.set_status st2 (Status.Error "Current block not found in the smart contract")) as st2' eqn:H_st2'.
-        
-        exists st2'.
-        exists bid.
-        exists b.
-        exists pc.
-        exists s.
-        repeat split.
-        ** apply H_b_exists.
-        ** left.
-           repeat split.
-           *** rewrite <- H_handle_block_finish.
-               simpl.
-               apply H_lt_i.
-           *** rewrite <- H_handle_block_finish.
-               rewrite H_st2'.
-               simpl.
-               apply H_len_call_stack.
-           *** rewrite <- H_handle_block_finish.
-               rewrite H_st2'.
-               simpl.
-               reflexivity.
-           *** rewrite <- H_handle_block_finish.
-               rewrite H_st2'.
-               simpl.
-               apply H_dialect.
-           *** exists (top_sf :: hl').
-               exists tl.
-               exists sf1.
-               exists sf2.
-               repeat split.
-               **** rewrite <- H_handle_block_finish.
-                    simpl.
-                    apply H_lt_i.
-               **** rewrite <- H_handle_block_finish.
-                    simpl.
-                    apply H_call_stack_st1.
-               **** apply H_len_tl_st1.
-               **** rewrite H_st2'.
-                    simpl.
-                    rewrite H_call_stack_st2.
-                    simpl.
-                    rewrite length_app.
-                    rewrite Nat.add_comm.
-                    simpl.
-                    rewrite H_call_stack_st1 in H_lt_i.
-                    simpl in H_lt_i.
-                    rewrite length_app in H_lt_i.
-                    rewrite Nat.add_comm in H_lt_i.
-                    simpl in H_lt_i.
-                    apply H_lt_i.
-               **** rewrite H_st2'.
-                    simpl.
-                    apply H_call_stack_st2.
-               **** apply H_len_tl_st2.
-               **** apply H_fname_sf1.
-               **** apply H_bid_sf1.
-               **** apply H_pc_sf1.
-               **** apply H_fname_sf2.
-               **** apply H_bid_sf2.
-               **** apply H_pc_sf2.
-               **** apply H_equiv_assign_sf1_sf2.
-           *** apply H_live_at_pc.
-           *** apply H_not_In_v_s.
-        ** rewrite <- H_handle_block_finish.
-           rewrite H_st2'.
-           unfold equiv_vars_in_top_frame.
-           simpl.
-           rewrite H_call_stack_st1.
-           rewrite H_call_stack_st2.
-           repeat split; try reflexivity.      
-Qed.
+      + apply (live_at_error_1_snd p i fname bid b pc s st1 st2 st1' v "Current block not found" H_b_exists H_live_at_pc H_equiv_st1_st2 H_handle_exit_st1 H_not_In_v_s).
+  Qed.
+  
+
 
 
   
   Lemma live_at_step_snd:   
-    forall (p: SmartContractD.t) (i: nat) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t),
-      SmartContractD.get_block p fname bid = Some b ->
-      live_at_pc' p fname bid pc s ->
-      forall  (st1 st2 st1': StateD.t) (v: YULVariable.t),
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t),
+      CFGProgD.get_block p fname bid = Some b ->
+      live_at_pc p fname bid pc s ->
+      forall  (st1 st2 st1': StateD.t) (v: VarID.t),
         equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
-        SmallStepD.step st1 p = st1' ->
+        SmallStepD.step st1 p = Some st1' ->
         ~ VarSet.In v s ->
         exists st2' bid' b' pc' s',
-          SmallStepD.step st2 p = st2'
+          SmallStepD.step st2 p = Some st2'
           /\
-            SmartContractD.get_block p fname bid' = Some b'  /\ 
-            (
-              ( ( equiv_states_up_to_i_v p i fname bid' pc' v st1' st2') /\ live_at_pc' p fname bid' pc' s' /\ ~ VarSet.In v s' )
-              \/
-                st2' = st1'
-            )
+            CFGProgD.get_block p fname bid' = Some b'
           /\
-            equiv_vars_in_top_frame p st1' st2'.
+            equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
+          /\
+            equiv_vars_in_top_frame p st1' st2'. (* the top frames are equivalent wrt the accessed variables *)
   Proof.
     intros p i fname bid b pc s H_exists_b H_live_at_pc st1 st2 st1' v H_equiv_up_to_i_v_st1_st2 H_step_st1 H_not_In_v_s.
     unfold SmallStepD.step in H_step_st1.
@@ -6613,147 +4925,117 @@ Qed.
       rewrite H_eq_states in E_status_st1.
       rewrite E_status_st1.
       
-      destruct (SmallStepD.get_next_instruction st1 p) as [instr|] eqn:E_get_instr_st1.
+      destruct (SmallStepD.get_next_instr st1 p) as [instr|] eqn:E_get_instr_st1.
       
       + pose proof (get_next_instr_eq_states p i fname bid pc v st1 st2 H_equiv_up_to_i_v_st1_st2) as H_get_instr_st2.
         rewrite E_get_instr_st1 in H_get_instr_st2.
         rewrite <- H_get_instr_st2.
+
+        injection H_step_st1 as H_step_st1.
         
-        apply (live_at_exec_inst_snd p i fname bid b pc s instr H_exists_b H_live_at_pc st1 st2 st1' v H_equiv_up_to_i_v_st1_st2 E_get_instr_st1 H_step_st1 H_not_In_v_s ).
-        
-      + pose proof (get_next_instr_eq_states p i fname bid pc v st1 st2 H_equiv_up_to_i_v_st1_st2) as H_get_instr_st2.
+        pose proof (live_at_exec_inst_snd p i fname bid b pc s instr H_exists_b H_live_at_pc st1 st2 st1' v H_equiv_up_to_i_v_st1_st2 E_get_instr_st1 H_step_st1 H_not_In_v_s ) as [st2' [bid' [b' [pc' [s' [H_exec_instr_st2 [H_b'_exists [H_equiv_or_eq H_equiv_top_fames]]]]]]]].
+        exists st2', bid', b', pc', s'.
+        split.
+        * rewrite H_exec_instr_st2. reflexivity.
+        * repeat split; assumption.
+      + injection H_step_st1 as H_step_st1.
+
+        pose proof (get_next_instr_eq_states p i fname bid pc v st1 st2 H_equiv_up_to_i_v_st1_st2) as H_get_instr_st2.
         rewrite E_get_instr_st1 in H_get_instr_st2.
         rewrite <- H_get_instr_st2.
         
-        apply (live_at_handle_block_finish_snd p i fname bid b pc s H_exists_b H_live_at_pc st1 st2 st1' v H_equiv_up_to_i_v_st1_st2 E_get_instr_st1 H_step_st1 H_not_In_v_s ).
-        
-    (* Not running state -- it is copied 3 times for 3 cases, should define a strategy *)
-    - subst st1'.
-      pose proof (equiv_states_eq_status p i fname bid pc v st1 st2 H_equiv_up_to_i_v_st1_st2) as H_eq_status.
-      unfold SmallStepD.step.
-      rewrite <- H_eq_status.
-      rewrite E_status_st1.
-      exists st2.
-      exists bid.
-      exists b.
-      exists pc.
-      exists s.
-      repeat split; try (reflexivity || assumption).
-      + left.
-        split.
-        * assumption.
-        * split.
-          ** assumption.
-          ** assumption.
-      + apply (equiv_state_equiv_frames_at_top  p fname bid b pc i v s st1 st2 H_exists_b H_live_at_pc H_not_In_v_s H_equiv_up_to_i_v_st1_st2).
+        pose proof (live_at_handle_block_exit_snd p i fname bid b pc s H_exists_b H_live_at_pc st1 st2 st1' v H_equiv_up_to_i_v_st1_st2 E_get_instr_st1 H_step_st1 H_not_In_v_s ) as [st2' [bid' [b' [pc' [s' [H_exec_instr_st2 [H_b_exists [H_equiv_or_eq H_equiv_top_fames]]]]]]]].
 
-    - subst st1'.
-      pose proof (equiv_states_eq_status p i fname bid pc v st1 st2 H_equiv_up_to_i_v_st1_st2) as H_eq_status.
-      unfold SmallStepD.step.
-      rewrite <- H_eq_status.
-      rewrite E_status_st1.
-      exists st2.
-      exists bid.
-      exists b.
-      exists pc.
-      exists s.
-      repeat split; try (reflexivity || assumption).
-      + left.
+        exists st2', bid', b', pc', s'.
         split.
-        * assumption.
-        * split.
-          ** assumption.
-          ** assumption.
-      + apply (equiv_state_equiv_frames_at_top  p fname bid b pc i v s st1 st2 H_exists_b H_live_at_pc H_not_In_v_s H_equiv_up_to_i_v_st1_st2).
-
-    - subst st1'.
-      pose proof (equiv_states_eq_status p i fname bid pc v st1 st2 H_equiv_up_to_i_v_st1_st2) as H_eq_status.
-      unfold SmallStepD.step.
-      rewrite <- H_eq_status.
-      rewrite E_status_st1.
-      exists st2.
-      exists bid.
-      exists b.
-      exists pc.
-      exists s.
-      repeat split; try (reflexivity || assumption).
-      + left.
-        split.
-        * assumption.
-        * split.
-          ** assumption.
-          ** assumption.
-      + apply (equiv_state_equiv_frames_at_top  p fname bid b pc i v s st1 st2 H_exists_b H_live_at_pc H_not_In_v_s H_equiv_up_to_i_v_st1_st2).
+        * rewrite H_exec_instr_st2. reflexivity.
+        * repeat split; assumption.
+    - discriminate H_step_st1.
+    - discriminate H_step_st1.
+    - discriminate H_step_st1.
   Qed.
-    
+
   Lemma live_at_snd:   
-    forall (p: SmartContractD.t) (n: nat) (fname: FunctionName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t),
-      SmartContractD.get_block p fname bid = Some b ->
-      live_at_pc' p fname bid pc s ->
-      forall  (st1 st2 st1': StateD.t) (v: YULVariable.t) (i: nat),
+    forall (p: CFGProgD.t) (n: nat) (fname: FuncName.t) (bid: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t),
+      CFGProgD.get_block p fname bid = Some b ->
+      live_at_pc p fname bid pc s ->
+      forall  (st1 st2 st1': StateD.t) (v: VarID.t) (i: nat),
         equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
-        SmallStepD.eval n st1 p = st1' ->
+        SmallStepD.eval n st1 p = Some st1' ->
         ~ VarSet.In v s ->
-        exists st2' pc' b' bid',
-          SmallStepD.eval n st2 p = st2' /\
-            SmartContractD.get_block p fname bid' = Some b'  /\ 
-            (equiv_states_up_to_i_v p i fname bid' pc' v st1' st2' \/ st2' = st1') /\
-            equiv_vars_in_top_frame p st1' st2'.
+        exists  st2' bid' b' pc' s',
+          SmallStepD.eval n st2 p = Some st2'
+          /\
+            CFGProgD.get_block p fname bid' = Some b'
+          /\
+            equiv_states_up_to_not_live_v_or_eq_states p i fname bid' pc' s' st1' st2' v (* we reach state equivalent to st1' *)
+          /\
+            equiv_vars_in_top_frame p st1' st2'. (* the top frames are equivalent wrt the accessed variables *)
   Proof.
     intros p.
     induction n as [|n' IHn'].
     - intros fname bid b pc s H_b_exists H_live_at_pc st1 st2 st1' v i H_equiv_st1_st2 H_eval_st1 H_not_In_v_s.
       simpl in H_eval_st1.
+      injection H_eval_st1 as H_eval_st1.
+      rewrite <- H_eval_st1.        
       simpl.
-      exists st2.
-      exists pc.
-      exists b.
-      exists bid.
+      exists st2, bid, b, pc, s. 
       repeat split.
-      + apply H_b_exists.
-      + left.
-        rewrite <- H_eval_st1.
-        apply H_equiv_st1_st2.
-      + rewrite <- H_eval_st1.
-        apply (equiv_state_equiv_frames_at_top p fname bid b pc i v s st1 st2 H_b_exists H_live_at_pc H_not_In_v_s H_equiv_st1_st2).
+      + exact H_b_exists.
+      + unfold equiv_states_up_to_not_live_v_or_eq_states.
+        left.
+        split.
+        * exact H_equiv_st1_st2.
+        * split; assumption.
+      + apply (equiv_state_equiv_frames_at_top p fname bid b pc i v s st1 st2 H_b_exists H_live_at_pc H_not_In_v_s H_equiv_st1_st2).
 
     - intros fname bid b pc s H_b_exists H_live_at_pc st1 st2 st1' v i H_equiv_st1_st2 H_eval_st1 H_not_In_v_s.
 
       simpl in H_eval_st1.
-      remember (SmallStepD.step st1 p) as st1_1_step eqn:H_step_st1.
-      symmetry in H_step_st1.
-      
-      pose proof (live_at_step_snd p i fname bid b pc s H_b_exists H_live_at_pc st1 st2 st1_1_step v H_equiv_st1_st2 H_step_st1 H_not_In_v_s) as H_live_at_step_snd.
-      simpl.
-      destruct H_live_at_step_snd as [st2_1_step [bid' [b' [pc' [s' [H_step_st2 [ H_exists_b' [[[ H_equiv_states_up_to_i_v_st1_1_step_st2_1_step [H_live_at_pc'_bid'_pc' H_v_not_In_s']] | H_st2_1_step_eq_st1_1_step] H_equiv_vars_in_top_frame_st1_1_step_st2_1_step]]]]]]]].
+      destruct (SmallStepD.step st1 p) as [st1_1_step|] eqn:H_step_st1.
 
-      + pose proof (IHn' fname bid' b' pc' s' H_exists_b' H_live_at_pc'_bid'_pc' st1_1_step st2_1_step st1' v i H_equiv_states_up_to_i_v_st1_1_step_st2_1_step H_eval_st1 H_v_not_In_s') as IHn'_inst.
-        destruct IHn'_inst as [st2' [pc'' [b'' [bid'' [H_eval_st2_1_step [H_equiv_st1'_st2' H_equiv_vars_in_top_frame_st1'_st2']]]]]].
+      + pose proof (live_at_step_snd p i fname bid b pc s H_b_exists H_live_at_pc st1 st2 st1_1_step v H_equiv_st1_st2 H_step_st1 H_not_In_v_s) as H_live_at_step_snd.
+        simpl.
+        destruct H_live_at_step_snd as [st2_1_step [bid' [b' [pc' [s' [H_step_st2 [H_b'_exists [H_equiv_or_eq H_equiv_var_topf]]]]]]]].
 
-        exists st2'.
-        exists pc''.
-        exists b''.
-        exists bid''.
-        repeat split.
-
-        * rewrite H_step_st2.
-          apply H_eval_st2_1_step.
-        * apply H_equiv_st1'_st2'.
-        * apply H_equiv_vars_in_top_frame_st1'_st2'.
-        * apply H_equiv_vars_in_top_frame_st1'_st2'.
-         
-      + subst st2_1_step.
-        exists st1'.
-        exists pc'.
-        exists b'.
-        exists bid'.
-        repeat split.
+        rewrite H_step_st2.
         
-        * rewrite H_st2_1_step_eq_st1_1_step.
-          apply H_eval_st1.
-        * apply H_exists_b'.
-        * right. reflexivity.
-        * apply equiv_vars_in_top_frame_refl.
+        assert(H_equiv_or_eq' := H_equiv_or_eq).
+        unfold equiv_states_up_to_not_live_v_or_eq_states in H_equiv_or_eq'.
+        destruct H_equiv_or_eq' as [H_equiv_st1_1_step_1_st2 | H_eq_st2_1_step_st1_1_step].
+
+        * destruct H_equiv_st1_1_step_1_st2 as [H_equiv_st1_1_step_1_st2_1 [H_equiv_st1_1_step_1_st2_2 H_equiv_st1_1_step_1_st2_3]].
+
+          assert ( H_equiv_or_eq' :=  H_equiv_or_eq).
+          unfold equiv_states_up_to_not_live_v_or_eq_states in H_equiv_or_eq'.
+          destruct H_equiv_or_eq' as [ [H_equiv_st1_1_step_st2_1_step [H_live_at_pc' H_not_In_v_s']] | H_eq_st2_1_step_st1_1_step].
+
+          ** apply (IHn' fname bid' b' pc' s' H_b'_exists H_equiv_st1_1_step_1_st2_2 st1_1_step st2_1_step st1' v i H_equiv_st1_1_step_st2_1_step  H_eval_st1 H_not_In_v_s').
+
+          ** subst st2_1_step.
+             exists st1'.
+             exists bid'.
+             exists b'.
+             exists pc'.
+             exists s'.
+             repeat split; try assumption.
+             *** unfold equiv_states_up_to_not_live_v_or_eq_states.
+                 right.
+                 reflexivity. 
+             *** apply equiv_vars_in_top_frame_refl.
+        * subst st2_1_step.
+          
+          exists st1'.
+          exists bid'.
+          exists b'.
+          exists pc'.
+          exists s'.
+          repeat split; try assumption.
+          ** unfold equiv_states_up_to_not_live_v_or_eq_states.
+             right.
+             reflexivity. 
+          ** apply equiv_vars_in_top_frame_refl.
+      + discriminate H_eval_st1.
   Qed.
 
 End Liveness_snd.
