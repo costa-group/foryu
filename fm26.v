@@ -8,9 +8,9 @@ Require Import Lia.
 
 (*
 
-  This module include a simplified version of the main statements that
-  appear in livenss.v and liveness_snd, which is used in Section 4 of
-  the FM26 submission.
+  This module includes a simplified version of the main statements
+  that appear in liveness.v and liveness_snd.v, which is used in
+  Section 4 of the FM26 submission.
 
 *)
 
@@ -49,11 +49,11 @@ Module FM26 (D: DIALECT).
   Import Liveness_sndD.
 
 
-  (* converts a list of simple expressions to a set of variables *)
+  (* Converts a list of simple expressions to a set of variables *)
   Definition list_sexp_to_varset (l : list SimpleExprD.t) :=
     (list_to_set (extract_yul_vars l)).
 
-  (* states that two stack frames are at the same program point *)
+  (* States that two stack frames are at the same program point *)
   Definition same_pp (fname: FuncName.t) (bid: BlockID.t) (pc: nat) (sf1 sf2: StackFrameD.t) :=
     sf1.(StackFrameD.fname) = fname /\
       sf2.(StackFrameD.fname) = fname /\
@@ -62,7 +62,7 @@ Module FM26 (D: DIALECT).
       sf1.(StackFrameD.pc) = pc /\
       sf2.(StackFrameD.pc) = pc.
 
-  (* states that two frames are equivalent up to the value of
+  (* States that two stack frames are equivalent up to the value of
   valriable v *)
   Definition equiv_frames_up_to_v (fname: FuncName.t) (bid: BlockID.t) (pc: nat) (v: VarID.t) (sf1 sf2: StackFrameD.t) :=
     same_pp fname bid pc sf1 sf2 /\
@@ -70,8 +70,8 @@ Module FM26 (D: DIALECT).
         v' <> v -> (* equality is required for variable different from v *)
         LocalsD.get sf1.(StackFrameD.locals) v'= LocalsD.get sf2.(StackFrameD.locals) v'.
 
-  (* states that two states are equivalent up to the value of
-  valriable v in the top frame *)  
+  (* States that two program states are equivalent up to the value of
+  valriable v in the top stack frame *)  
   Definition equiv_states_up_to_v (fname: FuncName.t) (bid: BlockID.t) (pc: nat) (v: VarID.t) (st1 st2: StateD.t) :=
     Nat.lt 0 (length (StateD.call_stack st1)) /\
     length (StateD.call_stack st1) = length (StateD.call_stack st2) /\
@@ -82,8 +82,8 @@ Module FM26 (D: DIALECT).
           st2.(StateD.call_stack) = sf2::rsf /\
           equiv_frames_up_to_v fname bid pc v sf1 sf2.
 
-  (* states that s is the set of variables that are immediately
-  accessed in a block b wrt to pc *)
+  (* States that s is the set of variables that are immediately
+  accessed in a block b wrt. to the rpogram counter pc *)
   Definition accessed_vars (b: BlockD.t) (pc: nat) (s: VarSet.t) :=
     ( pc = (length b.(BlockD.instructions)) /\ (* end of block *)
         match b.(BlockD.exit_info) with
@@ -99,8 +99,8 @@ Module FM26 (D: DIALECT).
             nth_error b.(BlockD.instructions) pc = Some instr /\
               (VarSet.Equal s (list_sexp_to_varset instr.(InstrD.input)) )). (* instr.input are accessed *)
 
-  (* states that top frames of states st1 and st2 are equivalent wrt
-  to the accessed variables *)  
+  (* States that top stack frames of states st1 and st2 are equivalent
+  wrt. to the accessed variables *)  
   Definition equiv_top_frame (p: CFGProgD.t) (st1 st2: StateD.t) :=
     match st1.(StateD.call_stack), st2.(StateD.call_stack) with
     | nil,nil => True (* both call stacks are empty *)
@@ -113,11 +113,11 @@ Module FM26 (D: DIALECT).
             CFGProgD.get_block p fname bid = Some b ->
             Liveness_sndD.accessed_vars b pc s ->
             VarSet.In v s ->
-            LocalsD.get sf1.(StackFrameD.locals) v = LocalsD.get sf2.(StackFrameD.locals) v
+            LocalsD.get sf1.(StackFrameD.locals) v = LocalsD.get sf2.(StackFrameD.locals) v (* we use = here for simplicity, the more general uses D.eqb *)
     | _,_ => False (* one of the call stacks is empty *)
     end.
 
-  (* define when a variable v is considered dead *)
+  (* Defines when a variable v is considered dead *)
   Definition dead_variable (p: CFGProgD.t) (fname: FuncName.t) (bid: BlockID.t) (pc: nat) (v: VarID.t) :=
     forall (st1 st2 st1': StateD.t) (n: nat),
       equiv_states_up_to_v fname bid pc v st1 st2 ->
@@ -125,7 +125,7 @@ Module FM26 (D: DIALECT).
       exists st2',
         SmallStepD.eval n st2 p = Some st2' /\ equiv_top_frame p st1' st2'.
 
-  (* this lemma related the equivalence of states define in this
+  (* This lemma relates the equivalence of states defined in this
   module to that defined in liveness_snd.v *)
   Lemma equiv_state_rel:
     forall p fname bid pc v st1 st2,
@@ -157,7 +157,7 @@ Module FM26 (D: DIALECT).
         apply (H_equiv_varmap v' H_neq_v'_v).
   Qed.
   
-  (* this lemma states that live_in provides a sound
+  (* This lemma states that live_in provides a sound
   under-approximation of dead variables. The proof uses the
   corresponding (more general) lemma that appears in liveness_snd.v *)
   Lemma live_in_out_snd:  
@@ -193,16 +193,17 @@ Module FM26 (D: DIALECT).
         apply (H_equiv_varmap v0 s0 b0 H_get_block H_acc H_In_v0_s0).
   Qed.
   
-  (* This function is the liveness checker, it simple uses the one
-  defined in liveness.v --- just to use the same name in the paper *)
+  (* This function is the liveness checker, it simply uses the one
+  defined in liveness.v --- just to use the same name that is used in
+  the paper *)
   Definition liveness_chk (p: CFGProgD.t) (r: prog_live_info_t) :=
     check_program p r.
 
-  (* just an aliasing of Liveness_sndD.snd_all_blocks_info -- just to
-  use the same name in the paper *)
+  (* Just an aliasing of Liveness_sndD.snd_all_blocks_info -- just to
+  use the same name that is used in the paper *)
   Definition liveness_info_snd := Liveness_sndD.snd_all_blocks_info.
 
-  (* this proves the soundness and completeness of the checker -- is
+  (* This proves the soundness and completeness of the checker -- it
   uses the corresponding lemma that appears in liveness_snd.v *)
   Lemma liveness_chk_snd_cmp: 
     forall (p: CFGProgD.t) (r: prog_live_info_t),
