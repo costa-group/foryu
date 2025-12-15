@@ -406,11 +406,11 @@ class JSON_Smart_Contract:
 
     def translate_smart_contract(self):
         """Generates the Coq representation of a smart contract """
-        template = """Definition sc_tr : EVMCFGProg.t :=
-       {{| EVMCFGProg.name := "{}";
-           EVMCFGProg.functions := [\n{}];
-           EVMCFGProg.main := "{}" 
-       |}}."""
+        template = """Definition sc_tr : EVMCFGProg.t := EVMCFGProg.construct "{}" "{}" [{}]. """
+       # {{| EVMCFGProg.name := "{}";
+       #     EVMCFGProg.functions := [\n{}];
+       #     EVMCFGProg.main := "{}" 
+       # |}}."""
         functs_coq = []
         entry_fname = None
         for f_name, func in self.flat_d.items():
@@ -419,7 +419,7 @@ class JSON_Smart_Contract:
             functs_coq.append(self.translate_function(f_name, func))
         list_functs = ";\n".join(functs_coq)
 
-        return template.format(self.sc_main_filename, list_functs, entry_fname)
+        return template.format(self.sc_main_filename, entry_fname, list_functs)
 
     def extract_liveness_info(self):
         """ Collects all the liveness information from function's blocks """

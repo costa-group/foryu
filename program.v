@@ -430,7 +430,7 @@ Module CFGProg (D: DIALECT).
     main: FuncName.t; (* The main function of the smart contract *)
   }.
 
-  Definition construct (name : string) (functions : list CFGFunD.t) (main: FuncName.t) : t :=
+  Definition construct (name : string) (main: FuncName.t) (functions : list CFGFunD.t) : t :=
     {| name := name; functions := functions; main := main |}.
 
   Definition get_func (sc: t) (fname: FuncName.t) : option CFGFunD.t :=
