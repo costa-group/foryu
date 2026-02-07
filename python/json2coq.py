@@ -356,7 +356,7 @@ class JSON_Smart_Contract:
         elif instruction['op'] in JSON_Smart_Contract.evm_opcode:
             instr = f"inl (inr {JSON_Smart_Contract.evm_opcode[instruction['op']]})"
         else:
-            print(f"* function call: {instruction['op']}", file=sys.stderr)
+            # print(f"* function call: {instruction['op']}", file=sys.stderr)
             instr = f'inl (inl "{instruction["op"]}")'
 
         in_v = self.translate_var_constant_list(instruction['in'])
@@ -438,7 +438,7 @@ class JSON_Smart_Contract:
             | 0%N => Some (EVMLiveness.list_to_set [], EVMLiveness.list_to_set [ 0%N ] )
         """
         template = "\n         | {} => Some (EVMLiveness.list_to_set [ {} ], EVMLiveness.list_to_set [ {} ])"
-        tr_blockid = f"{blockid}%N"
+        tr_blockid = f"{blockid}"
         tr_liveness_input = "; ".join(map(lambda x: self.translate_var(x), liveness_block['in']))
         tr_liveness_output = "; ".join(map(lambda x: self.translate_var(x), liveness_block['out']))
         return template.format(tr_blockid, tr_liveness_input, tr_liveness_output)
@@ -506,21 +506,16 @@ Module TestTranslation.
 
 {}
 
-{}
-
+Definition check := EVMLiveness.check_program sc_tr liveness_info.
 (* Launches liveness check *)
-(* Compute check. *) 
 
 End TestTranslation."""
-        checker_def = "Definition check := EVMLiveness.check_smart_contract_subset sc_tr liveness_info."
-        if checker == "optimal":
-            checker_def = "Definition check := EVMLiveness.check_program sc_tr liveness_info."
         return template.format(self.sc_main_filename, datetime.now(), self.translate_smart_contract(),
-                               self.translate_liveness_info(), checker_def)
+                               self.translate_liveness_info())
 
-    def translate_liveness_coq_file_out(self, path, checker:str="optimal"):
+    def translate_liveness_coq_file_out(self, path):
         with open(path, 'w', encoding='utf8') as f:
-            f.write(self.translate_liveness_coq_file(checker))
+            f.write(self.translate_liveness_coq_file())
 
     def get_size(self):
         """ Computes the number of blocks and the number of instructions in a smart contract """
@@ -538,27 +533,9 @@ End TestTranslation."""
 
 
 if __name__ == '__main__':
-    """
-    sc = JSON_Smart_Contract('constant_variables_standard_input.json_cfg.json')
-    print(sc.sc_main_filename)
-    pprint.pp(sc.flat_d)
-    print('\n\n')
-    print(sc.translate_smart_contract())
-    pprint.pp(sc.extract_liveness_info())
-    print(sc.translate_liveness_info())
-    
-    # sc = JSON_Smart_Contract('constant_variables_standard_input.json_cfg.json')
-    # sc = JSON_Smart_Contract('function_modifier_standard_input.json_cfg.json')
-    sc = JSON_Smart_Contract('arrays_in_constructors_standard_input.json_cfg.json')
-    # print(sc.translate_liveness_coq_file())
-    sc.translate_liveness_coq_file_out('../test_translation.v')    
-    """
-
     parser = argparse.ArgumentParser(description="Translate JSON->Coq")
     parser.add_argument("--input", "-i", required=True, help="JSON input file")
     parser.add_argument("--output", "-o", required=True, help="Coq output file")
-    parser.add_argument("--checker", "-c", choices=["subset", "optimal"],
-                        required=True, help="Liveness checker")
     parser.add_argument("--size", action="store_true", help="Compute size in number of blocks and number of instructions")
     args = parser.parse_args()
 
@@ -567,6 +544,6 @@ if __name__ == '__main__':
         sizes = sc.get_size()
         print(f"{sizes[0]} {sizes[1]}")
     else:
-        sc.translate_liveness_coq_file_out(args.output.strip(), args.checker.strip())
+        sc.translate_liveness_coq_file_out(args.output.strip())
 
 
