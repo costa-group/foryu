@@ -1,4 +1,4 @@
-Require Export FORYU.list_functions.
+(* Require Export FORYU.list_functions. *)
 Require Export FORYU.program.
 
 Module Locals(D: DIALECT).
