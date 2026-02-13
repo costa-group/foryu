@@ -3,12 +3,13 @@ default: all ;
 
 MAIN = main.ml
 EXE = checker
+PACKAGES = yojson
 
 
 all: executable 
 
 executable: checker $(MAIN)
-	ocamlopt -o $(EXE)  checker.cmx str.cmxa $(MAIN) 
+	ocamlfind ocamlopt -package $(PACKAGES) -linkpkg -o $(EXE) checker.cmx str.cmxa $(MAIN) 
 
 checker: checker.ml checker.mli
 	ocamlopt -c checker.mli -o checker.cmi
