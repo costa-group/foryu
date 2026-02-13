@@ -139,6 +139,7 @@ class JSON_Smart_Contract:
                 assert yul_cfg['type'] == 'Object'
                 flat_d.update(self.process_object(yul_cfg, [sc_filename, comp]))
 
+        pprint.pprint(flat_d)
         return sc_main_filename, flat_d
 
     def translate_block_id(self, block_id):
