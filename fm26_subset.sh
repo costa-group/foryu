@@ -10,7 +10,6 @@ output_file="output.txt"
 counter=0
 tr_status=0
 checker_status=0
-msg_subset=""
 msg_optimal=""
 nblocks=0
 ninstrs=0

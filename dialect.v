@@ -3,7 +3,7 @@ Require Import Coq.Bool.Bool.
 Require Import Coq.Lists.List.
 Require Import FORYU.misc.
 
-(* [Status] of the program execution. It is shared beween YUL states
+(* [Status] of the program execution. It is shared between YUL states
 and dialects states. *)
 Module Status.
   Inductive t : Type :=
@@ -16,14 +16,14 @@ End Status.
 
 Module Type DIALECT.
 
-  (* [value_t] is the type for vasic values manipulated by dialect,
+  (* [value_t] is the type for basic values manipulated by dialect,
   e.g., 256-bits in the EVM dialect *)
   Parameter value_t : Type.
 
   (* A default value to be used for initializing variables *)
   Parameter default_value: value_t.
 
-  (* [eqb v1 v2] is true iff [v1] and [v2] are euqal *)
+  (* [eqb v1 v2] is true iff [v1] and [v2] are equal *)
   Parameter eqb: value_t -> value_t -> bool.
 
   (* we require boolean equality to reflect equality. This should be
@@ -40,16 +40,23 @@ Module Type DIALECT.
   Parameter opcode_t: Type.
 
   (* [dialect_state] is data type for dialect states, e.g., in EVM it
-  encapsulate memeory, storage, etc *)
+  encapsulate memory, storage, etc *)
   Parameter dialect_state_t : Type.
 
-  (* A function to execute an opcode. It recieves a dialect state, an
+  (* A function to execute an opcode. It receives a dialect state, an
     opcode and a list of values, and returns a list ot output values,
-    a new dialect state and the staus of the execution. Should return
+    a new dialect state and the status of the execution. Should return
     an Error status if the number of arguments does not match. Adding
-    it as a propositiob in the smart contract's structure would
+    it as a proposition in the smart contract's structure would
     complicate things a bit. *)
   Parameter execute_opcode: dialect_state_t -> opcode_t -> list value_t -> (list value_t * dialect_state_t * Status.t).
+
+  (* [opcode_indep_state] specifies whether the execution of an opcode depends on the dialect state *)
+  Parameter opcode_indep_state : opcode_t -> bool. 
+  
+  (* If [opcode_indep_state op = true], then the execution of [op] should not depend on the dialect state. *)
+  Parameter opcode_indep_state_snd : forall (s1 s2: dialect_state_t) (op: opcode_t) (args: list value_t), 
+    opcode_indep_state op = true -> execute_opcode s1 op args = execute_opcode s2 op args.
 
   (* An empty dialect state, which is mainly used to testing *)
   Parameter empty_dialect_state : dialect_state_t.

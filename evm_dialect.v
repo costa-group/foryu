@@ -591,6 +591,17 @@ Module EVMDialect <: DIALECT.
   Definition empty_dialect_state: dialect_state_t :=
     EVMState.empty.
     
+  Definition opcode_indep_state (op: opcode_t) := false.
+
+  Lemma evm_opcode_indep_state_snd: forall (s1 s2: dialect_state_t) (op: opcode_t) (args: list value_t), 
+  opcode_indep_state op = true -> execute_opcode s1 op args = execute_opcode s2 op args. 
+  Proof.
+    intros.
+    unfold opcode_indep_state in H. 
+    discriminate H. 
+    Qed.
+  
+  Definition opcode_indep_state_snd := evm_opcode_indep_state_snd.
 
 End EVMDialect.
 
