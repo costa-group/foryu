@@ -7,14 +7,14 @@ let main () =
 let _ = main ();;
 *)
 
-open Yojson.Basic.Util
 open Yojson.Safe
 open Yojson.Safe.Util
 
 
 type assoc_t = (string * Yojson.Safe.t) list
 
-
+(* Generates a string representing a prefix of the object path:
+  ['source_import_subdir_sol', 'C', 'C_3'] => 'source_import_subdir_sol__C__C_3' *)
 let gen_name prefix fname_opt =
   let parts = match fname_opt with
     | Some f -> prefix @ [f]
@@ -24,23 +24,31 @@ let gen_name prefix fname_opt =
   |> String.map (fun c -> if c = '.' then '_' else c)
 
 
-let process_blocks (blocks: Yojson.Safe.t) (prefix: string list): Yojson.Safe.t =
-  `Assoc []  
+(* Receives a list of blocks of an entry function and generates the function definition *)
+let process_blocks (blocks: Yojson.Safe.t) (prefix: string list): assoc_t =
+  let fname = gen_name prefix (Some "entry") in
+  let fcontents = `Assoc [("arguments", `Assoc []); 
+                          ("blocks", blocks);
+                          ("entry", List.hd (to_list blocks) |> member "id");
+                          ("numReturns", `Int 0)] in
+  [(fname, fcontents)]
+  
 
+(* FIXME: rename function names *)
 let process_functions (funs: Yojson.Safe.t) (prefix: string list): assoc_t =
-  []
+  funs |> to_assoc 
 
 let rec read_object (obj_json: Yojson.Safe.t) (prefix: string list) : Yojson.Safe.t =
   let subobjs = match obj_json |> member "subObjects" with
     | `Null -> []
     | subs -> read_objects' (to_assoc subs) prefix
   in let blocks = match obj_json |> member "blocks" with
-    | `Null -> `Assoc []
+    | `Null -> []
     | bs -> process_blocks bs prefix
   in let funcs = match obj_json |> member "functions" with
     | `Null -> []
     | fs -> process_functions fs prefix
-  in `Assoc []
+  in `Assoc (blocks @ funcs @ subobjs)
   
 and
 read_objects' (objects: assoc_t) (prefix: string list) : assoc_t =
@@ -52,7 +60,7 @@ read_objects' (objects: assoc_t) (prefix: string list) : assoc_t =
         rest' 
       else
         let obj' = read_object obj_json (prefix @ [obj_name]) in
-        (obj_name, obj')::rest'
+        (obj' |> to_assoc) @ rest'
 
 let read_objects (json: Yojson.Safe.t) (prefix: string list) : Yojson.Safe.t =
   `Assoc (read_objects' (to_assoc json) prefix)
@@ -69,7 +77,7 @@ let rec read_contract' (l: assoc_t) (filename: string) : assoc_t =
   | [] -> []
   | (comp_name, comp)::r -> let comp' = read_comp comp [filename; comp_name] in
                             let r' = read_contract' r filename in
-                            (comp_name, comp') :: r'
+                            (comp' |> to_assoc) @ r'
 
 let rec read_contract (json: Yojson.Safe.t) (filename: string) : Yojson.Safe.t =
   `Assoc (read_contract' (to_assoc json) filename)
@@ -80,7 +88,7 @@ let rec read_contracts' (l: assoc_t) : string * assoc_t =
   | [] -> ("", [])
   | (k,v)::r -> let _, r' = read_contracts' r in
                 let sc = read_contract v k in
-                (k, (k,sc)::r')
+                (k, (sc |> to_assoc) @ r')
 
 let rec read_contracts (json: Yojson.Safe.t) : string * Yojson.Safe.t = 
   let main_contract, contracts_l = read_contracts' (to_assoc json) in
@@ -103,7 +111,7 @@ let read_json path : (string * Yojson.Safe.t) =
 
 
 
-
+(*
 (* process_json : string -> (string option * (string * Yojson.Safe.t) list)
    Returns: (sc_main_filename_opt, flat_d) where flat_d is an assoc list
    mapping generated function-names to their JSON definitions (Yojson.t).
@@ -209,7 +217,7 @@ let () =
                         (Yojson.Safe.pretty_to_string fjson) ) flat_d
   | None -> Printf.printf "No main contract found.\n";
 *)  
-
+*)
 
 let input_file = ref ""
 (*let verbose = ref false
@@ -242,14 +250,6 @@ let () =
     exit 1
   );
 
-  let sc_main_opt, flat_d = process_json !input_file in
-  match sc_main_opt with
-  | Some sc_main -> let json_object = `Assoc flat_d in
-                    let json_string = Yojson.Safe.pretty_to_string json_object in
-                    print_endline json_string
-
-                    (*List.iter (fun (fname, fjson) ->
-                      Printf.printf "Function: %s\nDefinition: %s\n\n" fname 
-                        (Yojson.Safe.pretty_to_string fjson) ) flat_d *)
-
-  | None -> Printf.printf "No main contract found.\n";
+  let sc_main_opt, flat_d = read_json !input_file in
+  let json_string = Yojson.Safe.pretty_to_string flat_d in
+  print_endline json_string
