@@ -137,11 +137,9 @@ let gen_name prefix fname_opt =
     | None -> prefix
   in
   String.concat "__" parts
-  |> String.map (fun c -> if c = '.' then '_' else c)
+  |> String.map (fun c -> if c = '.' then '_' else c
 
-
-
-(*******************************************)
+)(*******************************************)
 
 
 
@@ -336,6 +334,7 @@ let anon_fun arg =
 
 let usage_msg = "Usage: ./checker -i filename.json"
 
+(*
 let () =
   (* 3. Parse the arguments *)
   Arg.parse speclist anon_fun usage_msg;
@@ -354,3 +353,118 @@ let () =
   let json_flatd' = Yojson.Safe.pretty_to_string flat_d' in
   print_endline json_flatd'
   (*Printf.printf "[%s]\n" (String.concat "; " (StringSet.elements !fun_names))*)
+
+*)
+
+
+let nat_to_int (n : Checker.nat) : int =
+  let rec aux n acc =
+    match n with
+    | Checker.O -> acc
+    | Checker.S n' -> aux n' (acc + 1)
+  in
+  aux n 0
+
+let int_to_nat (n : int) : Checker.nat =
+  let rec aux n acc =
+    if n <= 0 then acc
+    else aux (n - 1) (Checker.S acc)
+  in
+  aux n Checker.O  
+
+let string_of_checker_nat (n : Checker.nat) : string =
+  string_of_int (nat_to_int n)
+
+(* build positive from an OCaml int (>0) *)
+let rec int_to_pos (n: int) : Checker.positive =
+  if n = 1 then Checker.XH
+  else if n mod 2 = 0 then Checker.XO (int_to_pos (n / 2))
+  else Checker.XI (int_to_pos (n / 2))
+
+let int_to_n (i: int) : Checker.n =
+  if i <= 0 then Checker.N0 else Checker.Npos (int_to_pos i)
+
+let rec pos_to_int (p: Checker.positive) : int =
+  match p with
+  | Checker.XH -> 1
+  | Checker.XO p' -> 2 * (pos_to_int p')
+  | Checker.XI p' -> 2 * (pos_to_int p') + 1
+
+let n_to_string (n: Checker.n) : string =
+  match n with
+  | Checker.N0 -> "0"
+  | Checker.Npos p -> string_of_int (pos_to_int p)
+
+let z_to_string (z: Checker.z) : string =
+  match z with
+  | Checker.Z0 -> "0"
+  | Checker.Zpos p -> string_of_int (pos_to_int p)
+  | Checker.Zneg p -> "-" ^ string_of_int (pos_to_int p)
+
+let simple_expr_to_string (s: Checker.Checker.ExitInfo.SimpleExprD.t) : string =
+  match s with
+  | Inl v -> "VarID(" ^ (n_to_string v) ^ ")"
+  | Inr z -> "Value(" ^ (z_to_string z) ^ ")"  
+
+(* Convert between OCaml `string` and `char list` (extracted `FuncName.t`) *)
+let string_to_char_list (s : string) : char list =
+  let rec aux i acc =
+    if i < 0 then acc else aux (i - 1) (s.[i] :: acc)
+  in aux (String.length s - 1) []
+
+let char_list_to_string (cl : char list) : string =
+  let buf = Buffer.create (List.length cl) in
+  List.iter (Buffer.add_char buf) cl;
+  Buffer.contents buf
+
+let funcname_of_string = string_to_char_list
+let string_of_funcname = char_list_to_string
+
+(*let main () =
+  let res = Checker.Checker.myfun (Terminate) in
+  match res with
+  | Terminate -> Printf.printf "Result: Terminate\n"
+  | _ -> Printf.printf "Result: Otro\n"
+*)
+
+
+let bid : Checker.BlockID.t = int_to_n 3
+let var42 : Checker.VarID.t = int_to_n 42  
+let val7 : Checker.z = Checker.Zpos (int_to_pos 7)
+let sexpr1 : Checker.Checker.ExitInfo.SimpleExprD.t = Inr val7
+let sexpr2 : Checker.Checker.ExitInfo.SimpleExprD.t = Inl var42
+let fname : Checker.FuncName.t = string_to_char_list "my_function"
+let exit1 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.ConditionalJump (var42, bid, bid)
+let exit2 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.Jump bid
+let exit3 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.ReturnBlock [sexpr1; sexpr2]
+let exit4 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.Terminate
+
+
+let main () =
+  let res = Checker.Checker.myfun exit4 in 
+  match res with
+  | Checker.Checker.ExitInfo.ConditionalJump (v, b1, b2)
+      -> Printf.printf "Result: ConditionalJump with VarID=%s, BlockID1=%s, BlockID2=%s\n" (n_to_string v) (n_to_string b1) (n_to_string b2)
+  | Checker.Checker.ExitInfo.Jump b
+      -> Printf.printf "Result: Jump to BlockID=%s\n" (n_to_string b)
+  | Checker.Checker.ExitInfo.ReturnBlock exprs
+      -> let exprs_str = String.concat "; " (List.map simple_expr_to_string exprs) in
+         Printf.printf "Result: ReturnBlock with expressions [%s]\n" exprs_str
+  | Checker.Checker.ExitInfo.Terminate
+      -> Printf.printf "Result: Terminate\n"
+  
+let _ = main ();;
+
+(*
+SUMMARY OF OCAML TYPES:
+* Checker.BlockID.t = Checker.n
+* Checker.VarID.t = Checker.n
+* Checker.EVMDialect.value_t = Checker.z
+* Checker.Checker.ExitInfo.SimpleExprD.t = Inl Checker.n | Inr Checker.z
+* Checker.FuncName.t = char list
+* Checker.Checker.ExitInfo.t = 
+    | Checker.Checker.ExitInfo.ConditionalJump of VarID.t * BlockID.t * BlockID.t
+    | Checker.Checker.ExitInfo.Jump of BlockID.t
+    | Checker.Checker.ExitInfo.ReturnBlock of Checker.Checker.ExitInfo.SimpleExprD.t list
+    | Checker.Checker.ExitInfo.Terminate
+*)
