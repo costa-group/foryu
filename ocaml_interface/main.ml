@@ -9,9 +9,125 @@ let _ = main ();;
 
 open Yojson.Safe
 open Yojson.Safe.Util
-
+module StringSet = Set.Make(String)
 
 type assoc_t = (string * Yojson.Safe.t) list
+
+(* Replaces the value associated to 'key' in the JSON j *)
+let replace_assoc (key:string) (v:Yojson.Safe.t) (j:Yojson.Safe.t) : Yojson.Safe.t =
+  match j with
+  | `Assoc al ->
+      let al' = (key, v) :: List.filter (fun (k,_) -> k <> key) al in
+      `Assoc al'
+  | _ -> j
+
+
+let fun_names : StringSet.t ref = ref StringSet.empty
+
+let evm_opcode_list = [
+  ("stop","EVM_opcode.STOP");
+  ("add","EVM_opcode.ADD");
+  ("sub","EVM_opcode.SUB");
+  ("mul","EVM_opcode.MUL");
+  ("div","EVM_opcode.DIV");
+  ("sdiv","EVM_opcode.SDIV");
+  ("mod","EVM_opcode.MOD");
+  ("smod","EVM_opcode.SMOD");
+  ("exp","EVM_opcode.EXP");
+  ("not","EVM_opcode.NOT");
+  ("lt","EVM_opcode.LT");
+  ("gt","EVM_opcode.GT");
+  ("slt","EVM_opcode.SLT");
+  ("sgt","EVM_opcode.SGT");
+  ("eq","EVM_opcode.EQ");
+  ("iszero","EVM_opcode.ISZERO");
+  ("and","EVM_opcode.AND");
+  ("or","EVM_opcode.OR");
+  ("xor","EVM_opcode.XOR");
+  ("byte","EVM_opcode.BYTE");
+  ("shl","EVM_opcode.SHL");
+  ("shr","EVM_opcode.SHR");
+  ("sar","EVM_opcode.SAR");
+  ("addmod","EVM_opcode.ADDMOD");
+  ("mulmod","EVM_opcode.MULMOD");
+  ("signextend","EVM_opcode.SIGNEXTEND");
+  ("keccak256","EVM_opcode.KECCAK256");
+  ("pop","EVM_opcode.POP");
+  ("mload","EVM_opcode.MLOAD");
+  ("mstore","EVM_opcode.MSTORE");
+  ("mstore8","EVM_opcode.MSTORE8");
+  ("sload","EVM_opcode.SLOAD");
+  ("sstore","EVM_opcode.SSTORE");
+  ("tload","EVM_opcode.TLOAD");
+  ("tstore","EVM_opcode.TSTORE");
+  ("msize","EVM_opcode.MSIZE");
+  ("gas","EVM_opcode.GAS");
+  ("address","EVM_opcode.ADDRESS");
+  ("balance","EVM_opcode.BALANCE");
+  ("selfbalance","EVM_opcode.SELFBALANCE");
+  ("caller","EVM_opcode.CALLER");
+  ("callvalue","EVM_opcode.CALLVALUE");
+  ("calldataload","EVM_opcode.CALLDATALOAD");
+  ("calldatasize","EVM_opcode.CALLDATASIZE");
+  ("calldatacopy","EVM_opcode.CALLDATACOPY");
+  ("codesize","EVM_opcode.CODESIZE");
+  ("codecopy","EVM_opcode.CODECOPY");
+  ("extcodesize","EVM_opcode.EXTCODESIZE");
+  ("extcodecopy","EVM_opcode.EXTCODECOPY");
+  ("returndatasize","EVM_opcode.RETURNDATASIZE");
+  ("returndatacopy","EVM_opcode.RETURNDATACOPY");
+  ("mcopy","EVM_opcode.MCOPY");
+  ("extcodehash","EVM_opcode.EXTCODEHASH");
+  ("create","EVM_opcode.CREATE");
+  ("create2","EVM_opcode.CREATE2");
+  ("call","EVM_opcode.CALL");
+  ("callcode","EVM_opcode.CALLCODE");
+  ("delegatecall","EVM_opcode.DELEGATECALL");
+  ("staticcall","EVM_opcode.STATICCALL");
+  ("return","EVM_opcode.RETURN");
+  ("revert","EVM_opcode.REVERT");
+  ("selfdestruct","EVM_opcode.SELFDESTRUCT");
+  ("invalid","EVM_opcode.INVALID");
+  ("log0","EVM_opcode.LOG0");
+  ("log1","EVM_opcode.LOG1");
+  ("log2","EVM_opcode.LOG2");
+  ("log3","EVM_opcode.LOG3");
+  ("log4","EVM_opcode.LOG4");
+  ("chainid","EVM_opcode.CHAINID");
+  ("basefee","EVM_opcode.BASEFEE");
+  ("blobbasefee","EVM_opcode.BLOBBASEFEE");
+  ("origin","EVM_opcode.ORIGIN");
+  ("gasprice","EVM_opcode.GASPRICE");
+  ("blockhash","EVM_opcode.BLOCKHASH");
+  ("blobhash","EVM_opcode.BLOBHASH");
+  ("coinbase","EVM_opcode.COINBASE");
+  ("timestamp","EVM_opcode.TIMESTAMP");
+  ("number","EVM_opcode.NUMBER");
+  ("difficulty","EVM_opcode.DIFFICULTY");
+  ("prevrandao","EVM_opcode.PREVRANDAO");
+  ("gaslimit","EVM_opcode.GASLIMIT");
+  ("memoryguard","EVM_opcode.MEMORYGUARD");
+  ("datasize","EVM_opcode.DATASIZE");
+  ("dataoffset","EVM_opcode.DATAOFFSET");
+  ("datacopy","EVM_opcode.DATACOPY");
+  (* FIXME TODO *)
+  ("LiteralAssignment", "EVMInstr.ASSIGN");
+  ("linkersymbol", "EVMInstr.LinkerSymbol");
+  ("setimmutable", "EVM_opcode.setimmutable");
+  ("loadimmutable", "EVM_opcode.loadimmutable");
+]
+
+let evm_opcode_tbl : (string, string) Hashtbl.t =
+  let tbl = Hashtbl.create (List.length evm_opcode_list) in
+  List.iter (fun (k,v) -> Hashtbl.add tbl k v) evm_opcode_list;
+  tbl
+
+let evm_opcode_get (k:string) : string option =
+  (* requires OCaml with Hashtbl.find_opt, otherwise use try/with Not_found *)
+  Hashtbl.find_opt evm_opcode_tbl k
+
+
+
 
 (* Generates a string representing a prefix of the object path:
   ['source_import_subdir_sol', 'C', 'C_3'] => 'source_import_subdir_sol__C__C_3' *)
@@ -24,19 +140,57 @@ let gen_name prefix fname_opt =
   |> String.map (fun c -> if c = '.' then '_' else c)
 
 
+
+(*******************************************)
+
+
+
+(* Extracts the PhiFunctions from the "instructions" entry and creates a different "__phi" entry for them 
+   in each block *)
+let split_phi_instr_block (block: Yojson.Safe.t): Yojson.Safe.t =
+  let instructions = block |> member "instructions" |> to_list in
+  let (phi_instrs, other_instrs) = List.partition (fun instr -> match instr |> member "op" with
+                                                              | `String "PhiFunction" -> true
+                                                              | _ -> false) instructions in
+  let block' = replace_assoc "instructions" (`List other_instrs) block in
+  replace_assoc "__phi" (`List phi_instrs) block'
+
+
+let split_phi_instr_blocks (blocks: Yojson.Safe.t): Yojson.Safe.t =
+  `List (List.map split_phi_instr_block (to_list blocks))
+
+
+
 (* Receives a list of blocks of an entry function and generates the function definition *)
-let process_blocks (blocks: Yojson.Safe.t) (prefix: string list): assoc_t =
+let process_blocks_entry (blocks: Yojson.Safe.t) (prefix: string list): assoc_t =
   let fname = gen_name prefix (Some "entry") in
-  let fcontents = `Assoc [("arguments", `Assoc []); 
-                          ("blocks", blocks);
+  let fcontents = `Assoc [("arguments", `List []); 
+                          ("blocks", split_phi_instr_blocks blocks); (* We do not rename function calls yet *)
                           ("entry", List.hd (to_list blocks) |> member "id");
-                          ("numReturns", `Int 0)] in
+                          ("numReturns", `Int 0);
+                          ("__prefix", `List (List.map (fun s -> `String s) prefix))] in
   [(fname, fcontents)]
   
 
-(* FIXME: rename function names *)
+let process_function (f: string * Yojson.Safe.t) (prefix: string list): string * Yojson.Safe.t =
+  let (fname, fjson) = f in
+  let newname = gen_name prefix (Some fname) in
+  match StringSet.mem newname !fun_names with
+  | true -> failwith ("Duplicate function name: " ^ newname)
+  | false ->  fun_names := StringSet.add newname !fun_names;
+              let blocks = match fjson |> member "blocks" with
+                | `Null -> `List []
+                | bs -> split_phi_instr_blocks bs in
+              let fjson' = replace_assoc "blocks" blocks fjson in
+              let fjson'' = replace_assoc "__prefix" (`List (List.map (fun s -> `String s) prefix)) fjson' in
+              (*let fbody = to_assoc fjson'in
+              let fbody' = fbody @ [("__prefix", `List (List.map (fun s -> `String s) prefix))] in*)
+              (newname, fjson'')
+
+
 let process_functions (funs: Yojson.Safe.t) (prefix: string list): assoc_t =
-  funs |> to_assoc 
+  List.map (fun f -> process_function f prefix) (to_assoc funs) 
+
 
 let rec read_object (obj_json: Yojson.Safe.t) (prefix: string list) : Yojson.Safe.t =
   let subobjs = match obj_json |> member "subObjects" with
@@ -44,13 +198,14 @@ let rec read_object (obj_json: Yojson.Safe.t) (prefix: string list) : Yojson.Saf
     | subs -> read_objects' (to_assoc subs) prefix
   in let blocks = match obj_json |> member "blocks" with
     | `Null -> []
-    | bs -> process_blocks bs prefix
+    | bs -> process_blocks_entry bs prefix
   in let funcs = match obj_json |> member "functions" with
     | `Null -> []
     | fs -> process_functions fs prefix
   in `Assoc (blocks @ funcs @ subobjs)
   
 and
+
 read_objects' (objects: assoc_t) (prefix: string list) : assoc_t =
   match objects with
   | [] -> []
@@ -61,6 +216,7 @@ read_objects' (objects: assoc_t) (prefix: string list) : assoc_t =
       else
         let obj' = read_object obj_json (prefix @ [obj_name]) in
         (obj' |> to_assoc) @ rest'
+
 
 let read_objects (json: Yojson.Safe.t) (prefix: string list) : Yojson.Safe.t =
   `Assoc (read_objects' (to_assoc json) prefix)
@@ -79,6 +235,7 @@ let rec read_contract' (l: assoc_t) (filename: string) : assoc_t =
                             let r' = read_contract' r filename in
                             (comp' |> to_assoc) @ r'
 
+
 let rec read_contract (json: Yojson.Safe.t) (filename: string) : Yojson.Safe.t =
   `Assoc (read_contract' (to_assoc json) filename)
 
@@ -90,11 +247,17 @@ let rec read_contracts' (l: assoc_t) : string * assoc_t =
                 let sc = read_contract v k in
                 (k, (sc |> to_assoc) @ r')
 
+
 let rec read_contracts (json: Yojson.Safe.t) : string * Yojson.Safe.t = 
   let main_contract, contracts_l = read_contracts' (to_assoc json) in
   (main_contract, `Assoc contracts_l)
 
-let read_json path : (string * Yojson.Safe.t) =
+
+(* Return a flat version of the solc JSON, with functions and entries in the same level. 
+   1) Function names have been expanded with their prefix
+   2) Every function contains an entry __prefix with its prefix as a list 
+   3) PhiFunctions have been removed from "instructions" and appear in an entry __phi in every block *)
+let read_json_to_flat path : (string * Yojson.Safe.t) =
   let data = from_file path in
   match data |> member "contracts" with
   | `Null -> ("", `Assoc [])
@@ -102,123 +265,57 @@ let read_json path : (string * Yojson.Safe.t) =
 
 
 
+(********************************************)
 
 
 
+let rename_function_calls_instruction (instr: Yojson.Safe.t) (prefix: string list): Yojson.Safe.t =
+  let op = instr |> member "op" |> to_string in
+  let op' = match evm_opcode_get op with
+  | Some _ -> op
+  | None -> let newname = gen_name prefix (Some op) in 
+            match StringSet.mem newname !fun_names with
+            | false -> Printf.printf "[%s]\n" (String.concat "; " (StringSet.elements !fun_names));
+                       let instr_str = Yojson.Safe.pretty_to_string instr in 
+                       (*Printf.printf "Call to function defined outside the object. Op='%s'\n" op;
+                       Printf.printf "Prefix: %s\n" (prefix |> String.concat "__");*)
+                       failwith ("Call to function defined outside the object. \n Instr=" ^ instr_str ^ " Op='" ^ op  ^ "' with prefix " ^ (prefix |> String.concat "__"))
+                       (*op*)
+            | true -> newname in
+  replace_assoc "op" (`String op') instr
 
 
+let rename_function_calls_instructions (instructions: Yojson.Safe.t list) (prefix: string list): Yojson.Safe.t list =
+  List.map (fun instr -> rename_function_calls_instruction instr prefix) instructions
 
 
+let rename_function_calls_block (block: Yojson.Safe.t) (prefix: string list): Yojson.Safe.t =
+  let instructions = block |> member "instructions" |> to_list in
+  let instructions' = rename_function_calls_instructions instructions prefix in 
+  replace_assoc "instructions" (`List instructions') block
 
 
-(*
-(* process_json : string -> (string option * (string * Yojson.Safe.t) list)
-   Returns: (sc_main_filename_opt, flat_d) where flat_d is an assoc list
-   mapping generated function-names to their JSON definitions (Yojson.t).
-*)
-let process_json path : (string option * (string * Yojson.Safe.t) list) =
-  let data = from_file path in
-  let scs = data |> member "contracts" |> to_assoc in
-  let flat = ref [] in
-  let sc_main = ref None in
+let rename_function_calls_blocks (blocks: Yojson.Safe.t) (prefix: string list): Yojson.Safe.t =
+  `List (List.map (fun b -> rename_function_calls_block b prefix) (to_list blocks))
 
-  List.iter (fun (sc_filename, sc_json) ->
-    if !sc_main = None then sc_main := Some sc_filename;
-    let comps = sc_json |> to_assoc in
-    List.iter (fun (comp, comp_json) ->
-      let yul = comp_json |> member "yulCFGJson" in
-      match yul with
-      | `Null -> ()
-      | _ ->
-        (match yul |> member "type" with
-         | `String "Object" ->
-           let rec process_object d prefix =
-             let pairs = d |> to_assoc in
-             List.fold_left (fun acc (object_name, obj_json) ->
-               if object_name = "type" then acc else
 
-               (* recurse into subObjects if present *)
-               let acc =
-                 match obj_json |> member "subObjects" with
-                 | `Null -> acc
-                 | sub -> process_object sub (prefix @ [object_name]) @ acc
-               in
+let rename_fun_call (fname: string) (fbody: Yojson.Safe.t): string * Yojson.Safe.t =
+  let blocks = match fbody |> member "blocks" with
+    | `Null -> `List []
+    | bs -> rename_function_calls_blocks bs (to_list (member "__prefix" fbody) |> List.map to_string) in
+  let fbody' = replace_assoc "blocks" blocks fbody in
+  (fname, fbody')
 
-               (* handle functions: rename keys with prefix *)
-               let acc =
-                 match obj_json |> member "functions" with
-                 | `Null -> acc
-                 | funcs ->
-                   let funcs_list = funcs |> to_assoc in
-                   let renamed = List.map (fun (fname, fjson) ->
-                     let newname = gen_name (prefix @ [object_name]) (Some fname) in
-                     (newname, fjson)
-                   ) funcs_list in
-                   renamed @ acc
-               in
 
-               (* if blocks present, build an 'entry' synthetic function similar to Python version *)
-               match obj_json |> member "blocks" with
-               | `Null -> acc
-               | blocks ->
-                 let blocks_list = blocks |> to_list in
-                 if blocks_list = [] then acc
-                 else
-                   let entry_name = gen_name (prefix @ [object_name]) (Some "entry") in
-                   let entry_block_id = (List.hd blocks_list) |> member "id" in
-                   let func_obj =
-                     `Assoc [
-                       ("arguments", `List []);
-                       ("blocks", blocks);
-                       ("entry", entry_block_id);
-                       ("numReturns", `Int 0)
-                     ]
-                   in
-                   (entry_name, func_obj) :: acc
-             ) [] pairs
-           in
-           let processed = process_object yul [sc_filename; comp] in
-           flat := processed @ !flat
-         | _ -> ())
-    ) comps
-  ) scs;
+(* Rename and check function calls in a flat JSON *)
+let rename_fun_calls (flatjson: Yojson.Safe.t): Yojson.Safe.t =
+  let funs' = List.map (fun (fname, fbody) -> (rename_fun_call fname fbody)) (to_assoc flatjson) in
+  `Assoc funs'
 
-  (!sc_main, !flat)
 
-(*
-let () =
-  (* 1. Parse the raw string into a Yojson structure *)
-  let json = Yojson.Basic.from_string json_content in
+(********************************************************)
 
-  (* 2. Access top-level fields *)
-  let dialect = json |> member "dialect" |> to_string in
-  let version = json |> member "version" |> to_int in
-
-  (* 3. Access a subdocument (nested object) *)
-  let settings = json |> member "settings" in
-  let is_optimized = settings |> member "optimize" |> to_bool in
-
-  (* 4. Access a sub-list *)
-  let passes = settings |> member "passes" |> to_list |> filter_string in
-
-  (* Print results *)
-  Printf.printf "Dialect: %s (v%d)\n" dialect version;
-  Printf.printf "Optimization enabled: %b\n" is_optimized;
-  Printf.printf "Active passes: %s\n" (String.concat ", " passes)
-*)
-
-(*
-let () =
-  let sc_main_opt, flat_d = process_json "/home/kike/Personal/svn/foryu/benchmark/fm26/constructor_payable_constructor__payable_constructor_standard_input_cfg.json" in
-  match sc_main_opt with
-  | Some sc_main -> let _ = Printf.printf "Main contract: %s\n" sc_main in
-                    List.iter (fun (fname, fjson) ->
-                      Printf.printf "Function: %s\nDefinition: %s\n\n" fname 
-                        (Yojson.Safe.pretty_to_string fjson) ) flat_d
-  | None -> Printf.printf "No main contract found.\n";
-*)  
-*)
-
+(* Main code *)
 let input_file = ref ""
 (*let verbose = ref false
 let optimize_level = ref 0*)
@@ -250,6 +347,10 @@ let () =
     exit 1
   );
 
-  let sc_main_opt, flat_d = read_json !input_file in
-  let json_string = Yojson.Safe.pretty_to_string flat_d in
-  print_endline json_string
+  let sc_main_opt, flat_d = read_json_to_flat !input_file in
+  (*let json_flatd = Yojson.Safe.pretty_to_string flat_d in
+  print_endline json_flatd;*)
+  let flat_d' = rename_fun_calls flat_d in
+  let json_flatd' = Yojson.Safe.pretty_to_string flat_d' in
+  print_endline json_flatd'
+  (*Printf.printf "[%s]\n" (String.concat "; " (StringSet.elements !fun_names))*)
