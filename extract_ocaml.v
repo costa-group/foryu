@@ -8,7 +8,7 @@
    Also, if we extract it as an ocaml int, we would lose consistency
    with w.r.t. to the proven theorems.
    
-   Ways of addressing this problem are avaiable here:
+   Ways of addressing this problem are available here:
    https://softwarefoundations.cis.upenn.edu/vfa-current/Extract.html
    
    Currently, no fancy nat extraction might be enough.
@@ -23,10 +23,13 @@
 From Coq Require Import Strings.String.
 Require Import List.
 Import ListNotations.
-Require Import FORYU.test_translation.
-Import TestTranslation.
+(*Require Import FORYU.test_translation.
+Import TestTranslation.*)
+Require Import FORYU.checker.
+Import Checker.
 From Coq Require Import extraction.ExtrOcamlString.
 Import ExtrOcamlString.
+
 
 (** Type Extractions **)
 Extract Inductive bool => "bool" [ "true" "false" ].
@@ -38,5 +41,6 @@ Extract Inductive prod => "( * )" [ "( , )" ].
 (*  Examples from example.v are extracted and directly tested.
     After running the next line, use "make run" in order to compile and
     run the test_examples.ml file. *)
-Extraction TestTranslation.
-Extraction "ocaml_interface/checker.ml" TestTranslation. 
+Extraction Checker.
+Set Extraction Output Directory "ocaml_interface".
+Extraction "checker.ml" Checker. 

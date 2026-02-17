@@ -1,4 +1,4 @@
--R . FORYU
+-Q . FORYU
 
 misc.v
 
@@ -13,6 +13,7 @@ liveness.v
 liveness_snd.v
 
 #tests.v
-test_translation.v
+#test_translation.v
+checker.v
 
 extract_ocaml.v
