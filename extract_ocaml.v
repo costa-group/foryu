@@ -41,6 +41,6 @@ Extract Inductive prod => "( * )" [ "( , )" ].
 (*  Examples from example.v are extracted and directly tested.
     After running the next line, use "make run" in order to compile and
     run the test_examples.ml file. *)
-Extraction Checker.
+(*Extraction Checker.*)
 Set Extraction Output Directory "ocaml_interface".
 Extraction "checker.ml" Checker. 
