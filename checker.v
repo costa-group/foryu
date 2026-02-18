@@ -19,7 +19,6 @@ Module Checker.
     Module EVMPhiInfo := EVMBlock.PhiInfoD.
     Module ExitInfo := EVMBlock.ExitInfoD.
 
-    (*Definition myfun (s: ExitInfo.t) := s.*)
-    Definition myfun (s: ExitInfo.t) := s.
+    Definition myfun (s: EVMPhiInfo.t) := s.
 
 End Checker.

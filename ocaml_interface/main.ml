@@ -429,7 +429,9 @@ let string_of_funcname = char_list_to_string
 
 
 let bid : Checker.BlockID.t = int_to_n 3
+let bid2 : Checker.BlockID.t = int_to_n 0
 let var42 : Checker.VarID.t = int_to_n 42  
+let var0 : Checker.VarID.t = int_to_n 0 
 let val7 : Checker.z = Checker.Zpos (int_to_pos 7)
 let sexpr1 : Checker.Checker.ExitInfo.SimpleExprD.t = Inr val7
 let sexpr2 : Checker.Checker.ExitInfo.SimpleExprD.t = Inl var42
@@ -438,20 +440,25 @@ let exit1 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.ConditionalJum
 let exit2 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.Jump bid
 let exit3 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.ReturnBlock [sexpr1; sexpr2]
 let exit4 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.Terminate
+let varl : Checker.VarID.t list = [var42; var0]
+let sexprl : Checker.Checker.ExitInfo.SimpleExprD.t list = [sexpr1; sexpr2]
+let phi_info : Checker.Checker.EVMPhiInfo.t = 
+    fun b -> if b = bid then 
+                Checker.Checker.EVMPhiInfo.Coq_in_phi_info (varl, sexprl)
+             else
+                Checker.Checker.EVMPhiInfo.Coq_in_phi_info ([], [])
 
 
 let main () =
-  let res = Checker.Checker.myfun exit4 in 
-  match res with
-  | Checker.Checker.ExitInfo.ConditionalJump (v, b1, b2)
-      -> Printf.printf "Result: ConditionalJump with VarID=%s, BlockID1=%s, BlockID2=%s\n" (n_to_string v) (n_to_string b1) (n_to_string b2)
-  | Checker.Checker.ExitInfo.Jump b
-      -> Printf.printf "Result: Jump to BlockID=%s\n" (n_to_string b)
-  | Checker.Checker.ExitInfo.ReturnBlock exprs
-      -> let exprs_str = String.concat "; " (List.map simple_expr_to_string exprs) in
-         Printf.printf "Result: ReturnBlock with expressions [%s]\n" exprs_str
-  | Checker.Checker.ExitInfo.Terminate
-      -> Printf.printf "Result: Terminate\n"
+  let res = Checker.Checker.myfun phi_info in
+  let thebid = bid in
+  match (res thebid) with
+  | Checker.Checker.EVMPhiInfo.Coq_in_phi_info (vars, sexprs) -> 
+      Printf.printf "Phi info for block %s:\n" (n_to_string thebid);
+      Printf.printf "  Vars: [%s]\n" (String.concat "; " (List.map n_to_string vars));
+      Printf.printf "  SimpleExprs: [%s]\n" (String.concat "; " (List.map simple_expr_to_string sexprs))
+  | _ -> Printf.printf "Phi info for block %s: No info\n" (n_to_string thebid)
+  
   
 let _ = main ();;
 
@@ -467,4 +474,10 @@ SUMMARY OF OCAML TYPES:
     | Checker.Checker.ExitInfo.Jump of BlockID.t
     | Checker.Checker.ExitInfo.ReturnBlock of Checker.Checker.ExitInfo.SimpleExprD.t list
     | Checker.Checker.ExitInfo.Terminate
+* Checker.Checker.EVMPhiInfo.t =
+           Checker.BlockID.t -> Checker.Checker.EVMPhiInfo.coq_InBlockPhiInfo
+* Checker.Checker.EVMPhiInfo.coq_InBlockPhiInfo =
+    | Checker.Checker.EVMPhiInfo.Coq_in_phi_info (Checker.VarID.t list * Checker.Checker.ExitInfo.SimpleExprD.t list)
+  
+
 *)
