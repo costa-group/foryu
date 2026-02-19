@@ -19,105 +19,105 @@ let upsert_yojson (key:string) (v:Yojson.Safe.t) (j:Yojson.Safe.t) : Yojson.Safe
 
 let fun_names : StringSet.t ref = ref StringSet.empty
 
-let evm_opcode_list = [
-  ("stop","EVM_opcode.STOP");
-  ("add","EVM_opcode.ADD");
-  ("sub","EVM_opcode.SUB");
-  ("mul","EVM_opcode.MUL");
-  ("div","EVM_opcode.DIV");
-  ("sdiv","EVM_opcode.SDIV");
-  ("mod","EVM_opcode.MOD");
-  ("smod","EVM_opcode.SMOD");
-  ("exp","EVM_opcode.EXP");
-  ("not","EVM_opcode.NOT");
-  ("lt","EVM_opcode.LT");
-  ("gt","EVM_opcode.GT");
-  ("slt","EVM_opcode.SLT");
-  ("sgt","EVM_opcode.SGT");
-  ("eq","EVM_opcode.EQ");
-  ("iszero","EVM_opcode.ISZERO");
-  ("and","EVM_opcode.AND");
-  ("or","EVM_opcode.OR");
-  ("xor","EVM_opcode.XOR");
-  ("byte","EVM_opcode.BYTE");
-  ("shl","EVM_opcode.SHL");
-  ("shr","EVM_opcode.SHR");
-  ("sar","EVM_opcode.SAR");
-  ("addmod","EVM_opcode.ADDMOD");
-  ("mulmod","EVM_opcode.MULMOD");
-  ("signextend","EVM_opcode.SIGNEXTEND");
-  ("keccak256","EVM_opcode.KECCAK256");
-  ("pop","EVM_opcode.POP");
-  ("mload","EVM_opcode.MLOAD");
-  ("mstore","EVM_opcode.MSTORE");
-  ("mstore8","EVM_opcode.MSTORE8");
-  ("sload","EVM_opcode.SLOAD");
-  ("sstore","EVM_opcode.SSTORE");
-  ("tload","EVM_opcode.TLOAD");
-  ("tstore","EVM_opcode.TSTORE");
-  ("msize","EVM_opcode.MSIZE");
-  ("gas","EVM_opcode.GAS");
-  ("address","EVM_opcode.ADDRESS");
-  ("balance","EVM_opcode.BALANCE");
-  ("selfbalance","EVM_opcode.SELFBALANCE");
-  ("caller","EVM_opcode.CALLER");
-  ("callvalue","EVM_opcode.CALLVALUE");
-  ("calldataload","EVM_opcode.CALLDATALOAD");
-  ("calldatasize","EVM_opcode.CALLDATASIZE");
-  ("calldatacopy","EVM_opcode.CALLDATACOPY");
-  ("codesize","EVM_opcode.CODESIZE");
-  ("codecopy","EVM_opcode.CODECOPY");
-  ("extcodesize","EVM_opcode.EXTCODESIZE");
-  ("extcodecopy","EVM_opcode.EXTCODECOPY");
-  ("returndatasize","EVM_opcode.RETURNDATASIZE");
-  ("returndatacopy","EVM_opcode.RETURNDATACOPY");
-  ("mcopy","EVM_opcode.MCOPY");
-  ("extcodehash","EVM_opcode.EXTCODEHASH");
-  ("create","EVM_opcode.CREATE");
-  ("create2","EVM_opcode.CREATE2");
-  ("call","EVM_opcode.CALL");
-  ("callcode","EVM_opcode.CALLCODE");
-  ("delegatecall","EVM_opcode.DELEGATECALL");
-  ("staticcall","EVM_opcode.STATICCALL");
-  ("return","EVM_opcode.RETURN");
-  ("revert","EVM_opcode.REVERT");
-  ("selfdestruct","EVM_opcode.SELFDESTRUCT");
-  ("invalid","EVM_opcode.INVALID");
-  ("log0","EVM_opcode.LOG0");
-  ("log1","EVM_opcode.LOG1");
-  ("log2","EVM_opcode.LOG2");
-  ("log3","EVM_opcode.LOG3");
-  ("log4","EVM_opcode.LOG4");
-  ("chainid","EVM_opcode.CHAINID");
-  ("basefee","EVM_opcode.BASEFEE");
-  ("blobbasefee","EVM_opcode.BLOBBASEFEE");
-  ("origin","EVM_opcode.ORIGIN");
-  ("gasprice","EVM_opcode.GASPRICE");
-  ("blockhash","EVM_opcode.BLOCKHASH");
-  ("blobhash","EVM_opcode.BLOBHASH");
-  ("coinbase","EVM_opcode.COINBASE");
-  ("timestamp","EVM_opcode.TIMESTAMP");
-  ("number","EVM_opcode.NUMBER");
-  ("difficulty","EVM_opcode.DIFFICULTY");
-  ("prevrandao","EVM_opcode.PREVRANDAO");
-  ("gaslimit","EVM_opcode.GASLIMIT");
-  ("memoryguard","EVM_opcode.MEMORYGUARD");
-  ("datasize","EVM_opcode.DATASIZE");
-  ("dataoffset","EVM_opcode.DATAOFFSET");
-  ("datacopy","EVM_opcode.DATACOPY");
-  (* FIXME TODO *)
-  ("LiteralAssignment", "EVMInstr.ASSIGN");
-  ("linkersymbol", "EVMInstr.LinkerSymbol");
-  ("setimmutable", "EVM_opcode.setimmutable");
-  ("loadimmutable", "EVM_opcode.loadimmutable");
+let evm_opcode_list : (string * Checker.EVM_opcode.t) list = [
+  ("stop", Checker.EVM_opcode.STOP);
+  ("add", Checker.EVM_opcode.ADD);
+  ("sub", Checker.EVM_opcode.SUB);
+  ("mul", Checker.EVM_opcode.MUL);
+  ("div", Checker.EVM_opcode.DIV);
+  ("sdiv", Checker.EVM_opcode.SDIV);
+  ("mod", Checker.EVM_opcode.MOD);
+  ("smod", Checker.EVM_opcode.SMOD);
+  ("exp", Checker.EVM_opcode.EXP);
+  ("not", Checker.EVM_opcode.NOT);
+  ("lt", Checker.EVM_opcode.LT);
+  ("gt", Checker.EVM_opcode.GT);
+  ("slt", Checker.EVM_opcode.SLT);
+  ("sgt", Checker.EVM_opcode.SGT);
+  ("eq", Checker.EVM_opcode.EQ);
+  ("iszero", Checker.EVM_opcode.ISZERO);
+  ("and", Checker.EVM_opcode.AND);
+  ("or", Checker.EVM_opcode.OR);
+  ("xor", Checker.EVM_opcode.XOR);
+  ("byte", Checker.EVM_opcode.BYTE);
+  ("shl", Checker.EVM_opcode.SHL);
+  ("shr", Checker.EVM_opcode.SHR);
+  ("sar", Checker.EVM_opcode.SAR);
+  ("addmod", Checker.EVM_opcode.ADDMOD);
+  ("mulmod", Checker.EVM_opcode.MULMOD);
+  ("signextend", Checker.EVM_opcode.SIGNEXTEND);
+  ("keccak256", Checker.EVM_opcode.KECCAK256);
+  ("pop", Checker.EVM_opcode.POP);
+  ("mload", Checker.EVM_opcode.MLOAD);
+  ("mstore", Checker.EVM_opcode.MSTORE);
+  ("mstore8", Checker.EVM_opcode.MSTORE8);
+  ("sload", Checker.EVM_opcode.SLOAD);
+  ("sstore", Checker.EVM_opcode.SSTORE);
+  ("tload", Checker.EVM_opcode.TLOAD);
+  ("tstore", Checker.EVM_opcode.TSTORE);
+  ("msize", Checker.EVM_opcode.MSIZE);
+  ("gas", Checker.EVM_opcode.GAS);
+  ("address", Checker.EVM_opcode.ADDRESS);
+  ("balance", Checker.EVM_opcode.BALANCE);
+  ("selfbalance", Checker.EVM_opcode.SELFBALANCE);
+  ("caller", Checker.EVM_opcode.CALLER);
+  ("callvalue", Checker.EVM_opcode.CALLVALUE);
+  ("calldataload", Checker.EVM_opcode.CALLDATALOAD);
+  ("calldatasize", Checker.EVM_opcode.CALLDATASIZE);
+  ("calldatacopy", Checker.EVM_opcode.CALLDATACOPY);
+  ("codesize", Checker.EVM_opcode.CODESIZE);
+  ("codecopy", Checker.EVM_opcode.CODECOPY);
+  ("extcodesize", Checker.EVM_opcode.EXTCODESIZE);
+  ("extcodecopy", Checker.EVM_opcode.EXTCODECOPY);
+  ("returndatasize", Checker.EVM_opcode.RETURNDATASIZE);
+  ("returndatacopy", Checker.EVM_opcode.RETURNDATACOPY);
+  ("mcopy", Checker.EVM_opcode.MCOPY);
+  ("extcodehash", Checker.EVM_opcode.EXTCODEHASH);
+  ("create", Checker.EVM_opcode.CREATE);
+  ("create2", Checker.EVM_opcode.CREATE2);
+  ("call", Checker.EVM_opcode.CALL);
+  ("callcode", Checker.EVM_opcode.CALLCODE);
+  ("delegatecall", Checker.EVM_opcode.DELEGATECALL);
+  ("staticcall", Checker.EVM_opcode.STATICCALL);
+  ("return", Checker.EVM_opcode.RETURN);
+  ("revert", Checker.EVM_opcode.REVERT);
+  ("selfdestruct", Checker.EVM_opcode.SELFDESTRUCT);
+  ("invalid", Checker.EVM_opcode.INVALID);
+  ("log0", Checker.EVM_opcode.LOG0);
+  ("log1", Checker.EVM_opcode.LOG1);
+  ("log2", Checker.EVM_opcode.LOG2);
+  ("log3", Checker.EVM_opcode.LOG3);
+  ("log4", Checker.EVM_opcode.LOG4);
+  ("chainid", Checker.EVM_opcode.CHAINID);
+  ("basefee", Checker.EVM_opcode.BASEFEE);
+  ("blobbasefee", Checker.EVM_opcode.BLOBBASEFEE);
+  ("origin", Checker.EVM_opcode.ORIGIN);
+  ("gasprice", Checker.EVM_opcode.GASPRICE);
+  ("blockhash", Checker.EVM_opcode.BLOCKHASH);
+  ("blobhash", Checker.EVM_opcode.BLOBHASH);
+  ("coinbase", Checker.EVM_opcode.COINBASE);
+  ("timestamp", Checker.EVM_opcode.TIMESTAMP);
+  ("number", Checker.EVM_opcode.NUMBER);
+  ("difficulty", Checker.EVM_opcode.DIFFICULTY);
+  ("prevrandao", Checker.EVM_opcode.PREVRANDAO);
+  ("gaslimit", Checker.EVM_opcode.GASLIMIT);
+  ("memoryguard", Checker.EVM_opcode.MEMORYGUARD);
+  ("datasize", Checker.EVM_opcode.DATASIZE);
+  ("dataoffset", Checker.EVM_opcode.DATAOFFSET);
+  ("datacopy", Checker.EVM_opcode.DATACOPY);
+  (*("LiteralAssignment", EVMInstr.ASSIGN);*) (* Special case *)
+  ("linkersymbol", Checker.EVM_opcode.LINKERSYMBOL);
+  ("setimmutable",  Checker.EVM_opcode.SETIMMUTABLE);
+  ("loadimmutable",  Checker.EVM_opcode.LOADIMMUTABLE);
 ]
 
-let evm_opcode_tbl : (string, string) Hashtbl.t =
+let evm_opcode_tbl : (string, Checker.EVM_opcode.t) Hashtbl.t =
   let tbl = Hashtbl.create (List.length evm_opcode_list) in
   List.iter (fun (k,v) -> Hashtbl.add tbl k v) evm_opcode_list;
   tbl
 
-let evm_opcode_get (k:string) : string option =
+
+let evm_opcode_get (k:string) : Checker.EVM_opcode.t option =
   (* requires OCaml with Hashtbl.find_opt, otherwise use try/with Not_found *)
   Hashtbl.find_opt evm_opcode_tbl k
 
@@ -340,7 +340,9 @@ let rename_function_calls_instruction (instr: Yojson.Safe.t) (prefix: string lis
   let op = instr |> member "op" |> to_string in
   let op' = match evm_opcode_get op with
   | Some _ -> op
-  | None -> let newname = gen_name prefix op in 
+  | None -> if op = "LiteralAssignment" then op
+            else 
+            let newname = gen_name prefix op in 
             match StringSet.mem newname !fun_names with
             | false -> Printf.printf "[%s]\n" (String.concat "; " (StringSet.elements !fun_names));
                        let instr_str = Yojson.Safe.pretty_to_string instr in 
@@ -383,20 +385,210 @@ let rename_fun_calls (flatjson: Yojson.Safe.t): Yojson.Safe.t =
 
 (******* Takes a flat JSON and returns a program and liveness information *******) 
 
+let extract_integer (s: string) (prefix: string): int =
+  let prefix_len = String.length prefix in
+  if not (String.starts_with ~prefix s) then
+    failwith ("Invalid prefix: " ^ s ^ " does not start with " ^ prefix);
+  let number_str = String.sub s prefix_len (String.length s - prefix_len) in
+  int_of_string number_str
+
+(* Extract the number "X" in "BlockX" as a BlockID.t *)
+let extract_bid (s: string) : Checker.BlockID.t =
+  int_to_n (extract_integer s "Block")
+
+
+let extract_var (s: string) : Checker.VarID.t =
+  int_to_n (extract_integer s "v")
+
+
+let extract_val (s: string) : Checker.z =
+  let i = int_of_string s in
+  if i = 0 then Checker.Z0
+  else if i > 0 then Checker.Zpos (int_to_pos i)
+  else failwith ("Negative literals not supported: " ^ s)
+
+
+let extract_sexpr (s: string) : Checker.Checker.ExitInfo.SimpleExprD.t =
+  if String.starts_with ~prefix:"v" s then
+    Inl (extract_var s)
+  else
+    if String.starts_with ~prefix:"0x" s then
+      Inr (extract_val s)
+    else
+      failwith ("Invalid simple expression string: " ^ s)
+
+
+let extract_sexprs (sexprs_json: Yojson.Safe.t) : Checker.Checker.ExitInfo.SimpleExprD.t list =
+  List.map (fun s -> match s with
+                      | `String s' -> extract_sexpr s'
+                      | _ -> failwith "Invalid simple expression")
+           (to_list sexprs_json)
+
+
+let rec extract_phi_instrs (phi_instrs_json: Yojson.Safe.t list) : 
+    (Checker.Checker.ExitInfo.SimpleExprD.t list) list * Checker.VarID.t list = 
+  match phi_instrs_json with
+  | [] -> ([], [])
+  | instr :: r -> let sexprs, vars = extract_phi_instrs r in
+                  let v = match instr |> member "out" with
+                          | `List [s] -> extract_var (to_string s)
+                          | `List _ -> failwith "Invalid out var list in phi instruction (zero or 2+ vars)"
+                          | _ -> failwith "Invalid out var in phi instruction (not list)" in
+                  let s = extract_sexprs (member "in" instr)
+                  in (s :: sexprs, v :: vars)
+
+
+let pair_vars_with_columns
+    (rows: Checker.Checker.ExitInfo.SimpleExprD.t list list)
+    (vars: Checker.VarID.t list)
+  : (Checker.VarID.t list * Checker.Checker.ExitInfo.SimpleExprD.t list) list =
+  let row_count = List.length rows in
+  if row_count <> List.length vars then
+    failwith "pair_vars_with_columns: vars length must match number of rows";
+  let rec transpose acc rows =
+    match rows with
+    | [] -> List.rev acc
+    | _ ->
+        if List.exists (fun r -> r = []) rows then
+          if List.for_all (fun r -> r = []) rows then List.rev acc
+          else failwith "pair_vars_with_columns: rows have different lengths"
+        else
+          let heads = List.map List.hd rows in
+          let tails = List.map List.tl rows in
+          transpose (heads :: acc) tails
+  in
+  let cols = transpose [] rows in
+  List.map (fun col -> (vars, col)) cols       
+
+(*
+(* Debugging code *)
+let print_pair_vars_with_columns (pvwc: (Checker.VarID.t list * Checker.Checker.ExitInfo.SimpleExprD.t list) list) : unit =
+  List.iter (fun (vars, sexprs) ->
+    let vars_str = String.concat ", " (List.map n_to_string vars) in
+    let sexprs_str = String.concat ", " (List.map simple_expr_to_string sexprs) in
+    Printf.printf "Vars: [%s] | SimpleExprs: [%s]\n" vars_str sexprs_str
+  ) pvwc
+
+
+let () =
+  let l = pair_vars_with_columns 
+    [[Inl (int_to_n 1); Inl (int_to_n 2); Inr (Checker.Zpos (int_to_pos 55))]; 
+    [Inr (Checker.Zpos (int_to_pos 3)); Inr (Checker.Zpos (int_to_pos 4)); Inl (int_to_n 88)]]
+    [int_to_n 42; int_to_n 0] in
+  print_pair_vars_with_columns l;;
+(*******************)
+*)
+
+
+let rec gen_phi_function (lp: (Checker.VarID.t list * Checker.Checker.ExitInfo.SimpleExprD.t list) list) 
+                     (bids: Checker.BlockID.t list) : Checker.Checker.EVMPhiInfo.t =
+  match (lp, bids) with
+  | ([], []) -> fun _ -> Checker.Checker.EVMPhiInfo.Coq_in_phi_info ([], [])
+  | ((vars, sexprs) :: lp_rest, bid :: bids_rest) ->
+      let rest_phi = gen_phi_function lp_rest bids_rest in
+      fun b -> if b = bid then Checker.Checker.EVMPhiInfo.Coq_in_phi_info (vars, sexprs)
+               else rest_phi b
+  | _ -> failwith "gen_phi_function: lp and bids must have the same length"               
+
+
+let extract_phi_info (phi_instrs : Yojson.Safe.t list) (entries : Yojson.Safe.t list) = 
+  (* TODO: checkd NoDup in phi_instr[out]
+     TODO: check len(entries) = len(instr[in]) *)
+  let bids = List.map (fun entry -> match entry with
+                                | `String s -> extract_bid s
+                                | _ -> failwith "Invalid entry in block") entries in
+  let exprs, vars = extract_phi_instrs phi_instrs in
+  let lp = pair_vars_with_columns exprs vars in
+  gen_phi_function lp bids
+
+
+let extract_exit_info (exit_info: Yojson.Safe.t) : Checker.Checker.ExitInfo.t =
+  match to_string (member "type" exit_info) with
+  | "Terminated" -> Checker.Checker.ExitInfo.Terminate
+  | "MainExit" -> Checker.Checker.ExitInfo.Terminate
+  | "ConditionalJump" -> 
+      let cond = extract_var (to_string (member "cond" exit_info)) in
+      let btrue, bfalse = match to_list (member "targets" exit_info) with
+        | [`String btrue; `String bfalse] -> (extract_bid btrue, extract_bid bfalse)
+        | _ -> failwith "Invalid targets in ConditionalJump exit info (must be list of 2 strings)" in
+      Checker.Checker.ExitInfo.ConditionalJump (cond, btrue, bfalse)
+  | "Jump" -> let target = match to_list (member "targets" exit_info) with
+                | [`String s] -> extract_bid s
+                | _ -> failwith "Invalid target in Jump exit info (must be one string)" in
+              Checker.Checker.ExitInfo.Jump target
+  | "FunctionReturn" -> let lvars : Checker.Checker.ExitInfo.SimpleExprD.t list = 
+      List.map (fun e -> extract_sexpr (to_string e))  (to_list (member "returnValues" exit_info)) in
+      Checker.Checker.ExitInfo.ReturnBlock lvars
+  | s -> failwith ("Unsupported exit type in block: " ^ s)
+
+
+let __ = let rec f _ = Obj.repr f in Obj.repr f
+
+
+let extract_instruction (instr: Yojson.Safe.t) : Checker.Checker.EVMInstr.t =  
+    let inp = match member "in" instr with
+      | `List in_l -> List.map (fun e -> extract_sexpr (to_string e)) in_l
+      | _ -> failwith "Invalid 'in' field in instruction (must be list)" in
+    let outv = match member "out" instr with
+      | `List out_l -> List.map (fun e -> extract_var (to_string e)) out_l
+      | _ -> failwith "Invalid 'out' field in instruction (must be list)" in
+    let op = match member "op" instr with
+      | `String s -> (if s = "LiteralAssignment" then (Checker.Inr __)
+                      else match evm_opcode_get s with
+                           | Some opcode -> (Checker.Inl (Checker.Inr opcode))
+                           | None -> (Checker.Inl (Checker.Inl (string_to_char_list s))))
+      | _ -> failwith "Invalid 'op' field in instruction (must be string)" in
+    { Checker.Checker.EVMInstr.input = inp; 
+      Checker.Checker.EVMInstr.output = outv;
+      Checker.Checker.EVMInstr.op = op;
+    }  
+
+
+let extract_instructions (instrs: Yojson.Safe.t) : Checker.Checker.EVMInstr.t list =
+  List.map extract_instruction (to_list instrs)
+   
+
+
+let extract_block (block: Yojson.Safe.t) : Checker.Checker.EVMBlock.t =
+  let bid = match block |> member "id" with
+    | `String s -> extract_bid s
+    | _ -> failwith "Invalid block ID" in
+  let phi_instr = match block |> member "__phi" with
+    | `List phi_l -> phi_l
+    | _ -> failwith "Invalid __phi in block" in
+  let entries = match block |> member "entries" with
+    | `List entries_l -> entries_l
+    | _ -> [] in
+  let phi_info = extract_phi_info phi_instr entries in 
+  let exit_info = extract_exit_info (block |> member "exit") in
+  let instrs = extract_instructions (block |> member "instructions") in
+
+  { 
+    Checker.Checker.EVMBlock.bid = bid; 
+    Checker.Checker.EVMBlock.phi_function = phi_info;
+    Checker.Checker.EVMBlock.exit_info = exit_info;
+    Checker.Checker.EVMBlock.instructions = instrs;
+  }
+
+
+let extract_blocks (blocks_l : Yojson.Safe.t list) : Checker.Checker.EVMBlock.t list =
+  List.map extract_block blocks_l
+
+
 let extract_function (fname: string) (fbody: Yojson.Safe.t) : Checker.Checker.EVMCFGFun.t =
   let args = match fbody |> member "arguments" with
     | `List args_l -> List.map int_to_n (List.map to_int args_l) 
         | _ -> failwith ("Invalid arguments in function " ^ fname) in
   let blocks = match fbody |> member "blocks" with
-    | `List blocks_l -> [] 
+    | `List blocks_l -> extract_blocks blocks_l 
     | _ -> failwith ("Invalid blocks in function " ^ fname) in
   let entry_bid = match fbody |> member "entry" with
-    | `Int i -> int_to_n i (* FIXME: should be string BlockN and extrat the number N *)
+    | `String s -> extract_bid s
     | _ -> failwith ("Invalid entry block ID in function " ^ fname) in
 
   { Checker.Checker.EVMCFGFun.name = string_to_char_list fname;
     Checker.Checker.EVMCFGFun.args = args;
-    Checker.Checker.EVMCFGFun.blocks = blocks; (* FIXME TODO: convert to the right format *)
+    Checker.Checker.EVMCFGFun.blocks = blocks;
     Checker.Checker.EVMCFGFun.entry_bid = entry_bid;
   }
 
@@ -406,7 +598,6 @@ let extract_functions (flatjson: Yojson.Safe.t) : Checker.Checker.EVMCFGFun.t li
 
 
 let extract_prog (flatjson: Yojson.Safe.t) (sc_name: string) : Checker.Checker.EVMCFGProg.t =
-  (* FIXME TODO: extract the rest of the information for the program, and also the liveness info *)
   let main_fun, _ = List.hd (to_assoc flatjson) in
   let funs = extract_functions flatjson in
   { Checker.Checker.EVMCFGProg.name = string_to_char_list sc_name;
@@ -425,6 +616,16 @@ let extract_prog_and_liveness (flatjson: Yojson.Safe.t) (sc_name: string)
   let p : Checker.Checker.EVMCFGProg.t = extract_prog flatjson sc_name in
   let liveness_info : Checker.Checker.EVMLiveness.prog_live_info_t = extract_liveness_info flatjson in
   (p, liveness_info)
+
+
+
+(******* Check NoDup in:
+  - Instruction out_vars
+  - PhiInfo out_vars
+  - CFGFun args
+
+  TODO
+*******)   
 
 
 
