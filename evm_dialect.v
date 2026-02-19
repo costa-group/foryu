@@ -432,6 +432,9 @@ Module EVM_opcode.
     | DATASIZE
     | DATAOFFSET
     | DATACOPY
+    | LINKERSYMBOL
+    | SETIMMUTABLE
+    | LOADIMMUTABLE
     .
     
     Definition eq_dec: forall (a b: t), {a = b} + {a <> b}.

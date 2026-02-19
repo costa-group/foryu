@@ -1784,7 +1784,7 @@ Lemma check_live_out_complete:
     intros p fname bid b pc H_b_exists H_get_instr.
     unfold CFGProgD.get_instr in H_get_instr.
     rewrite H_b_exists in H_get_instr.
-    Search (nth_error).
+    (*Search (nth_error).*)
     rewrite (nth_error_None b.(instructions) pc) in H_get_instr.
     apply H_get_instr.
   Qed.
