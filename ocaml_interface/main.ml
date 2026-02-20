@@ -321,6 +321,17 @@ let rename_fun_calls (flatjson: Yojson.Safe.t): Yojson.Safe.t =
 
 (******* Takes a flat JSON and returns a program and liveness information *******) 
 
+module IntSet = Set.Make(Z)
+(* Detect duplicates in list of variables *)
+let dup_vars (vars: Checker.VarID.t list) : bool =
+  let rec loop seen = function
+    | [] -> false
+    | hd :: tl ->
+        if IntSet.mem hd seen then true
+        else loop (IntSet.add hd seen) tl
+  in
+  loop IntSet.empty vars
+
 let extract_integer_str (s: string) (prefix: string): string =
   let prefix_len = String.length prefix in
   if not (String.starts_with ~prefix s) then
@@ -442,6 +453,7 @@ let extract_phi_info (phi_instrs : Yojson.Safe.t list) (entries : Yojson.Safe.t 
                                 | `String s -> extract_bid s
                                 | _ -> failwith "Invalid entry in block") entries in
   let exprs, vars = extract_phi_instrs phi_instrs in
+  if dup_vars vars then failwith "Duplicate variables in phi instructions";
   let lp = pair_vars_with_columns exprs vars in
   gen_phi_function lp bids
 
@@ -477,6 +489,7 @@ let extract_instruction (instr: Yojson.Safe.t) : Checker.Checker.EVMInstr.t =
     let outv = match member "out" instr with
       | `List out_l -> List.map (fun e -> extract_var (to_string e)) out_l
       | _ -> failwith "Invalid 'out' field in instruction (must be list)" in
+    if dup_vars outv then failwith "Duplicate variables in 'out' field of instruction";
     let op = match member "op" instr with
       | `String s -> (if s = "LiteralAssignment" then (Checker.Inr __)
                       else match evm_opcode_get s with
@@ -523,6 +536,7 @@ let extract_function (fname: string) (fbody: Yojson.Safe.t) : Checker.Checker.EV
   let args = match fbody |> member "arguments" with
     | `List args_l -> List.map (fun e -> extract_var (to_string e)) args_l
         | _ -> failwith ("Invalid arguments in function " ^ fname) in
+  if dup_vars args then failwith ("Duplicate variables in arguments of function " ^ fname);
   let blocks = match fbody |> member "blocks" with
     | `List blocks_l -> extract_blocks blocks_l 
     | _ -> failwith ("Invalid blocks in function " ^ fname) in
@@ -613,14 +627,23 @@ let extract_prog_and_liveness (flatjson: Yojson.Safe.t) (sc_name: string)
   (p, liveness_info)
 
 
+let get_nintrs_block (block: Yojson.Safe.t) : int =
+  match block |> member "instructions" with
+  | `List bs -> List.length bs
+  | _ -> failwith "Invalid blocks in function body for size calculation"
 
-(******* Check NoDup in:
-  - Instruction out_vars
-  - PhiInfo out_vars
-  - CFGFun args
 
-  TODO
-*******)
+let get_size_blocks (blocks: Yojson.Safe.t list) : int * int =
+  let nblocks = List.length blocks in
+  let ninstrs = List.fold_left (fun acc block -> acc + get_nintrs_block block) 0 blocks in
+  (nblocks, ninstrs)
+  
+
+let get_size (json: Yojson.Safe.t) : int * int =
+  let sizes = List.map (fun (fname, fbody) -> match fbody |> member "blocks" with
+                                  | `List blocks_l -> get_size_blocks blocks_l
+                                  | _ -> failwith ("Invalid blocks in function " ^ fname)) (to_assoc json) in
+  List.fold_left (fun (acc_blocks, acc_instr) (block_count, instr_count) -> (acc_blocks + block_count, acc_instr + instr_count)) (0, 0) sizes
 
 
 
@@ -650,7 +673,9 @@ let () =
   );
 
   if !size then (
-    Printf.printf "-size Not Implemented";
+    let _, flat_d = read_json_to_flat !input_file in
+    let block_count, instr_count = get_size flat_d in
+    Printf.printf "%d %d\n" block_count instr_count;
     exit 0
   );
 
@@ -665,22 +690,9 @@ let () =
     else
       Printf.printf "LIVENESS_INVALID\n"
 
-  (*
-  (* let json_flatd' = Yojson.Safe.pretty_to_string flat_d' in
-  print_endline json_flatd' *)
-  (*Printf.printf "[%s]\n" (String.concat "; " (StringSet.elements !fun_names))*)
 
-
-
-
-
-(*let main () =
-  let res = Checker.Checker.myfun (Terminate) in
-  match res with
-  | Terminate -> Printf.printf "Result: Terminate\n"
-  | _ -> Printf.printf "Result: Otro\n"
-*)
-
+(***** Examples of Program and Liveness Info  as OCaml expressions ******)
+(*
 
 let bid : Checker.BlockID.t = int_to_n 3
 let bid2 : Checker.BlockID.t = int_to_n 0
@@ -745,42 +757,6 @@ let liveness_info2 : Checker.Checker.EVMLiveness.prog_live_info_t =
     in 
     fun _ => Some f1_liveness
 
-
-
-(*
-let main () =
-  let res = Checker.Checker.myfun phi_info in
-  let thebid = bid in
-  match (res thebid) with
-  | Checker.Checker.EVMPhiInfo.Coq_in_phi_info (vars, sexprs) -> 
-      Printf.printf "Phi info for block %s:\n" (n_to_string thebid);
-      Printf.printf "  Vars: [%s]\n" (String.concat "; " (List.map n_to_string vars));
-      Printf.printf "  SimpleExprs: [%s]\n" (String.concat "; " (List.map simple_expr_to_string sexprs))
-  | _ -> Printf.printf "Phi info for block %s: No info\n" (n_to_string thebid)
-*)
-
-(*let main () =
-  let res = Checker.Checker.myfun instr2 in
-  match res with
-  | { Checker.Checker.EVMInstr.input = inputs; 
-      Checker.Checker.EVMInstr.output = outputs;
-      Checker.Checker.EVMInstr.op = op } ->
-      Printf.printf "Instruction:\n";
-      Printf.printf "  Inputs: [%s]\n" (String.concat "; " (List.map simple_expr_to_string inputs));
-      Printf.printf "  Outputs: [%s]\n" (String.concat "; " (List.map n_to_string outputs));
-      (match op with
-       | Inl (Inr opcode) -> Printf.printf "  Opcode: %s\n" (match opcode with
-                                                                | Checker.EVM_opcode.ISZERO -> "ISZERO"
-                                                                | _ -> "Other opcode")
-       | _ -> Printf.printf "  Opcode: Other\n")
-*)
-
-let main () = 
-    let res = Checker.Checker.EVMLiveness.check_program prog liveness_info in
-    Printf.printf "Checker result: %B\n" res;;
-  
-let _ = main ();;
-
 (*
 SUMMARY OF OCAML TYPES:
 * Checker.BlockID.t = Checker.n
@@ -797,7 +773,6 @@ SUMMARY OF OCAML TYPES:
            Checker.BlockID.t -> Checker.Checker.EVMPhiInfo.coq_InBlockPhiInfo
 * Checker.Checker.EVMPhiInfo.coq_InBlockPhiInfo =
     | Checker.Checker.EVMPhiInfo.Coq_in_phi_info (Checker.VarID.t list * Checker.Checker.ExitInfo.SimpleExprD.t list)
-  
-
 *)
+
 *)
