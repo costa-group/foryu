@@ -1,19 +1,19 @@
--Q . FORYU
+-Q theories/ FORYU
 
-misc.v
+theories/misc.v
 
-dialect.v
-evm_dialect.v
-program.v
-state.v
+theories/dialect.v
+theories/evm_dialect.v
+theories/program.v
+theories/state.v
 
-semantics.v
+theories/semantics.v
 
-liveness.v
-liveness_snd.v
+theories/liveness.v
+theories/liveness_snd.v
 
 #tests.v
 #test_translation.v
-checker.v
+theories/checker.v
 
-extract_ocaml.v
+theories/extract_ocaml.v
