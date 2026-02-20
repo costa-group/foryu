@@ -29,18 +29,16 @@ Require Import FORYU.checker.
 Import Checker.
 From Coq Require Import extraction.ExtrOcamlString.
 Import ExtrOcamlString.
-
+Require Import extraction.ExtrOcamlZBigInt. (* Extracts Z.t *)
 
 (** Type Extractions **)
 Extract Inductive bool => "bool" [ "true" "false" ].
 Extract Inductive list => "list" [ "[]" "(::)" ].
 Extract Inductive prod => "( * )" [ "( , )" ].
 
-
 (** Program Extractions **)
 (*  Examples from example.v are extracted and directly tested.
     After running the next line, use "make run" in order to compile and
     run the test_examples.ml file. *)
-(*Extraction Checker.*)
 Set Extraction Output Directory "ocaml_interface".
 Extraction "checker.ml" Checker. 

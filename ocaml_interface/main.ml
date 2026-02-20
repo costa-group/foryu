@@ -111,6 +111,7 @@ let evm_opcode_list : (string * Checker.EVM_opcode.t) list = [
   ("loadimmutable",  Checker.EVM_opcode.LOADIMMUTABLE);
 ]
 
+
 let evm_opcode_tbl : (string, Checker.EVM_opcode.t) Hashtbl.t =
   let tbl = Hashtbl.create (List.length evm_opcode_list) in
   List.iter (fun (k,v) -> Hashtbl.add tbl k v) evm_opcode_list;
@@ -122,71 +123,11 @@ let evm_opcode_get (k:string) : Checker.EVM_opcode.t option =
   Hashtbl.find_opt evm_opcode_tbl k
 
 
-
-
 (* Generates a string representing a prefix of the object path:
   ['source_import_subdir_sol', 'C', 'C_3'] => 'source_import_subdir_sol__C__C_3' *)
 let gen_name (prefix: string list) (fname: string) : string =
   String.concat "__" (prefix @ [fname])
   |> String.map (fun c -> if c = '.' then '_' else c)
-
-
-let nat_to_int (n : Checker.nat) : int =
-  let rec aux n acc =
-    match n with
-    | Checker.O -> acc
-    | Checker.S n' -> aux n' (acc + 1)
-  in
-  aux n 0
-
-
-let int_to_nat (n : int) : Checker.nat =
-  let rec aux n acc =
-    if n <= 0 then acc
-    else aux (n - 1) (Checker.S acc)
-  in
-  aux n Checker.O  
-
-
-let string_of_checker_nat (n : Checker.nat) : string =
-  string_of_int (nat_to_int n)
-
-
-(* build positive from an OCaml int (>0) *)
-let rec int_to_pos (n: int) : Checker.positive =
-  if n = 1 then Checker.XH
-  else if n mod 2 = 0 then Checker.XO (int_to_pos (n / 2))
-  else Checker.XI (int_to_pos (n / 2))
-
-
-let int_to_n (i: int) : Checker.n =
-  if i <= 0 then Checker.N0 else Checker.Npos (int_to_pos i)
-
-
-let rec pos_to_int (p: Checker.positive) : int =
-  match p with
-  | Checker.XH -> 1
-  | Checker.XO p' -> 2 * (pos_to_int p')
-  | Checker.XI p' -> 2 * (pos_to_int p') + 1
-
-
-let n_to_string (n: Checker.n) : string =
-  match n with
-  | Checker.N0 -> "0"
-  | Checker.Npos p -> string_of_int (pos_to_int p)
-
-
-let z_to_string (z: Checker.z) : string =
-  match z with
-  | Checker.Z0 -> "0"
-  | Checker.Zpos p -> string_of_int (pos_to_int p)
-  | Checker.Zneg p -> "-" ^ string_of_int (pos_to_int p)
-
-
-let simple_expr_to_string (s: Checker.Checker.ExitInfo.SimpleExprD.t) : string =
-  match s with
-  | Inl v -> "VarID(" ^ (n_to_string v) ^ ")"
-  | Inr z -> "Value(" ^ (z_to_string z) ^ ")"  
 
 
 (* Convert between OCaml `string` and `char list` (extracted `FuncName.t`) *)
@@ -200,11 +141,6 @@ let char_list_to_string (cl : char list) : string =
   let buf = Buffer.create (List.length cl) in
   List.iter (Buffer.add_char buf) cl;
   Buffer.contents buf
-
-
-let funcname_of_string = string_to_char_list
-let string_of_funcname = char_list_to_string
-
 
 
   
@@ -385,29 +321,37 @@ let rename_fun_calls (flatjson: Yojson.Safe.t): Yojson.Safe.t =
 
 (******* Takes a flat JSON and returns a program and liveness information *******) 
 
-let extract_integer (s: string) (prefix: string): int =
+let extract_integer_str (s: string) (prefix: string): string =
   let prefix_len = String.length prefix in
   if not (String.starts_with ~prefix s) then
     failwith ("Invalid prefix: " ^ s ^ " does not start with " ^ prefix);
   let number_str = String.sub s prefix_len (String.length s - prefix_len) in
-  int_of_string number_str
+  number_str
+
 
 (* Extract the number "X" in "BlockX" as a BlockID.t *)
 let extract_bid (s: string) : Checker.BlockID.t =
-  int_to_n (extract_integer s "Block")
+  let str_num = extract_integer_str s "Block" in
+  Z.of_string str_num
+  
 
-
+  (* Extracts the variable number "X" in "vX" as a VarID.t *)
 let extract_var (s: string) : Checker.VarID.t =
-  int_to_n (extract_integer s "v")
+  let str_num = extract_integer_str s "v" in
+  Z.of_string str_num
 
 
-let extract_val (s: string) : Checker.z =
-  let i = int_of_string s in
-  if i = 0 then Checker.Z0
-  else if i > 0 then Checker.Zpos (int_to_pos i)
-  else failwith ("Negative literals not supported: " ^ s)
+(* Extracts an hexadecimal value like "0xFF" as a Z.t value *)
+let extract_val (s: string) : Z.t =
+  try
+    let z = Z.of_string s in
+    z
+  with 
+  | Invalid_argument _ -> 
+      failwith (Printf.sprintf "Error: '%s' no es un formato numérico válido" s)
 
 
+(* Extracts a SimpleExpr from a string *)
 let extract_sexpr (s: string) : Checker.Checker.ExitInfo.SimpleExprD.t =
   if String.starts_with ~prefix:"v" s then
     Inl (extract_var s)
@@ -522,7 +466,8 @@ let extract_exit_info (exit_info: Yojson.Safe.t) : Checker.Checker.ExitInfo.t =
   | s -> failwith ("Unsupported exit type in block: " ^ s)
 
 
-let __ = let rec f _ = Obj.repr f in Obj.repr f
+(* OCaml extraction does not generate the ASSIGN constructor, it uses the __ value *)
+let __ = let rec f _ = Obj.repr f in Obj.repr f 
 
 
 let extract_instruction (instr: Yojson.Safe.t) : Checker.Checker.EVMInstr.t =  
@@ -547,7 +492,6 @@ let extract_instruction (instr: Yojson.Safe.t) : Checker.Checker.EVMInstr.t =
 let extract_instructions (instrs: Yojson.Safe.t) : Checker.Checker.EVMInstr.t list =
   List.map extract_instruction (to_list instrs)
    
-
 
 let extract_block (block: Yojson.Safe.t) : Checker.Checker.EVMBlock.t =
   let bid = match block |> member "id" with
@@ -577,7 +521,7 @@ let extract_blocks (blocks_l : Yojson.Safe.t list) : Checker.Checker.EVMBlock.t 
 
 let extract_function (fname: string) (fbody: Yojson.Safe.t) : Checker.Checker.EVMCFGFun.t =
   let args = match fbody |> member "arguments" with
-    | `List args_l -> List.map int_to_n (List.map to_int args_l) 
+    | `List args_l -> List.map (fun e -> extract_var (to_string e)) args_l
         | _ -> failwith ("Invalid arguments in function " ^ fname) in
   let blocks = match fbody |> member "blocks" with
     | `List blocks_l -> extract_blocks blocks_l 
@@ -606,9 +550,60 @@ let extract_prog (flatjson: Yojson.Safe.t) (sc_name: string) : Checker.Checker.E
   }
 
 
+let rec create_block_liveness_info (blocks_liveness: (Checker.BlockID.t * (Checker.Checker.EVMLiveness.VarSet.t * Checker.Checker.EVMLiveness.VarSet.t) option ) list) : 
+      Checker.Checker.EVMLiveness.func_live_info_t =
+  match blocks_liveness with
+  | [] -> fun _ -> None
+  | (bid, live_info_pair) :: rest ->
+      let rest_info = create_block_liveness_info rest in
+      fun b -> if b = bid then live_info_pair else rest_info b
+
+
+let extract_block_liveness (block: Yojson.Safe.t) : Checker.BlockID.t * (Checker.Checker.EVMLiveness.VarSet.t * Checker.Checker.EVMLiveness.VarSet.t) option =
+  let bid = match block |> member "id" with
+    | `String s -> extract_bid s
+    | _ -> failwith "Invalid block ID in liveness info" in
+  let live_info_json = match block |> member "liveness" with
+    | `Null -> failwith ("Block without liveness information " ^ (to_string (block |> member "id")))
+    | li -> li in
+  let live_in = match live_info_json |> member "in" with
+    | `List in_l -> Checker.Checker.EVMLiveness.list_to_set (List.map (fun e -> extract_var (to_string e)) in_l)
+    | _ -> failwith "Invalid 'in' field in liveness info (must be list)" in
+  let live_out = match live_info_json |> member "out" with
+    | `List out_l -> Checker.Checker.EVMLiveness.list_to_set (List.map (fun e -> extract_var (to_string e)) out_l)
+    | _ -> failwith "Invalid 'out' field in liveness info (must be list)" in
+  (bid, Some (live_in, live_out))
+
+
+let extract_blocks_liveness (blocks: Yojson.Safe.t list) : 
+      (Checker.BlockID.t * (Checker.Checker.EVMLiveness.VarSet.t * Checker.Checker.EVMLiveness.VarSet.t) option ) list =
+  List.map extract_block_liveness blocks
+
+
+(* Extracts the liveness information from a function body in JSON *)
+let extract_funct_liveness (fbody: Yojson.Safe.t) : Checker.Checker.EVMLiveness.func_live_info_t =
+  let blocks = match fbody |> member "blocks" with
+    | `List blocks_l -> blocks_l
+    | _ -> failwith "Invalid blocks in function body for liveness info" in
+  let blocks_liveness = extract_blocks_liveness blocks in
+  create_block_liveness_info blocks_liveness
+
+
+
+let rec create_liveness_info (funs: (string * Checker.Checker.EVMLiveness.func_live_info_t) list) : 
+        Checker.Checker.EVMLiveness.prog_live_info_t =
+  match funs with
+  | [] -> fun _ -> None
+  | (fname, finfo) :: rest -> 
+      let rest_info = create_liveness_info rest in
+      fun f -> if f = string_to_char_list fname then Some finfo
+               else rest_info f
+
+
 let extract_liveness_info (flatjson: Yojson.Safe.t) : Checker.Checker.EVMLiveness.prog_live_info_t =
-  (* FIXME TODO *)
-  fun _ -> None
+  let funs_json_assoc = flatjson |> to_assoc in
+  let liveness_func = List.map (fun (fname, fbody) -> (fname, extract_funct_liveness fbody)) funs_json_assoc in
+  create_liveness_info liveness_func
 
 
 let extract_prog_and_liveness (flatjson: Yojson.Safe.t) (sc_name: string) 
@@ -625,7 +620,7 @@ let extract_prog_and_liveness (flatjson: Yojson.Safe.t) (sc_name: string)
   - CFGFun args
 
   TODO
-*******)   
+*******)
 
 
 
@@ -661,11 +656,14 @@ let () =
 
   let sc_main, flat_d = read_json_to_flat !input_file in
   let flat_d' = rename_fun_calls flat_d in
-  let json_flatd' = Yojson.Safe.pretty_to_string flat_d' in
-  let _ = print_endline json_flatd' in 
+  (*let json_flatd' = Yojson.Safe.pretty_to_string flat_d' in
+  let _ = print_endline json_flatd' in *)
   let prog, liveness_info = extract_prog_and_liveness flat_d' sc_main in
   let b = Checker.Checker.EVMLiveness.check_program prog liveness_info in
-  Printf.printf "Checker result: %B\n" b
+  if b then 
+      Printf.printf "LIVENESS_VALID\n"
+    else
+      Printf.printf "LIVENESS_INVALID\n"
 
   (*
   (* let json_flatd' = Yojson.Safe.pretty_to_string flat_d' in
@@ -737,6 +735,15 @@ let prog : Checker.Checker.EVMCFGProg.t =
       Checker.Checker.EVMCFGProg.main = fname;
     } 
 let liveness_info : Checker.Checker.EVMLiveness.prog_live_info_t = fun _ -> None
+let liveness_info2 : Checker.Checker.EVMLiveness.prog_live_info_t = 
+    let f1_liveness = function
+    | N0 ->
+      let vin = EVMLiveness.list_to_set (N0::((Npos XH)::[])) in
+      let vout = EVMLiveness.list_to_set ((Npos XH)::((Npos (XI (XI (XI (XO XH)))))::[])) in
+      Some (vin , vout)
+    | Npos _ -> None
+    in 
+    fun _ => Some f1_liveness
 
 
 
