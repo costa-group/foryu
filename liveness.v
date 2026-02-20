@@ -114,7 +114,7 @@ Module Liveness (D: DIALECT).
       end.
 
   (* The following types are used to define the result of a live-variable analysis *)
-  Definition block_live_info_t := nat -> option VarSet.t.
+  (*Definition block_live_info_t := nat -> option VarSet.t.*)
   Definition func_live_info_t := BlockID.t -> option (VarSet.t * VarSet.t).
   Definition prog_live_info_t := FuncName.t -> option func_live_info_t.
 
