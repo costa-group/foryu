@@ -10,6 +10,7 @@ theories/state.v
 theories/semantics.v
 
 theories/liveness.v
+#theories/liveness_subset.v
 theories/liveness_snd.v
 
 #tests.v

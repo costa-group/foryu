@@ -4,6 +4,7 @@ Data structures for CFG-YUL programs
 
 *)
 
+Require Export FORYU.misc.
 Require Export FORYU.dialect.
 Require Export FORYU.misc.
 Require Export Coq.Lists.List.
@@ -16,10 +17,16 @@ Require Import Arith.
 Global Open Scope string_scope.
 Global Open Scope Z_scope.
 
+
+
+
 (* A module for block identifier *)
 Module BlockID.
-  (* A block ID is a natural number using N ofr effciency. *)
+  (* A block ID is a natural number using N fir efficiency. *)
   Definition t := N.
+
+  Definition show (bid: t) : string := 
+  "Block" ++ Misc.n_to_string bid.
 
   (* we require boolean equality to reflect equality *)
   Definition eqb := N.eqb.
@@ -65,6 +72,9 @@ End BlockID.
 Module VarID.
   (* YUL variables are represented as natural numbers using N for efficiency. *)
   Definition t := N.
+
+  Definition show (vid: t) : string := 
+  "v" ++ Misc.n_to_string vid.
 
   (* we require boolean equality to reflect equality *)
   Definition eqb := N.eqb.
@@ -112,6 +122,12 @@ End VarID.
 (* This module defines simple expressions, which can be a variable or a value *)
 Module SimpleExpr (D: DIALECT).
   Definition t : Type := VarID.t + D.value_t.
+
+  Definition show (e: t) : string :=
+    match e with
+    | inl v => VarID.show v
+    | inr val => D.show_value val
+    end.
 
   Definition eqb (x y: t): bool :=
     match x, y with
@@ -198,6 +214,8 @@ Module FuncName.
   (* YUL Function names represented as strings. *)
   Definition t := string.
 
+  Definition show (fname: t) : string := fname.
+
   (* we require boolean equality to reflect equality *)
   Definition eqb := String.eqb.
   Definition eqb_spec := String.eqb_spec.
@@ -250,6 +268,15 @@ Module ExitInfo (D: DIALECT).
   | ReturnBlock (ret_eexprs : list SimpleExprD.t)
   | Terminate.
 
+  Definition show (e: t) : string :=
+    match e with
+    | ConditionalJump cond_var_id bid_if_true bid_if_false =>
+        "ConditionalJump " ++ VarID.show cond_var_id ++ " " ++ BlockID.show bid_if_true ++ " " ++ BlockID.show bid_if_false
+    | Jump bid => "Jump " ++ BlockID.show bid
+    | ReturnBlock ret_eexprs => "ReturnBlock " ++ String.concat ", " (List.map SimpleExprD.show ret_eexprs)
+    | Terminate => "Terminate"
+    end.
+
 End ExitInfo.
 
 
@@ -261,6 +288,25 @@ Module PhiInfo (D: DIALECT).
   | in_phi_info (out_vars: list VarID.t) (in_sexprs: list SimpleExprD.t) (H_no_dup: List.NoDup out_vars) (H_same_le: length out_vars = length in_sexprs).
   
   Definition t := BlockID.t -> InBlockPhiInfo.
+
+  Definition show (phi_info: t) : string :=
+    let show_in_block_phi_info (bid: BlockID.t) (info: InBlockPhiInfo) : string :=
+        match info with
+        | in_phi_info out_vars in_sexprs _ _ =>
+            match (out_vars, in_sexprs) with 
+            | ([], []) => ""
+            | (out_vars, in_sexprs) => 
+                BlockID.show bid ++ ": " ++
+                String.concat ", " (List.map VarID.show out_vars) ++ " := " ++
+            String.concat ", " (List.map SimpleExprD.show in_sexprs)
+            end
+        end
+    in
+    let first_100_blocks := List.map (N.of_nat) (List.seq 0 100) in
+    let phi_info_strings : list string := List.map (fun bid => show_in_block_phi_info bid (phi_info bid)) first_100_blocks in
+    let phi_info_strings_clean : list string := 
+      List.filter (fun s => negb (String.eqb s "")) phi_info_strings in
+    String.concat "\n" phi_info_strings_clean.
 
   (* an empty map for a block *)
   Definition empty_in_phi_info :=
@@ -298,7 +344,6 @@ Module PhiInfo (D: DIALECT).
     let exps := List.map (fun p => snd p) l in
     construct vars exps.
 
-
 End PhiInfo.
 
 
@@ -315,10 +360,24 @@ Module Instr (D: DIALECT).
       op : (FuncName.t + D.opcode_t) + aux_inst_t;
       H_nodup : NoDup output;
     }.
+
+  Definition show (i: t) : string :=
+    let op_str := match i.(op) with
+                  | inl (inl fname) => FuncName.show fname
+                  | inl (inr opcode) => D.show_opcode opcode
+                  | inr aux_op =>
+                    match aux_op with
+                    | ASSIGN => ""
+                    end
+                  end
+    in
+    (String.concat ", " (List.map VarID.show i.(output))) ++ " := " ++ op_str ++ " " ++
+    (String.concat ", " (List.map SimpleExprD.show i.(input))). 
+    
   
-  (* IMPORTANT: when there is an error, it uses a defualt value
+  (* IMPORTANT: when there is an error, it uses a default value
   instead of failing. It is done this way so the current parser keeps
-  working, should be changed one the new parser is tready *)
+  working, should be changed one the new parser is ready *)
   Program Definition construct (input : list SimpleExprD.t) (output : list VarID.t) (op : (FuncName.t + D.opcode_t) + aux_inst_t) : t :=
   match Misc.nodupb VarID.t VarID.eqb output with
   | true => {| input:= input; output:=output; op:= _ |}
@@ -345,6 +404,12 @@ Module Block (D: DIALECT).
       exit_info : ExitInfoD.t;
       instructions : list (InstrD.t); (* List of instructions in the block *)
     }.
+
+  Definition show (b: t) : string :=
+    "Block " ++ BlockID.show b.(bid) ++ ":\n" ++
+    "Phi function:\n" ++ PhiInfoD.show b.(phi_function) ++ "\n" ++
+    "Exit info: " ++ ExitInfoD.show b.(exit_info) ++ "\n" ++
+    "Instructions:\n" ++ String.concat "\n" (List.map InstrD.show b.(instructions)).
 
   Definition construct (bid: BlockID.t) (phi_function : PhiInfoD.t) (exit_info : ExitInfoD.t) (instructions : list (InstrD.t)) :=
     {|
@@ -394,6 +459,12 @@ Module CFGFun (D: DIALECT).
       H_nodup : NoDup args
     }.
 
+  Definition show (f: t) : string :=
+    "Function " ++ FuncName.show f.(name) ++ "(" ++ String.concat ", " (List.map VarID.show f.(args)) ++ ")\n" ++
+    "Entry: " ++ BlockID.show f.(entry_bid) ++ "\n" ++
+    "Blocks:\n" ++
+    String.concat "\n" (List.map BlockD.show f.(blocks)).
+
   Program Definition construct (name : FuncName.t) (args : list VarID.t) (blocks : list BlockD.t) (entry_bid : BlockID.t) : t :=
     match Misc.nodupb VarID.t VarID.eqb args with
     | false => {| name := name; blocks := []; entry_bid := entry_bid; H_nodup := (NoDup_nil VarID.t)|}
@@ -429,6 +500,11 @@ Module CFGProg (D: DIALECT).
     functions : list CFGFunD.t; (* List of functions in the smart contract *)
     main: FuncName.t; (* The main function of the smart contract *)
   }.
+
+  Definition show (p: t) : string :=
+    "Contract: " ++ p.(name) ++ "\n" ++
+    "Main: " ++ FuncName.show p.(main) ++ "\n" ++
+    "Functions: " ++ String.concat "\n" (List.map CFGFunD.show p.(functions)).
 
   Definition construct (name : string) (main: FuncName.t) (functions : list CFGFunD.t) : t :=
     {| name := name; functions := functions; main := main |}.
