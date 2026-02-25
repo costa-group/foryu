@@ -1,9 +1,22 @@
 Require Import Coq.Bool.Bool.
 Require Import Coq.Logic.Classical_Pred_Type.
 Require Import List Bool.
+Require Import ZArith.
+Require Import String.
+Require Import DecimalString.
+
+Open Scope Z_scope.
+
 Import ListNotations.
 
+
 Module Misc.
+
+  Definition z_to_string (z : Z) : string :=
+  NilEmpty.string_of_int (Z.to_int z).
+
+  Definition n_to_string (n : N) : string :=
+  NilEmpty.string_of_uint (N.to_uint n).
 
   (* Tactic: "Obtain eqb_eq from reflect" *)
   Ltac eqb_eq_from_reflect eqb_spec :=
@@ -88,7 +101,7 @@ Module Misc.
 
   (* equal lists have equal length *)
   Lemma len_eq:
-    forall {A: Type} (x y : list A), x = y -> length x = length y.
+    forall {A: Type} (x y : list A), x = y -> List.length x = List.length y.
   Proof.
     intros.
     rewrite H.

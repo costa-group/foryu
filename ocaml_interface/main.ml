@@ -332,6 +332,7 @@ let dup_vars (vars: Checker.VarID.t list) : bool =
   in
   loop IntSet.empty vars
 
+
 let extract_integer_str (s: string) (prefix: string): string =
   let prefix_len = String.length prefix in
   if not (String.starts_with ~prefix s) then
@@ -346,10 +347,25 @@ let extract_bid (s: string) : Checker.BlockID.t =
   Z.of_string str_num
   
 
-  (* Extracts the variable number "X" in "vX" as a VarID.t *)
+let base_phivar_number : Z.t = Z.of_string "1000000000000000000" (* 10^18, to avoid conflicts with normal variables *)
+(* For compiled YulCFG with solc Version: 0.8.33+commit.64118f21.Linux.g++, variables are strings:
+   - v0, v1, v23... 
+   - phi0, phi1, phi36...
+*)
+
+(* Extracts the variable number "X" in "vX" or "phiX" as a VarID.t.
+   phiX generates the VarID base_phivar_number + X *)
 let extract_var (s: string) : Checker.VarID.t =
-  let str_num = extract_integer_str s "v" in
-  Z.of_string str_num
+  if String.starts_with ~prefix:"phi" s then
+    let str_num = extract_integer_str s "phi" in
+    Z.add base_phivar_number (Z.of_string str_num)
+  else
+    let str_num = extract_integer_str s "v" in
+    let varnum = Z.of_string str_num in
+    if varnum >= base_phivar_number then
+      failwith ("Variable number too large: " ^ s ^ " generates VarID " ^ (Z.to_string varnum) ^ " which is reserved for phi variables")
+    else 
+      varnum
 
 
 (* Extracts an hexadecimal value like "0xFF" as a Z.t value *)
@@ -364,7 +380,7 @@ let extract_val (s: string) : Z.t =
 
 (* Extracts a SimpleExpr from a string *)
 let extract_sexpr (s: string) : Checker.Checker.ExitInfo.SimpleExprD.t =
-  if String.starts_with ~prefix:"v" s then
+  if (String.starts_with ~prefix:"v" s) || (String.starts_with ~prefix:"phi" s) then
     Inl (extract_var s)
   else
     if String.starts_with ~prefix:"0x" s then
@@ -684,6 +700,9 @@ let () =
   (*let json_flatd' = Yojson.Safe.pretty_to_string flat_d' in
   let _ = print_endline json_flatd' in *)
   let prog, liveness_info = extract_prog_and_liveness flat_d' sc_main in
+  let prog_str = char_list_to_string (Checker.Checker.EVMCFGProg.show prog) in
+  let prog_str = Str.global_replace (Str.regexp "\\\\n") "\n" prog_str in
+  let _ = Printf.printf "Program:\n%s\n" prog_str in
   let b = Checker.Checker.EVMLiveness.check_program prog liveness_info in
   if b then 
       Printf.printf "LIVENESS_VALID\n"

@@ -562,6 +562,99 @@ Module EVM_opcode.
       | _  =>  ([U256.to_t 42], state, Status.Running) (* FIXME: organize and complete *)
       end. 
 
+    Definition show (op: t): string :=
+      match op with
+      | STOP => "STOP"
+      | ADD => "ADD"
+      | SUB => "SUB"
+      | MUL => "MUL"
+      | DIV => "DIV"
+      | SDIV => "SDIV"
+      | MOD => "MOD"
+      | SMOD => "SMOD"
+      | EXP => "EXP"
+      | NOT => "NOT" 
+      | LT => "LT"
+      | GT => "GT"
+      | SLT => "SLT"
+      | SGT => "SGT"
+      | EQ => "EQ"
+      | ISZERO => "ISZERO"
+      | AND => "AND"
+      | OR => "OR"
+      | XOR => "XOR"
+      | BYTE => "BYTE"
+      | SHL => "SHL"
+      | SHR => "SHR"
+      | SAR => "SAR"
+      | ADDMOD => "ADDMOD"
+      | MULMOD => "MULMOD"
+      | SIGNEXTEND => "SIGNEXTEND"
+      | KECCAK256 => "KECCAK256"
+      | POP => "POP"
+      | MLOAD => "MLOAD"
+      | MSTORE => "MSTORE"
+      | MSTORE8 => "MSTORE8"
+      | SLOAD => "SLOAD"
+      | SSTORE => "SSTORE"
+      | TLOAD => "TLOAD"
+      | TSTORE => "TSTORE"
+      | MSIZE => "MSIZE"
+      | GAS => "GAS"
+      | ADDRESS => "ADDRESS"
+      | BALANCE => "BALANCE"
+      | SELFBALANCE => "SELFBALANCE"
+      | CALLER => "CALLER"
+      | CALLVALUE => "CALLVALUE"
+      | CALLDATALOAD => "CALLDATALOAD"
+      | CALLDATASIZE => "CALLDATASIZE"
+      | CALLDATACOPY => "CALLDATACOPY"
+      | CODESIZE => "CODESIZE"
+      | CODECOPY => "CODECOPY"
+      | EXTCODESIZE => "EXTCODESIZE"
+      | EXTCODECOPY => "EXTCODECOPY"
+      | RETURNDATASIZE => "RETURNDATASIZE"
+      | RETURNDATACOPY => "RETURNDATACOPY"
+      | MCOPY => "MCOPY"
+      | EXTCODEHASH => "EXTCODEHASH"
+      | CREATE => "CREATE"
+      | CREATE2 => "CREATE2"
+      | CALL => "CALL"
+      | CALLCODE => "CALLCODE"
+      | DELEGATECALL => "DELEGATECALL"
+      | STATICCALL => "STATICCALL"
+      | RETURN => "RETURN"
+      | REVERT => "REVERT"
+      | SELFDESTRUCT => "SELFDESTRUCT"
+      | INVALID => "INVALID"
+      | LOG0 => "LOG0"
+      | LOG1 => "LOG1"
+      | LOG2 => "LOG2"
+      | LOG3 => "LOG3"
+      | LOG4 => "LOG4"
+      | CHAINID => "CHAINID"
+      | BASEFEE => "BASEFEE"
+      | BLOBBASEFEE => "BLOBBASEFEE"
+      | ORIGIN => "ORIGIN"
+      | GASPRICE => "GASPRICE"
+      | BLOCKHASH => "BLOCKHASH"
+      | BLOBHASH => "BLOBHASH"
+      | COINBASE => "COINBASE"
+      | TIMESTAMP => "TIMESTAMP"
+      | NUMBER => "NUMBER"
+      | DIFFICULTY => "DIFFICULTY" (* obsolete from Paris, now uses PREVRANDAO*)
+      | PREVRANDAO => "PREVRANDAO"
+      | GASLIMIT => "GASLIMIT"
+      (**)
+      | MEMORYGUARD => "MEMORYGUARD"
+      | DATASIZE => "DATASIZE"
+      | DATAOFFSET => "DATAOFFSET"
+      | DATACOPY => "DATACOPY"
+      | LINKERSYMBOL => "LINKERSYMBOL"
+      | SETIMMUTABLE => "SETIMMUTABLE"
+      | LOADIMMUTABLE => "LOADIMMUTABLE"
+      end.
+
 End EVM_opcode.
 
 
@@ -593,7 +686,12 @@ Module EVMDialect <: DIALECT.
 
   Definition empty_dialect_state: dialect_state_t :=
     EVMState.empty.
-    
+
+  Definition show_value (v: value_t): string :=
+    Misc.z_to_string (v.(U256.val)).
+  
+  Definition show_opcode (op: opcode_t): string :=
+    EVM_opcode.show op.     
 
 End EVMDialect.
 

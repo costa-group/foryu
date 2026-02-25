@@ -4,6 +4,7 @@ ulimit -s unlimited
 
 start_dir="$(pwd)"
 cfg_dir="benchmark/fm26"
+# cfg_dir="benchmark/semanticTests_cfg"
 #cfg_dir="python/stack_too_deep_cfg"
 translated_file="test_translation.v"
 output_file="output.txt"

@@ -54,6 +54,12 @@ Module Type DIALECT.
   (* An empty dialect state, which is mainly used to testing *)
   Parameter empty_dialect_state : dialect_state_t.
 
+  (* A function to show a value as a string, used for debugging *)
+  Parameter show_value : value_t -> string.
+
+  (* A function to show an opcode as a string, used for debugging *)
+  Parameter show_opcode : opcode_t -> string.
+
 End DIALECT.
 
 
