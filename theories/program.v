@@ -302,11 +302,14 @@ Module PhiInfo (D: DIALECT).
             end
         end
     in
-    let first_100_blocks := List.map (N.of_nat) (List.seq 0 100) in
-    let phi_info_strings : list string := List.map (fun bid => show_in_block_phi_info bid (phi_info bid)) first_100_blocks in
+    let first_blocks := List.map (N.of_nat) (List.seq 0 1000) in
+    let phi_info_strings : list string := List.map (fun bid => show_in_block_phi_info bid (phi_info bid)) first_blocks in
     let phi_info_strings_clean : list string := 
       List.filter (fun s => negb (String.eqb s "")) phi_info_strings in
-    String.concat "\n" phi_info_strings_clean.
+    match phi_info_strings_clean with
+    | [] => ""
+    | _ => String.concat "\n        " phi_info_strings_clean
+    end.
 
   (* an empty map for a block *)
   Definition empty_in_phi_info :=
@@ -369,10 +372,13 @@ Module Instr (D: DIALECT).
                     match aux_op with
                     | ASSIGN => ""
                     end
-                  end
-    in
-    (String.concat ", " (List.map VarID.show i.(output))) ++ " := " ++ op_str ++ " " ++
-    (String.concat ", " (List.map SimpleExprD.show i.(input))). 
+                  end in
+    let input_str := "[" ++ (String.concat ", " (List.map SimpleExprD.show i.(input))) ++ "]" in
+    let output_str := "[" ++ (String.concat ", " (List.map VarID.show i.(output))) ++ "]" in
+    match i.(output) with
+    | [] => "        " ++ op_str ++ " " ++ input_str
+    | _ => "        " ++ output_str ++ " := " ++ op_str ++ " " ++ input_str
+    end.
     
   
   (* IMPORTANT: when there is an error, it uses a default value
@@ -406,10 +412,15 @@ Module Block (D: DIALECT).
     }.
 
   Definition show (b: t) : string :=
-    "Block " ++ BlockID.show b.(bid) ++ ":\n" ++
-    "Phi function:\n" ++ PhiInfoD.show b.(phi_function) ++ "\n" ++
-    "Exit info: " ++ ExitInfoD.show b.(exit_info) ++ "\n" ++
-    "Instructions:\n" ++ String.concat "\n" (List.map InstrD.show b.(instructions)).
+    let phi_str := PhiInfoD.show b.(phi_function) in
+    let phi_str_format := match phi_str with
+                        | "" => "\n"
+                        | _ => "\n        " ++ phi_str ++ "\n"
+                        end in
+    "\n\n    ##" ++ BlockID.show b.(bid) ++ "##\n" ++
+    "    Phi function: " ++ phi_str_format ++
+    "    Exit info: " ++ ExitInfoD.show b.(exit_info) ++ "\n" ++
+    "    Instructions:\n" ++ String.concat "\n" (List.map InstrD.show b.(instructions)).
 
   Definition construct (bid: BlockID.t) (phi_function : PhiInfoD.t) (exit_info : ExitInfoD.t) (instructions : list (InstrD.t)) :=
     {|
@@ -460,10 +471,12 @@ Module CFGFun (D: DIALECT).
     }.
 
   Definition show (f: t) : string :=
+    "--------------------------------------\n" ++
     "Function " ++ FuncName.show f.(name) ++ "(" ++ String.concat ", " (List.map VarID.show f.(args)) ++ ")\n" ++
     "Entry: " ++ BlockID.show f.(entry_bid) ++ "\n" ++
     "Blocks:\n" ++
-    String.concat "\n" (List.map BlockD.show f.(blocks)).
+    String.concat "\n" (List.map BlockD.show f.(blocks)) ++
+    "\n--------------------------------------\n".
 
   Program Definition construct (name : FuncName.t) (args : list VarID.t) (blocks : list BlockD.t) (entry_bid : BlockID.t) : t :=
     match Misc.nodupb VarID.t VarID.eqb args with
@@ -505,6 +518,16 @@ Module CFGProg (D: DIALECT).
     "Contract: " ++ p.(name) ++ "\n" ++
     "Main: " ++ FuncName.show p.(main) ++ "\n" ++
     "Functions: " ++ String.concat "\n" (List.map CFGFunD.show p.(functions)).
+
+  Definition get_function_names (p: t) : list FuncName.t :=
+    List.map (fun f => f.(CFGFunD.name)) p.(functions).
+
+  Definition get_blocks_ids (p: t) (funcname : FuncName.t) : list BlockID.t :=
+    match List.find (fun f => FuncName.eqb f.(CFGFunD.name) funcname) p.(functions) with
+    | Some func => List.map (fun b => b.(BlockD.bid)) func.(CFGFunD.blocks)
+    | _ => []
+    end.
+    
 
   Definition construct (name : string) (main: FuncName.t) (functions : list CFGFunD.t) : t :=
     {| name := name; functions := functions; main := main |}.

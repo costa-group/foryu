@@ -11,6 +11,7 @@ Require Import Coq.Relations.Relation_Operators.
 Require Import stdpp.prelude.
 Require Import stdpp.relations. (* This is where nsteps lives *)
 From Coq Require Import Strings.Ascii.
+Global Open Scope string_scope.
 
 Require Import Coq.MSets.MSetAVL.
 Require Import Coq.Structures.OrdersEx.      (* Provides New Keys *)
@@ -45,6 +46,11 @@ Module Liveness (D: DIALECT).
   
   (* This module defines a set of variables. *)
   Module VarSet := MSetAVL.Make(VarID.VarID_as_OT).
+
+  Definition VarSet_show (s: VarSet.t) : string :=
+    let vars := VarSet.elements s in
+    let var_strings := List.map VarID.show vars in
+    "{" ++ String.concat ", " var_strings ++ "}".
   
   (* convert a list to a set *)
   Fixpoint list_to_set (l : list VarID.t) : VarSet.t :=
@@ -117,6 +123,34 @@ Module Liveness (D: DIALECT).
   (*Definition block_live_info_t := nat -> option VarSet.t.*)
   Definition func_live_info_t := BlockID.t -> option (VarSet.t * VarSet.t).
   Definition prog_live_info_t := FuncName.t -> option func_live_info_t.
+
+
+  Definition show_block_live_info (b_info: func_live_info_t) (bid: BlockID.t) : string :=
+    match b_info bid with
+    | None => ""
+    | Some (in_set, out_set) =>
+        "    " ++ (BlockID.show bid) ++ ": in=" ++ (VarSet_show in_set) ++ ", out=" ++ (VarSet_show out_set)
+    end.
+
+  Definition show_func_live_info (f_info: option func_live_info_t) (p: CFGProgD.t) (f: FuncName.t) : string :=
+    match f_info with
+    | None => ""
+    | Some f_info =>
+        let block_ids := CFGProgD.get_blocks_ids p f in
+        let block_info_strings : list string := List.map (show_block_live_info f_info) block_ids in
+        let block_info_strings_clean : list string := 
+          List.filter (fun s => negb (String.eqb s "")) block_info_strings in
+        match block_info_strings_clean with
+        | [] => ""
+        | _ => String.concat "\n" block_info_strings_clean
+        end
+    end.
+
+  Definition show_prog_live_info_t (r: prog_live_info_t) (p: CFGProgD.t) : string :=
+    let fnames := CFGProgD.get_function_names p in
+    let func_info_strings : list string := 
+      List.map (fun fname => (FuncName.show fname) ++ "\n" ++ (show_func_live_info (r fname) p fname)) fnames in
+    String.concat "\n" func_info_strings.
 
 
   (*
