@@ -702,7 +702,11 @@ let () =
   let prog, liveness_info = extract_prog_and_liveness flat_d' sc_main in
   let prog_str = char_list_to_string (Checker.Checker.EVMCFGProg.show prog) in
   let prog_str = Str.global_replace (Str.regexp "\\\\n") "\n" prog_str in
+  let liveness_info_str = char_list_to_string (Checker.Checker.EVMLiveness.show_prog_live_info_t liveness_info prog) in
+  let liveness_info_str = Str.global_replace (Str.regexp "\\\\n") "\n" liveness_info_str in
   let _ = Printf.printf "Program:\n%s\n" prog_str in
+  let _ = Printf.printf "#####################################\n#####################################\n#####################################\n\n" in
+  let _ = Printf.printf "Liveness info:\n%s\n" liveness_info_str in
   let b = Checker.Checker.EVMLiveness.check_program prog liveness_info in
   if b then 
       Printf.printf "LIVENESS_VALID\n"
