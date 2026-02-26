@@ -11,7 +11,6 @@ Import ListNotations.
 Module Checker.
     (* Module to load all the relevant datatypes and export them into OCaml *)
 
-    (*Module EVMLiveness := Liveness_Subset(EVMDialect).*)
     Module EVMLiveness := Liveness(EVMDialect).
     Module EVMSmallStep := EVMLiveness.SmallStepD.
     Module EVMCFGProg := EVMSmallStep.CFGProgD.
