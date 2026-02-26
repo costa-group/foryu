@@ -11,12 +11,15 @@ Require Import Coq.Relations.Relation_Operators.
 Require Import stdpp.prelude.
 Require Import stdpp.relations. (* This is where nsteps lives *)
 From Coq Require Import Strings.Ascii.
+Global Open Scope string_scope.
 
 Require Import Coq.MSets.MSetAVL.
 Require Import Coq.Structures.OrdersEx.      (* Provides New Keys *)
 
+From ReductionEffect Require Import PrintingEffect.
 
-Module Liveness_Subset (D: DIALECT).
+
+Module Liveness (D: DIALECT).
 
   Module SmallStepD := SmallStep(D).
   Module StateD := SmallStepD.StateD.
@@ -46,6 +49,11 @@ Module Liveness_Subset (D: DIALECT).
   
   (* This module defines a set of variables. *)
   Module VarSet := MSetAVL.Make(VarID.VarID_as_OT).
+
+  Definition VarSet_show (s: VarSet.t) : string :=
+    let vars := VarSet.elements s in
+    let var_strings := List.map VarID.show vars in
+    "{" ++ String.concat ", " var_strings ++ "}".
   
   (* convert a list to a set *)
   Fixpoint list_to_set (l : list VarID.t) : VarSet.t :=
@@ -119,6 +127,34 @@ Module Liveness_Subset (D: DIALECT).
   Definition func_live_info_t := BlockID.t -> option (VarSet.t * VarSet.t).
   Definition prog_live_info_t := FuncName.t -> option func_live_info_t.
 
+  Definition show_block_live_info (b_info: func_live_info_t) (bid: BlockID.t) : string :=
+    match b_info bid with
+    | None => ""
+    | Some (in_set, out_set) =>
+        "    " ++ (BlockID.show bid) ++ ": in=" ++ (VarSet_show in_set) ++ ", out=" ++ (VarSet_show out_set)
+    end.
+
+  Definition show_func_live_info (f_info: option func_live_info_t) (p: CFGProgD.t) (f: FuncName.t) : string :=
+    match f_info with
+    | None => ""
+    | Some f_info =>
+        let block_ids := CFGProgD.get_blocks_ids p f in
+        let block_info_strings : list string := List.map (show_block_live_info f_info) block_ids in
+        let block_info_strings_clean : list string := 
+          List.filter (fun s => negb (String.eqb s "")) block_info_strings in
+        match block_info_strings_clean with
+        | [] => ""
+        | _ => String.concat "\n" block_info_strings_clean
+        end
+    end.
+
+  Definition show_prog_live_info_t (r: prog_live_info_t) (p: CFGProgD.t) : string :=
+    let fnames := CFGProgD.get_function_names p in
+    let func_info_strings : list string := 
+      List.map (fun fname => (FuncName.show fname) ++ "\n" ++ (show_func_live_info (r fname) p fname)) fnames in
+    String.concat "\n" func_info_strings.
+
+
 
   (*
     Liveness analysis is typically based on solving the following equations:
@@ -141,7 +177,7 @@ Module Liveness_Subset (D: DIALECT).
   
   (* Checks that the live-in set of a block [b] is sound, meaning that
   it is equivalent to propagating back its live-out set *)
-  Definition check_live_in (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
+  Definition check_live_in_subset (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
     match (r f) with
     | None => false
     | Some f_info =>
@@ -149,13 +185,13 @@ Module Liveness_Subset (D: DIALECT).
       | None => false
       | Some (b_in_info,b_out_info) =>
           (* VarSet.equal b_in_info (prop_live_set_bkw b.(BlockD.instructions) (add_jump_var_if_applicable b b_out_info)) *)
-          VarSet.subset b_in_info (prop_live_set_bkw b.(BlockD.instructions) (add_jump_var_if_applicable b b_out_info))
+          VarSet.subset (prop_live_set_bkw b.(BlockD.instructions) (add_jump_var_if_applicable b b_out_info)) b_in_info
       end
     end.
   
   (* Checks that the live-out set of a block [b] is sound. It handle
   several cases depending on the kid of block *)
-  Definition check_live_out (p: CFGProgD.t) (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
+  Definition check_live_out_subset (p: CFGProgD.t) (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
     match (r f) with
     | None => false
     | Some f_info =>
@@ -166,13 +202,13 @@ Module Liveness_Subset (D: DIALECT).
               (* Terminate block has an empty live-out set *)
             | ExitInfoD.Terminate =>
                 (* VarSet.equal b_out_info VarSet.empty *)               
-                VarSet.subset b_out_info VarSet.empty
+                VarSet.subset VarSet.empty b_out_info
                              
               (* The live-out set of a return block is the set of
               variables in its returned expressions *)
             | ExitInfoD.ReturnBlock ret_sexprs => 
                 (* VarSet.equal b_out_info (list_to_set (extract_yul_vars ret_sexprs)) *)
-                VarSet.subset b_out_info (list_to_set (extract_yul_vars ret_sexprs))
+                VarSet.subset (list_to_set (extract_yul_vars ret_sexprs)) b_out_info
 
             (* The live-out set of a jump blocks is obtained from the
             live-in of the next block, after applying the inverse of
@@ -185,7 +221,7 @@ Module Liveness_Subset (D: DIALECT).
                     | None => false
                     | Some (next_b_in_info,next_b_out_info) =>
                         (* VarSet.equal b_out_info (apply_inv_phi (BlockD.phi_function next_b b.(BlockD.bid)) next_b_in_info) *)
-                        VarSet.subset b_out_info (apply_inv_phi (BlockD.phi_function next_b b.(BlockD.bid)) next_b_in_info)
+                        VarSet.subset (apply_inv_phi (BlockD.phi_function next_b b.(BlockD.bid)) next_b_in_info) b_out_info
                     end
                 end
                   
@@ -219,34 +255,35 @@ Module Liveness_Subset (D: DIALECT).
 
   (* Checks that the liveness information of [b] is sound, i.e., that
   both live-in and live-out are sound *)
-  Definition check_live (p: CFGProgD.t) (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
-    if (check_live_in r f b) then check_live_out p r f b else false.
+  Definition check_live_subset (p: CFGProgD.t) (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
+    if (check_live_in_subset r f b) then check_live_out_subset p r f b else false.
 
 
   (* Checks that liveness information of all blocks in [bs] *)
-  Fixpoint check_blocks (bs: list BlockD.t) (fname: FuncName.t) (p: CFGProgD.t) (r: prog_live_info_t) :=
+  Fixpoint check_blocks_subset (bs: list BlockD.t) (fname: FuncName.t) (p: CFGProgD.t) (r: prog_live_info_t) :=
     match bs with
     | nil => true
-    | b::bs' => if (check_live p r fname b)
-                then check_blocks bs' fname p r
+    | b::bs' => if (check_live_subset p r fname b)
+                then check_blocks_subset bs' fname p r
                 else false
     end.
 
 
   (* Checks  liveness information of all blocks of functions [fs] *)
-  Fixpoint check_functions (fs: list CFGFunD.t) (p: CFGProgD.t) (r: prog_live_info_t) :=
+  Fixpoint check_functions_subset (fs: list CFGFunD.t) (p: CFGProgD.t) (r: prog_live_info_t) :=
     match fs with
     | nil => true
-    | f::fs' => if (check_blocks f.(blocks) f.(name) p r)
-                then check_functions fs' p r
+    | f::fs' => if (check_blocks_subset f.(blocks) f.(name) p r)
+                then check_functions_subset fs' p r
                 else false
     end.
 
 
   (* Checks that liveness information of all blocks of all functions [fs] of the program [p] *)
   Definition check_program_subset (p: CFGProgD.t) (r: prog_live_info_t) : bool:=
-    check_functions p.(functions) p r.
+    let _ := print_id 42 in
+    check_functions_subset p.(functions) p r.
 
-End Liveness_Subset.
+End Liveness.
 
 

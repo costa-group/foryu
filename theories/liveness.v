@@ -273,5 +273,116 @@ Module Liveness (D: DIALECT).
     check_functions p.(functions) p r.
 
 
+  (****************************************************)
+  (** Non-optimal liveness analysis (subset version) **)
+  (****************************************************)
+  
+  (* Checks that the live-in set of a block [b] is sound, meaning that
+  it is equivalent to propagating back its live-out set *)
+  Definition check_live_in_subset (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
+    match (r f) with
+    | None => false
+    | Some f_info =>
+      match f_info b.(BlockD.bid) with
+      | None => false
+      | Some (b_in_info,b_out_info) =>
+          (* VarSet.equal b_in_info (prop_live_set_bkw b.(BlockD.instructions) (add_jump_var_if_applicable b b_out_info)) *)
+          VarSet.subset (prop_live_set_bkw b.(BlockD.instructions) (add_jump_var_if_applicable b b_out_info)) b_in_info
+      end
+    end.
+  
+  (* Checks that the live-out set of a block [b] is sound. It handle
+  several cases depending on the kid of block *)
+  Definition check_live_out_subset (p: CFGProgD.t) (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
+    match (r f) with
+    | None => false
+    | Some f_info =>
+        match (f_info b.(bid)) with
+        | None => false
+        | Some (b_in_info,b_out_info) =>
+            match b.(exit_info) with
+              (* Terminate block has an empty live-out set *)
+            | ExitInfoD.Terminate =>
+                (* VarSet.equal b_out_info VarSet.empty *)               
+                VarSet.subset VarSet.empty b_out_info
+                             
+              (* The live-out set of a return block is the set of
+              variables in its returned expressions *)
+            | ExitInfoD.ReturnBlock ret_sexprs => 
+                (* VarSet.equal b_out_info (list_to_set (extract_yul_vars ret_sexprs)) *)
+                VarSet.subset (list_to_set (extract_yul_vars ret_sexprs)) b_out_info
+
+            (* The live-out set of a jump blocks is obtained from the
+            live-in of the next block, after applying the inverse of
+            the phi-function *)
+            | ExitInfoD.Jump next_bid =>
+                match (CFGProgD.get_block p f next_bid) with
+                | None => false
+                | Some next_b =>
+                    match (f_info next_bid) with
+                    | None => false
+                    | Some (next_b_in_info,next_b_out_info) =>
+                        (* VarSet.equal b_out_info (apply_inv_phi (BlockD.phi_function next_b b.(BlockD.bid)) next_b_in_info) *)
+                        VarSet.subset (apply_inv_phi (BlockD.phi_function next_b b.(BlockD.bid)) next_b_in_info) b_out_info
+                    end
+                end
+                  
+            (* Like the case of jump, but takes union for all successors *)
+            | ExitInfoD.ConditionalJump cond_var next_bid_if_true next_bid_if_false =>
+                match (CFGProgD.get_block p f next_bid_if_true) with
+                | None => false
+                | Some next_b_if_true =>
+                    match (CFGProgD.get_block p f next_bid_if_false) with
+                    | None => false
+                    | Some next_b_if_false =>
+                        match (f_info next_bid_if_true) with
+                        | None => false
+                        | Some (next_b_ift_in_info,next_b_ift_out_info) =>
+                            match (f_info next_bid_if_false) with
+                            | None => false
+                            | Some (next_b_iff_in_info,next_b_iff_out_info) =>
+                               (* VarSet.equal b_out_info (VarSet.union
+                                                           (apply_inv_phi (BlockD.phi_function next_b_if_true b.(BlockD.bid)) next_b_ift_in_info)
+                                                           (apply_inv_phi (BlockD.phi_function next_b_if_false b.(BlockD.bid)) next_b_iff_in_info)) *)
+                                VarSet.subset b_out_info (VarSet.union
+                                                           (apply_inv_phi (BlockD.phi_function next_b_if_true b.(BlockD.bid)) next_b_ift_in_info)
+                                                           (apply_inv_phi (BlockD.phi_function next_b_if_false b.(BlockD.bid)) next_b_iff_in_info))
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end.
+
+  (* Checks that the liveness information of [b] is sound, i.e., that
+  both live-in and live-out are sound *)
+  Definition check_live_subset (p: CFGProgD.t) (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=
+    if (check_live_in_subset r f b) then check_live_out_subset p r f b else false.
+
+
+  (* Checks that liveness information of all blocks in [bs] *)
+  Fixpoint check_blocks_subset (bs: list BlockD.t) (fname: FuncName.t) (p: CFGProgD.t) (r: prog_live_info_t) :=
+    match bs with
+    | nil => true
+    | b::bs' => if (check_live_subset p r fname b)
+                then check_blocks_subset bs' fname p r
+                else false
+    end.
+
+
+  (* Checks  liveness information of all blocks of functions [fs] *)
+  Fixpoint check_functions_subset (fs: list CFGFunD.t) (p: CFGProgD.t) (r: prog_live_info_t) :=
+    match fs with
+    | nil => true
+    | f::fs' => if (check_blocks_subset f.(blocks) f.(name) p r)
+                then check_functions_subset fs' p r
+                else false
+    end.
+
+
+  (* Checks that liveness information of all blocks of all functions [fs] of the program [p] *)
+  Definition check_program_subset (p: CFGProgD.t) (r: prog_live_info_t) : bool:=
+    check_functions_subset p.(functions) p r.
 
 End Liveness.

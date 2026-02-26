@@ -668,16 +668,20 @@ let get_size (json: Yojson.Safe.t) : int * int =
 (* Arguments *)
 let input_file = ref ""
 let size = ref false
+let subset = ref false
+let verbose = ref false
 
 let speclist = [
   ("-i", Arg.Set_string input_file, "Input JSON file");
   ("-size", Arg.Set size, "Print size of the input file");
+  ("-subset", Arg.Set subset, "Checks non-optimal liveness information");
+  ("-v", Arg.Set verbose, "Prints the extracted program and liveness information from the JSON file (for debugging)");
 ]
 
 let anon_fun arg =
   raise (Arg.Bad ("Unexpected argument: " ^ arg))
 
-let usage_msg = "Usage: ./checker [-size] -i filename.json"
+let usage_msg = "Usage: ./checker [-size] [-subset] [-v] -i filename.json"
 
 let () =
   Arg.parse speclist anon_fun usage_msg;
@@ -700,18 +704,22 @@ let () =
   (*let json_flatd' = Yojson.Safe.pretty_to_string flat_d' in
   let _ = print_endline json_flatd' in *)
   let prog, liveness_info = extract_prog_and_liveness flat_d' sc_main in
-  let prog_str = char_list_to_string (Checker.Checker.EVMCFGProg.show prog) in
-  let prog_str = Str.global_replace (Str.regexp "\\\\n") "\n" prog_str in
-  let liveness_info_str = char_list_to_string (Checker.Checker.EVMLiveness.show_prog_live_info_t liveness_info prog) in
-  let liveness_info_str = Str.global_replace (Str.regexp "\\\\n") "\n" liveness_info_str in
-  let _ = Printf.printf "Program:\n%s\n" prog_str in
-  let _ = Printf.printf "#####################################\n#####################################\n#####################################\n\n" in
-  let _ = Printf.printf "Liveness info:\n%s\n" liveness_info_str in
-  let b = Checker.Checker.EVMLiveness.check_program prog liveness_info in
-  if b then 
-      Printf.printf "LIVENESS_VALID\n"
-    else
-      Printf.printf "LIVENESS_INVALID\n"
+  if !verbose then
+    let prog_str = char_list_to_string (Checker.Checker.EVMCFGProg.show prog) in
+    let prog_str = Str.global_replace (Str.regexp "\\\\n") "\n" prog_str in
+    let liveness_info_str = char_list_to_string (Checker.Checker.EVMLiveness.show_prog_live_info_t liveness_info prog) in
+    let liveness_info_str = Str.global_replace (Str.regexp "\\\\n") "\n" liveness_info_str in
+    Printf.printf "Program:\n%s\n" prog_str;
+    Printf.printf "#####################################\n#####################################\n#####################################\n\n";
+    Printf.printf "Liveness info:\n%s\n" liveness_info_str;
+  else
+    let func = if !subset then Checker.Checker.EVMLiveness.check_program_subset 
+               else Checker.Checker.EVMLiveness.check_program in
+    let b = func prog liveness_info in
+      if b then 
+        print_endline "LIVENESS_VALID"
+      else
+        print_endline "LIVENESS_INVALID"
 
 
 (***** Examples of Program and Liveness Info  as OCaml expressions ******)
