@@ -3,9 +3,10 @@ Require Export FORYU.semantics.
 Require Export FORYU.evm_dialect.
 Require Export FORYU.liveness.
 (*Require Export FORYU.liveness_subset.*)
-Require Import NArith.
-Require Import Coq.ZArith.ZArith.
-Require Import Arith.
+
+From Stdlib Require Import NArith.
+From Stdlib Require Import ZArith.ZArith.
+From Stdlib Require Import Arith.
 Import ListNotations.
 
 Module Checker.

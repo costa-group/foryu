@@ -1,20 +1,22 @@
 Require Import FORYU.state.
 Require Import FORYU.program.
 Require Import FORYU.semantics.
-Require Import Orders.
-Require Import OrdersEx.
-Require Import MSets.
-Require Import Arith.
-Require Import List.
+
+From Stdlib Require Import Orders.
+From Stdlib Require Import OrdersEx.
+From Stdlib Require Import MSets.
+From Stdlib Require Import Arith.
+From Stdlib Require Import List.
 Import ListNotations.
-Require Import Coq.Relations.Relation_Operators.
+
+From Stdlib  Require Import Relations.Relation_Operators.
 Require Import stdpp.prelude.
 Require Import stdpp.relations. (* This is where nsteps lives *)
-From Coq Require Import Strings.Ascii.
+From Stdlib Require Import Strings.Ascii.
 Global Open Scope string_scope.
 
-Require Import Coq.MSets.MSetAVL.
-Require Import Coq.Structures.OrdersEx.      (* Provides New Keys *)
+From Stdlib Require Import MSets.MSetAVL.
+From Stdlib Require Import Structures.OrdersEx.      (* Provides New Keys *)
 
 Module Liveness (D: DIALECT).
 
@@ -276,7 +278,7 @@ Module Liveness (D: DIALECT).
   (****************************************************)
   (** Non-optimal liveness analysis (subset version) **)
   (****************************************************)
-  
+
   (* Checks that the live-in set of a block [b] is sound, meaning that
   it is equivalent to propagating back its live-out set *)
   Definition check_live_in_subset (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t) : bool :=

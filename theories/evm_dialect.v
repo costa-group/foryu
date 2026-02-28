@@ -1,12 +1,12 @@
 Require Import FORYU.dialect.
 Require Import FORYU.misc.
-Require Import Coq.ZArith.ZArith.
-Require Import Coq.Lists.List.
+From Stdlib Require Import ZArith.ZArith.
+From Stdlib Require Import Lists.List.
 Import ListNotations.
-Require Coq.Strings.HexString.
-Require Import Coq.Strings.String.
-Require Import Coq.Logic.ProofIrrelevance.
-Require Import Bool.
+From Stdlib Require Strings.HexString.
+From Stdlib Require Import Strings.String.
+From Stdlib Require Import Logic.ProofIrrelevance.
+From Stdlib Require Import Bool.
 
 Open Scope Z_scope. (* Important: Makes '+' refer to Z.add *)
 

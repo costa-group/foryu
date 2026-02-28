@@ -2,18 +2,19 @@ Require Import FORYU.state.
 Require Import FORYU.program.
 Require Import FORYU.semantics.
 Require Import FORYU.liveness.
-Require Import Orders.
-Require Import OrdersEx.
-Require Import MSets.
-Require Import Arith.
-Require Import List.
+
+From Stdlib Require Orders.
+From Stdlib Require OrdersEx.
+From Stdlib Require MSets.
+From Stdlib Require Arith.
+From Stdlib Require List.
 Import ListNotations.
-Require Import Coq.Relations.Relation_Operators.
+From Stdlib Require Import Relations.Relation_Operators.
 Require Import stdpp.prelude.
 Require Import stdpp.relations.
-Require Import Coq.Logic.FunctionalExtensionality.
-Require Import Coq.Logic.Classical_Pred_Type.
-Require Import Lia.
+From Stdlib Require Import Logic.FunctionalExtensionality.
+From Stdlib Require Import Logic.Classical_Pred_Type.
+From Stdlib Require Lia.
 
 
 Module Liveness_snd (D: DIALECT).

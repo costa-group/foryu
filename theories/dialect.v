@@ -1,6 +1,6 @@
-Require Import Coq.Strings.String.
-Require Import Coq.Bool.Bool.
-Require Import Coq.Lists.List.
+From Stdlib Require Import Strings.String.
+From Stdlib Require Import Bool.Bool.
+From Stdlib Require Import List.
 Require Import FORYU.misc.
 
 (* [Status] of the program execution. It is shared beween YUL states
