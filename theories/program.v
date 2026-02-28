@@ -7,12 +7,12 @@ Data structures for CFG-YUL programs
 Require Export FORYU.misc.
 Require Export FORYU.dialect.
 Require Export FORYU.misc.
-Require Export Coq.Lists.List.
+From Stdlib Require Export Lists.List.
 Import ListNotations.
-Require Export Coq.Strings.String.
-Require Import MSets.
-Require Import NArith.
-Require Import Arith.
+From Stdlib Require Export Strings.String.
+From Stdlib Require Import MSets.
+From Stdlib Require Import NArith.
+From Stdlib Require Import Arith.
 
 Global Open Scope string_scope.
 Global Open Scope Z_scope.

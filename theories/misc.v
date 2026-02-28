@@ -1,9 +1,9 @@
-Require Import Coq.Bool.Bool.
-Require Import Coq.Logic.Classical_Pred_Type.
-Require Import List Bool.
-Require Import ZArith.
-Require Import String.
-Require Import DecimalString.
+From Stdlib Require Import Bool.Bool.
+From Stdlib Require Import Logic.Classical_Pred_Type.
+From Stdlib Require Import List.
+From Stdlib Require Import ZArith.
+From Stdlib Require Import String.
+From Stdlib Require Import DecimalString.
 
 Open Scope Z_scope.
 

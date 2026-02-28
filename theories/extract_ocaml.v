@@ -19,17 +19,18 @@
     - Extract option
     - Extract nat into an efficient type.
     - Extract bbv library Word into an efficient type. *)
- 
-From Coq Require Import Strings.String.
-Require Import List.
-Import ListNotations.
-(*Require Import FORYU.test_translation.
-Import TestTranslation.*)
+
 Require Import FORYU.checker.
 Import Checker.
-From Coq Require Import extraction.ExtrOcamlString.
+(*Require Import FORYU.test_translation.
+Import TestTranslation.*)
+
+From Stdlib Require Import Strings.String.
+From Stdlib Require Import List.
+Import ListNotations.
+From Stdlib Require Import extraction.ExtrOcamlString.
 Import ExtrOcamlString.
-Require Import extraction.ExtrOcamlZBigInt. (* Extracts Z.t *)
+From Stdlib Require Import extraction.ExtrOcamlZBigInt. (* Extracts Z.t *)
 
 (** Type Extractions **)
 Extract Inductive bool => "bool" [ "true" "false" ].
