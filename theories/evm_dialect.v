@@ -46,7 +46,7 @@ Module U256.
       intro H_assume_equal.
       rewrite H_assume_equal in Hneq.
       contradiction.
-  Qed.
+  Defined.
   
   (* For rewriting [eqb x y = true] and [x = y] and vice versa *)
   Lemma eqb_eq : forall x y, eqb x y = true <-> x = y.
