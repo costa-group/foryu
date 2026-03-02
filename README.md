@@ -2,12 +2,18 @@
 A FORmal semantics for Yul in Coq
 
 ## Requirements
-1. Coq 8.20.1 (Rocq Prover 2025.01 with the first package pick from Jan 2025)
+1. Rocq 9.0.1 (released March 2025) with the preview package pick from July 2025
+1. OCaml libraries `yojson` and `zarith`, which can be installed using `opam`:
+
+        $ opam install yojson zarith
 
 ## Compilation
 
     $ coq_makefile -f _CoqProject -o Makefile
     $ make
+    $ make -C ocaml_interface/
+
+This commands will compile a static binary `bin/static_foryu` and a dinamically linked binary `bin/foryu`.
 
 ## Installation of the Rocq Platform on Linux
 The recommended way to install the Rocq Prover for the FORYU project is using the **Rocq Platform**, following the instructions at:
@@ -17,9 +23,9 @@ https://github.com/rocq-prover/platform/blob/2025.01.0/doc/README_Linux.md#insta
 
 Recommended options:
 
-* Coq Version 8.20
+* Coq Version 9.0.1
 
-      Coq 8.20.1 (released Jan 2025) with the first package pick from Jan 2025`
+      Rocq 9.0.1 (released March 2025) with the preview package pick from July 2025
 
 * Full installation
 
