@@ -186,6 +186,28 @@ Module U256.
     let shifted_value := signed_value / (2 ^ (val shift)) in
     to_t shifted_value.
 
+
+  (** Count the number of constructors in a positive number *)
+  Fixpoint __count_constructors_pos (p: positive): nat :=
+    match p with
+    | xH => 1
+    | xO p' => S (__count_constructors_pos p')
+    | xI p' => S (__count_constructors_pos p')
+    end.
+
+  (** Count the number of constructors in a Z value *)
+  Definition __count_constructors_Z (z: Z): nat :=
+    match z with
+    | Z0 => 0
+    | Zpos p => __count_constructors_pos p
+    | Zneg p => __count_constructors_pos p
+    end.
+
+  Definition clz (x: U256.t): U256.t :=
+    let x_val := val x in
+    let len := Z.of_nat (__count_constructors_Z x_val) in
+    to_t (256 - len). 
+
   Definition addmod (x y m: U256.t): U256.t :=
     to_t ( ((val x) + (val y)) mod (val m) ). (* this could be improved to eliminate the call to to_t *)
 
@@ -257,28 +279,59 @@ Module EVMMemory.
   *)
   (** We define the memory as a function instead of an explicit list as there can be holes in it. It
       goes from addresses in [U256.t] to bytes represented as [Z]. *)
-  Definition t: Type :=
-    U256.t -> U8.t.
+  Record t : Type := {
+    memory : U256.t -> U8.t;
+    highest_address: U256.t; (* this is used to track the highest address that has been accessed, which is needed for MSIZE instruction *)
+  }.
 
-  Definition empty: t :=
-    fun _ => U8.zero.
+  Definition empty: t := {|
+    memory := fun _ => U8.zero;
+    highest_address := U256.zero
+  |}.
 
-  (** Get the bytes from some memory from a start adress and for a certain length. *)
-  Definition get_bytes (memory: EVMMemory.t) (start length: U256.t): list U8.t :=
-    List.map
+  Definition msize (memory: t): U256.t :=
+    (* The size is always a multiple of a word (32 bytes) *)
+    let size := memory.(highest_address) in
+    if U256.eqb size U256.zero then U256.zero
+    else
+      let remainder := U256.mod_evm size (U256.to_t 32) in
+      if U256.eqb remainder U256.zero then size
+      else U256.add size (U256.sub (U256.to_t 32) remainder).
+
+  Definition update_highest_address (memory: t) (address: U256.t): t :=
+    match U256.eqb (U256.gt address memory.(highest_address)) U256.one with
+    | true => {| memory := EVMMemory.memory memory; 
+                 highest_address := address 
+              |}
+    | false => memory
+    end.
+
+  Definition update_memory (memory: t) (new_memory: U256.t -> U8.t): t :=
+    {| memory := new_memory; 
+       highest_address := memory.(highest_address) 
+    |}.
+
+  (** Get the bytes from some memory from a start address and for a certain length. *)
+  Definition get_bytes (memoryt: EVMMemory.t) (start length: U256.t): (list U8.t * EVMMemory.t) :=
+    let bytes : list U8.t := List.map
       (fun (i: nat) =>
          let address: U256.t := U256.to_t ((U256.val start) + Z.of_nat i) in (* when reaching end of memory we start from 0 *)
-         memory address
+         (EVMMemory.memory memoryt) address
       )
-      (List.seq 0 (Z.to_nat (U256.val length))).
+      (List.seq 0 (Z.to_nat (U256.val length))) in
+    let memory := update_highest_address memoryt (U256.to_t ((U256.val start) + (U256.val length) - 1)) in
+    (bytes, memory).
 
-  Definition update_bytes (memory: EVMMemory.t) (start: U256.t) (bytes: list U8.t): EVMMemory.t :=
-    fun address =>
+  Definition update_bytes (memoryt: EVMMemory.t) (start: U256.t) (bytes: list U8.t): EVMMemory.t :=
+    let memory := fun address =>
       let i: Z := (U256.val address) - (U256.val start) in
       if andb (0 <=? i) (i <? Z.of_nat (List.length bytes)) then
         List.nth_default U8.zero bytes (Z.to_nat i)
       else
-        memory address.
+        (EVMMemory.memory memoryt) address in
+    let m1 := update_highest_address memoryt (U256.to_t ((U256.val start) + Z.of_nat (List.length bytes) - 1)) in
+    let m2 := update_memory m1 memory in
+    m2.
 
   Definition u256_as_bytes (value: U256.t): list U8.t :=
     List.map
@@ -329,6 +382,7 @@ End EVMMemorySegment.
 Module EVMState.
   Record t: Type := {
     storage: EVMStorage.t;
+    tstorage: EVMStorage.t; 
     memory: EVMMemory.t;
     call_data_seg: EVMMemorySegment.t;
     return_data_seg: EVMMemorySegment.t;
@@ -337,10 +391,39 @@ Module EVMState.
   Definition empty: t :=
     {| 
       storage := EVMStorage.empty;
+      tstorage := EVMStorage.empty;
       memory := EVMMemory.empty;
       call_data_seg := EVMMemorySegment.empty;
       return_data_seg := EVMMemorySegment.empty;
     |}.
+
+  Definition update_storage (state: t) (storage' : EVMStorage.t): t :=
+  {| 
+    storage := storage';
+    tstorage := state.(tstorage);
+    memory := state.(memory);
+    call_data_seg := state.(call_data_seg);
+    return_data_seg := state.(return_data_seg);
+  |}.
+
+  Definition update_tstorage (state: t) (tstorage' : EVMStorage.t): t :=
+  {| 
+    storage := state.(storage);
+    tstorage := tstorage';
+    memory := state.(memory);
+    call_data_seg := state.(call_data_seg);
+    return_data_seg := state.(return_data_seg);
+  |}.
+
+  Definition update_memory (state: t) (memory' : EVMMemory.t): t :=
+  {| 
+    storage := state.(storage);
+    tstorage := state.(tstorage);
+    memory := memory';
+    call_data_seg := state.(call_data_seg);
+    return_data_seg := state.(return_data_seg); 
+  |}.
+
 End EVMState.
 
 
@@ -369,6 +452,7 @@ Module EVM_opcode.
     | SHL
     | SHR
     | SAR
+    | CLZ
     | ADDMOD
     | MULMOD
     | SIGNEXTEND
@@ -535,6 +619,10 @@ Module EVM_opcode.
                | [x; y] => ([U256.sar x y], state, Status.Running)
                | _ => ([], state, Status.Error "SAR expects 2 inputs")
                end
+      | CLZ => match inputs with
+               | [x] => ([U256.clz x], state, Status.Running)
+               | _ => ([], state, Status.Error "CLZ expects 1 input")
+               end
       | ADDMOD => match inputs with
                | [x; y; m] => ([U256.addmod x y m], state, Status.Running)
                | _ => ([], state, Status.Error "ADDMOD expects 3 inputs")
@@ -547,17 +635,53 @@ Module EVM_opcode.
                | [i; x] => ([U256.signextend i x], state, Status.Running)
                | _ => ([], state, Status.Error "SIGNEXTEND expects 2 inputs")
                end
-               
-      | SSTORE => 
-          match inputs with
-          | value ::addr :: nil =>
-              let new_storage := EVMStorage.update state.(EVMState.storage) addr value in
-              let new_state := {| EVMState.storage := new_storage;
-                                  EVMState.memory := state.(EVMState.memory);
-                                  EVMState.call_data_seg := state.(EVMState.call_data_seg);
-                                  EVMState.return_data_seg := state.(EVMState.return_data_seg) |} in
-              ([], new_state, Status.Running)
-          | _ => ([], state, Status.Error "SSTORE expects 2 inputs")
+      | KECCAK256 => match inputs with
+               | [p; n] => ([U256.to_t 42], state, Status.Running) (* FIXME: implement *)
+               | _ => ([], state, Status.Error "KECCAK256 expects 2 inputs")     
+               end
+      | POP => match inputs with
+               | [x] => ([], state, Status.Running)
+               | _ => ([], state, Status.Error "POP expects 1 input")
+               end
+      | MLOAD => match inputs with
+                | [addr] => let (bytes, nmemory) := EVMMemory.get_bytes (EVMState.memory state) addr (U256.to_t 32) in
+                            let value := EVMMemory.bytes_as_u256 bytes in
+                            let new_state := EVMState.update_memory state nmemory in
+                            ([value], new_state, Status.Running) 
+                | _ => ([], state, Status.Error "MLOAD expects 1 input")
+                end
+      | MSTORE => match inputs with
+                | [addr; value] => let bytes := EVMMemory.u256_as_bytes value in
+                                   let new_memory := EVMMemory.update_bytes (EVMState.memory state) addr bytes in
+                                   let new_state := EVMState.update_memory state new_memory in
+                                   ([], new_state, Status.Running)
+                | _ => ([], state, Status.Error "MSTORE expects 2 inputs")
+          end
+      | SLOAD => match inputs with
+                | [addr] => let value := (EVMState.storage state) addr in
+                             ([value], state, Status.Running)
+                | _ => ([], state, Status.Error "SLOAD expects 1 input")
+          end
+      | SSTORE => match inputs with
+                | [value; addr] => let new_storage := EVMStorage.update state.(EVMState.storage) addr value in
+                                   let new_state := EVMState.update_storage state new_storage in
+                                   ([], new_state, Status.Running)
+                | _ => ([], state, Status.Error "SSTORE expects 2 inputs")
+          end
+      | TLOAD => match inputs with
+                | [addr] => let value := (EVMState.tstorage state) addr in
+                             ([value], state, Status.Running)
+                | _ => ([], state, Status.Error "TLOAD expects 1 input")
+          end
+      | TSTORE => match inputs with
+                | [value; addr] => let new_tstorage := EVMStorage.update state.(EVMState.tstorage) addr value in
+                                   let new_state := EVMState.update_tstorage state new_tstorage in
+                                   ([], new_state, Status.Running)
+                | _ => ([], state, Status.Error "TSTORE expects 2 inputs")
+          end
+      | MSIZE => match inputs with
+                | [] => ([EVMMemory.msize (EVMState.memory state)], state, Status.Running)
+                | _ => ([], state, Status.Error "MSIZE expects 0 inputs")
           end
       | _  =>  ([U256.to_t 42], state, Status.Running) (* FIXME: organize and complete *)
       end. 
@@ -587,6 +711,7 @@ Module EVM_opcode.
       | SHL => "SHL"
       | SHR => "SHR"
       | SAR => "SAR"
+      | CLZ => "CLZ"
       | ADDMOD => "ADDMOD"
       | MULMOD => "MULMOD"
       | SIGNEXTEND => "SIGNEXTEND"
