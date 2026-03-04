@@ -188,24 +188,24 @@ Module U256.
 
 
   (** Count the number of constructors in a positive number *)
-  Fixpoint __count_constructors_pos (p: positive): nat :=
+  Fixpoint _count_constructors_pos (p: positive): nat :=
     match p with
     | xH => 1
-    | xO p' => S (__count_constructors_pos p')
-    | xI p' => S (__count_constructors_pos p')
+    | xO p' => S (_count_constructors_pos p')
+    | xI p' => S (_count_constructors_pos p')
     end.
 
   (** Count the number of constructors in a Z value *)
-  Definition __count_constructors_Z (z: Z): nat :=
+  Definition _count_constructors_Z (z: Z): nat :=
     match z with
     | Z0 => 0
-    | Zpos p => __count_constructors_pos p
-    | Zneg p => __count_constructors_pos p
+    | Zpos p => _count_constructors_pos p
+    | Zneg p => _count_constructors_pos p
     end.
 
   Definition clz (x: U256.t): U256.t :=
     let x_val := val x in
-    let len := Z.of_nat (__count_constructors_Z x_val) in
+    let len := Z.of_nat (_count_constructors_Z x_val) in
     to_t (256 - len). 
 
   Definition addmod (x y m: U256.t): U256.t :=
@@ -386,6 +386,10 @@ Module EVMState.
     memory: EVMMemory.t;
     call_data_seg: EVMMemorySegment.t;
     return_data_seg: EVMMemorySegment.t;
+    gas: U256.t;
+    address: U256.t;
+    balance: U256.t -> U256.t;
+    caller: U256.t;
   }.
 
   Definition empty: t :=
@@ -395,6 +399,10 @@ Module EVMState.
       memory := EVMMemory.empty;
       call_data_seg := EVMMemorySegment.empty;
       return_data_seg := EVMMemorySegment.empty;
+      gas := U256.zero;
+      address := U256.zero;
+      balance := fun _ => U256.zero;
+      caller := U256.zero;
     |}.
 
   Definition update_storage (state: t) (storage' : EVMStorage.t): t :=
@@ -404,6 +412,10 @@ Module EVMState.
     memory := state.(memory);
     call_data_seg := state.(call_data_seg);
     return_data_seg := state.(return_data_seg);
+    gas := state.(gas);
+    address := state.(address);
+    balance := state.(balance);
+    caller := state.(caller);
   |}.
 
   Definition update_tstorage (state: t) (tstorage' : EVMStorage.t): t :=
@@ -413,6 +425,10 @@ Module EVMState.
     memory := state.(memory);
     call_data_seg := state.(call_data_seg);
     return_data_seg := state.(return_data_seg);
+    gas := state.(gas);
+    address := state.(address);
+    balance := state.(balance);
+    caller := state.(caller);
   |}.
 
   Definition update_memory (state: t) (memory' : EVMMemory.t): t :=
@@ -422,6 +438,23 @@ Module EVMState.
     memory := memory';
     call_data_seg := state.(call_data_seg);
     return_data_seg := state.(return_data_seg); 
+    gas := state.(gas);
+    address := state.(address);
+    balance := state.(balance);
+    caller := state.(caller);
+  |}.
+
+  Definition update_gas (state: t) (gas' : U256.t): t :=
+  {| 
+    storage := state.(storage);
+    tstorage := state.(tstorage);
+    memory := state.(memory);
+    call_data_seg := state.(call_data_seg);
+    return_data_seg := state.(return_data_seg); 
+    gas := gas';
+    address := state.(address);
+    balance := state.(balance);
+    caller := state.(caller);
   |}.
 
 End EVMState.
@@ -667,23 +700,96 @@ Module EVM_opcode.
                                    let new_state := EVMState.update_storage state new_storage in
                                    ([], new_state, Status.Running)
                 | _ => ([], state, Status.Error "SSTORE expects 2 inputs")
-          end
+                end
       | TLOAD => match inputs with
                 | [addr] => let value := (EVMState.tstorage state) addr in
                              ([value], state, Status.Running)
                 | _ => ([], state, Status.Error "TLOAD expects 1 input")
-          end
+                end
       | TSTORE => match inputs with
                 | [value; addr] => let new_tstorage := EVMStorage.update state.(EVMState.tstorage) addr value in
                                    let new_state := EVMState.update_tstorage state new_tstorage in
                                    ([], new_state, Status.Running)
                 | _ => ([], state, Status.Error "TSTORE expects 2 inputs")
-          end
+                end
       | MSIZE => match inputs with
                 | [] => ([EVMMemory.msize (EVMState.memory state)], state, Status.Running)
                 | _ => ([], state, Status.Error "MSIZE expects 0 inputs")
-          end
+                end
+      | GAS => match inputs with
+                | [] => ([state.(EVMState.gas)], state, Status.Running)
+                | _ => ([], state, Status.Error "GAS expects 0 inputs")
+                end
+      | ADDRESS => match inputs with
+                | [] => ([state.(EVMState.address)], state, Status.Running)
+                | _ => ([], state, Status.Error "ADDRESS expects 0 inputs")
+                end
+      | BALANCE => match inputs with
+                | [addr] => let balance := state.(EVMState.balance) addr in
+                             ([balance], state, Status.Running)
+                | _ => ([], state, Status.Error "BALANCE expects 1 input")
+                end
+      | SELFBALANCE => match inputs with
+                | [] => let balance := state.(EVMState.balance) state.(EVMState.address) in
+                        ([balance], state, Status.Running)
+                | _ => ([], state, Status.Error "SELFBALANCE expects 0 inputs")
+                end
+      | CALLER => match inputs with
+                | [] => ([state.(EVMState.caller)], state, Status.Running)
+                | _ => ([], state, Status.Error "CALLER expects 0 inputs")
+                end
       | _  =>  ([U256.to_t 42], state, Status.Running) (* FIXME: organize and complete *)
+
+      (*
+    | CALLVALUE
+    | CALLDATALOAD
+    | CALLDATASIZE
+    | CALLDATACOPY
+    | CODESIZE
+    | CODECOPY
+    | EXTCODESIZE
+    | EXTCODECOPY
+    | RETURNDATASIZE
+    | RETURNDATACOPY
+    | MCOPY
+    | EXTCODEHASH
+    | CREATE 
+    | CREATE2
+    | CALL
+    | CALLCODE
+    | DELEGATECALL
+    | STATICCALL
+    | RETURN
+    | REVERT
+    | SELFDESTRUCT
+    | INVALID
+    | LOG0
+    | LOG1
+    | LOG2
+    | LOG3
+    | LOG4
+    | CHAINID
+    | BASEFEE
+    | BLOBBASEFEE
+    | ORIGIN
+    | GASPRICE
+    | BLOCKHASH
+    | BLOBHASH
+    | COINBASE
+    | TIMESTAMP
+    | NUMBER
+    | DIFFICULTY  (* obsolete from Paris, now uses PREVRANDAO*)
+    | PREVRANDAO
+    | GASLIMIT
+
+    | MEMORYGUARD
+    | DATASIZE
+    | DATAOFFSET
+    | DATACOPY
+    | LINKERSYMBOL
+    | SETIMMUTABLE
+    | LOADIMMUTABLE
+      *)
       end. 
 
     Definition show (op: t): string :=
