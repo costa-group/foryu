@@ -376,6 +376,29 @@ Module EVMMemorySegment.
   (** List of bytes represented as Z. *)
   Definition t: Type := list U8.t.
   Definition empty: t := [].
+
+  Definition length (segment: t): U256.t :=
+    U256.to_t (Z.of_nat (List.length segment)).
+
+  (* Returns a list of 'n' bytes from 'start', 0 for bytes out of size *)
+  Definition get_bytes (segment: t) (start n: U256.t): list U8.t :=
+    List.map
+      (fun i =>
+         let index: Z := (U256.val start) + Z.of_nat i in
+         if index <? Z.of_nat (List.length segment) then
+           List.nth_default U8.zero segment (Z.to_nat index)
+         else
+           U8.zero
+      )
+      (List.seq 0 (Z.to_nat (U256.val n))).
+
+  Definition get_word (segment: t) (start: U256.t): U256.t :=
+    EVMMemory.bytes_as_u256 (get_bytes segment start (U256.to_t 32)).
+
+  Definition hash (segment: t): U256.t :=
+    (* TODO: compute actual hash *)
+    U256.to_t 42.
+    
 End EVMMemorySegment.
 
 
@@ -390,6 +413,21 @@ Module EVMState.
     address: U256.t;
     balance: U256.t -> U256.t;
     caller: U256.t;
+    callvalue: U256.t;
+    code: U256.t -> EVMMemorySegment.t;
+    nonce: list U8.t;
+    chainid: U256.t;
+    basefee: U256.t;
+    blobbasefee: U256.t;
+    origin: U256.t;
+    gasprice: U256.t;
+    blockhash: U256.t -> U256.t;
+    blobhash: U256.t -> U256.t;
+    coinbase: U256.t;
+    timestamp: U256.t;
+    number: U256.t;
+    difficulty: U256.t;
+    gaslimit: U256.t;
   }.
 
   Definition empty: t :=
@@ -403,6 +441,21 @@ Module EVMState.
       address := U256.zero;
       balance := fun _ => U256.zero;
       caller := U256.zero;
+      callvalue := U256.zero;
+      code := fun _ => EVMMemorySegment.empty;
+      nonce := [];
+      chainid := U256.zero;
+      basefee := U256.zero;
+      blobbasefee := U256.zero;
+      origin := U256.zero;
+      gasprice := U256.zero;
+      blockhash := fun _ => U256.zero;
+      blobhash := fun _ => U256.zero;
+      coinbase := U256.zero;
+      timestamp := U256.zero;
+      number := U256.zero;
+      difficulty := U256.zero;
+      gaslimit := U256.zero;
     |}.
 
   Definition update_storage (state: t) (storage' : EVMStorage.t): t :=
@@ -416,6 +469,21 @@ Module EVMState.
     address := state.(address);
     balance := state.(balance);
     caller := state.(caller);
+    callvalue := state.(callvalue);
+    code := state.(code);
+    nonce := state.(nonce);
+    chainid := state.(chainid);
+    basefee := state.(basefee);
+    blobbasefee := state.(blobbasefee);
+    origin := state.(origin);
+    gasprice := state.(gasprice);
+    blockhash := state.(blockhash);
+    blobhash := state.(blobhash);
+    coinbase := state.(coinbase);
+    timestamp := state.(timestamp);
+    number := state.(number);
+    difficulty := state.(difficulty);
+    gaslimit := state.(gaslimit);
   |}.
 
   Definition update_tstorage (state: t) (tstorage' : EVMStorage.t): t :=
@@ -429,6 +497,21 @@ Module EVMState.
     address := state.(address);
     balance := state.(balance);
     caller := state.(caller);
+    callvalue := state.(callvalue);
+    code := state.(code);
+    nonce := state.(nonce);
+    chainid := state.(chainid);
+    basefee := state.(basefee);
+    blobbasefee := state.(blobbasefee);
+    origin := state.(origin);
+    gasprice := state.(gasprice);
+    blockhash := state.(blockhash);
+    blobhash := state.(blobhash);
+    coinbase := state.(coinbase);
+    timestamp := state.(timestamp);
+    number := state.(number);
+    difficulty := state.(difficulty);
+    gaslimit := state.(gaslimit);
   |}.
 
   Definition update_memory (state: t) (memory' : EVMMemory.t): t :=
@@ -442,6 +525,21 @@ Module EVMState.
     address := state.(address);
     balance := state.(balance);
     caller := state.(caller);
+    callvalue := state.(callvalue);
+    code := state.(code);
+    nonce := state.(nonce);
+    chainid := state.(chainid);
+    basefee := state.(basefee);
+    blobbasefee := state.(blobbasefee);
+    origin := state.(origin);
+    gasprice := state.(gasprice);
+    blockhash := state.(blockhash);
+    blobhash := state.(blobhash);
+    coinbase := state.(coinbase);
+    timestamp := state.(timestamp);
+    number := state.(number);
+    difficulty := state.(difficulty);
+    gaslimit := state.(gaslimit);
   |}.
 
   Definition update_gas (state: t) (gas' : U256.t): t :=
@@ -455,7 +553,86 @@ Module EVMState.
     address := state.(address);
     balance := state.(balance);
     caller := state.(caller);
+    callvalue := state.(callvalue);
+    code := state.(code);
+    nonce := state.(nonce);
+    chainid := state.(chainid);
+    basefee := state.(basefee);
+    blobbasefee := state.(blobbasefee);
+    origin := state.(origin);
+    gasprice := state.(gasprice);
+    blockhash := state.(blockhash);
+    blobhash := state.(blobhash);
+    coinbase := state.(coinbase);
+    timestamp := state.(timestamp);
+    number := state.(number);
+    difficulty := state.(difficulty);
+    gaslimit := state.(gaslimit);
   |}.
+
+  Definition update_code (state: t) (addr: U256.t) (ncode: EVMMemorySegment.t): t :=
+  {| 
+    storage := state.(storage);
+    tstorage := state.(tstorage);
+    memory := state.(memory);
+    call_data_seg := state.(call_data_seg);
+    return_data_seg := state.(return_data_seg); 
+    gas := state.(gas);
+    address := state.(address);
+    balance := state.(balance);
+    caller := state.(caller);
+    callvalue := state.(callvalue);
+    code := fun a => if U256.eqb a addr then ncode else (state.(code) a);
+    nonce := state.(nonce);
+    chainid := state.(chainid);
+    basefee := state.(basefee);
+    blobbasefee := state.(blobbasefee);
+    origin := state.(origin);
+    gasprice := state.(gasprice);
+    blockhash := state.(blockhash);
+    blobhash := state.(blobhash);
+    coinbase := state.(coinbase);
+    timestamp := state.(timestamp);
+    number := state.(number);
+    difficulty := state.(difficulty);
+    gaslimit := state.(gaslimit);
+  |}.
+
+  Definition update_return_data (state: t) (return_data: EVMMemorySegment.t): t :=
+  {| 
+    storage := state.(storage);
+    tstorage := state.(tstorage);
+    memory := state.(memory);
+    call_data_seg := state.(call_data_seg);
+    return_data_seg := return_data;
+    gas := state.(gas);
+    address := state.(address);
+    balance := state.(balance);
+    caller := state.(caller);
+    callvalue := state.(callvalue);
+    code := state.(code);
+    nonce := state.(nonce);
+    chainid := state.(chainid);
+    basefee := state.(basefee);
+    blobbasefee := state.(blobbasefee);
+    origin := state.(origin);
+    gasprice := state.(gasprice);
+    blockhash := state.(blockhash);
+    blobhash := state.(blobhash);
+    coinbase := state.(coinbase);
+    timestamp := state.(timestamp);
+    number := state.(number);
+    difficulty := state.(difficulty);
+    gaslimit := state.(gaslimit);
+  |}.
+
+  Definition hash (l: list U8.t) : U256.t :=
+  (* TODO Compute actual hash *)
+    U256.to_t 42.
+
+  Definition invoke (state: t) (gas to value argsOffset argsSize retOffset retSize: U256.t): (U256.t * list U8.t) :=
+  (* TODO execute call *)
+    (U256.to_t 42, []). (* return value and return data *)
 
 End EVMState.
 
@@ -690,6 +867,13 @@ Module EVM_opcode.
                                    ([], new_state, Status.Running)
                 | _ => ([], state, Status.Error "MSTORE expects 2 inputs")
           end
+      | MSTORE8 => match inputs with
+                | [addr; value] => let byte := U256.mod_evm value (U256.to_t 256) in
+                                   let new_memory := EVMMemory.update_bytes (EVMState.memory state) addr [U8.to_t (U256.val byte)] in
+                                   let new_state := EVMState.update_memory state new_memory in
+                                   ([], new_state, Status.Running)
+                | _ => ([], state, Status.Error "MSTORE8 expects 2 inputs")
+          end
       | SLOAD => match inputs with
                 | [addr] => let value := (EVMState.storage state) addr in
                              ([value], state, Status.Running)
@@ -738,59 +922,228 @@ Module EVM_opcode.
                 | [] => ([state.(EVMState.caller)], state, Status.Running)
                 | _ => ([], state, Status.Error "CALLER expects 0 inputs")
                 end
-      | _  =>  ([U256.to_t 42], state, Status.Running) (* FIXME: organize and complete *)
-
-      (*
-    | CALLVALUE
-    | CALLDATALOAD
-    | CALLDATASIZE
-    | CALLDATACOPY
-    | CODESIZE
-    | CODECOPY
-    | EXTCODESIZE
-    | EXTCODECOPY
-    | RETURNDATASIZE
-    | RETURNDATACOPY
-    | MCOPY
-    | EXTCODEHASH
-    | CREATE 
-    | CREATE2
-    | CALL
-    | CALLCODE
-    | DELEGATECALL
-    | STATICCALL
-    | RETURN
-    | REVERT
-    | SELFDESTRUCT
-    | INVALID
-    | LOG0
-    | LOG1
-    | LOG2
-    | LOG3
-    | LOG4
-    | CHAINID
-    | BASEFEE
-    | BLOBBASEFEE
-    | ORIGIN
-    | GASPRICE
-    | BLOCKHASH
-    | BLOBHASH
-    | COINBASE
-    | TIMESTAMP
-    | NUMBER
-    | DIFFICULTY  (* obsolete from Paris, now uses PREVRANDAO*)
-    | PREVRANDAO
-    | GASLIMIT
-
-    | MEMORYGUARD
-    | DATASIZE
-    | DATAOFFSET
-    | DATACOPY
-    | LINKERSYMBOL
-    | SETIMMUTABLE
-    | LOADIMMUTABLE
-      *)
-      end. 
+      | CALLVALUE => match inputs with
+                | [] => ([state.(EVMState.callvalue)], state, Status.Running)
+                | _ => ([], state, Status.Error "CALLVALUE expects 0 inputs")
+                end
+      | CALLDATALOAD => match inputs with
+                | [offset] => let value := EVMMemorySegment.get_word state.(EVMState.call_data_seg) offset in
+                               ([value], state, Status.Running)
+                | _ => ([], state, Status.Error "CALLDATALOAD expects 1 input")
+                end
+      | CALLDATASIZE => match inputs with
+                | [] => let size := EVMMemorySegment.length state.(EVMState.call_data_seg) in
+                        ([size], state, Status.Running)
+                | _ => ([], state, Status.Error "CALLDATASIZE expects 0 inputs")
+                end
+      | CALLDATACOPY => match inputs with
+                | [dest; offset; size] => let bytes := EVMMemorySegment.get_bytes state.(EVMState.call_data_seg) offset size in
+                                          let new_memory := EVMMemory.update_bytes (EVMState.memory state) dest bytes in
+                                          let new_state := EVMState.update_memory state new_memory in
+                                          ([], new_state, Status.Running)
+                | _ => ([], state, Status.Error "CALLDATACOPY expects 3 inputs")
+                end
+      | CODESIZE => match inputs with
+                | [] => let code_size := EVMMemorySegment.length (state.(EVMState.code) state.(EVMState.address)) in
+                        ([code_size], state, Status.Running)
+                | _ => ([], state, Status.Error "CODESIZE expects 0 inputs")
+                end
+      | CODECOPY => match inputs with
+                | [dest; offset; size] => let bytes := EVMMemorySegment.get_bytes (state.(EVMState.code) state.(EVMState.address)) offset size in
+                                          let new_memory := EVMMemory.update_bytes (EVMState.memory state) dest bytes in
+                                          let new_state := EVMState.update_memory state new_memory in
+                                          ([], new_state, Status.Running)
+                | _ => ([], state, Status.Error "CODECOPY expects 3 inputs")
+                end
+      | EXTCODESIZE => match inputs with
+                | [addr] => let code_size := EVMMemorySegment.length (state.(EVMState.code) addr) in
+                             ([code_size], state, Status.Running)
+                | _ => ([], state, Status.Error "EXTCODESIZE expects 1 input")
+                end
+      | EXTCODECOPY => match inputs with
+                | [addr; dest; offset; size] => let bytes := EVMMemorySegment.get_bytes (state.(EVMState.code) addr) offset size in
+                                          let new_memory := EVMMemory.update_bytes (EVMState.memory state) dest bytes in
+                                          let new_state := EVMState.update_memory state new_memory in
+                                          ([], new_state, Status.Running)
+                | _ => ([], state, Status.Error "EXTCODECOPY expects 4 inputs")
+                end
+      | RETURNDATASIZE => match inputs with
+                | [] => let size := EVMMemorySegment.length state.(EVMState.return_data_seg) in
+                        ([size], state, Status.Running)
+                | _ => ([], state, Status.Error "RETURNDATASIZE expects 0 inputs")
+                end
+      | RETURNDATACOPY => match inputs with
+                | [dest; offset; size] => let bytes := EVMMemorySegment.get_bytes state.(EVMState.return_data_seg) offset size in
+                                          let new_memory := EVMMemory.update_bytes (EVMState.memory state) dest bytes in
+                                          let new_state := EVMState.update_memory state new_memory in
+                                          ([], new_state, Status.Running)
+                | _ => ([], state, Status.Error "RETURNDATACOPY expects 3 inputs")
+                end
+      | MCOPY => match inputs with
+                | [dest; src; size] => let (bytes, memory') := EVMMemory.get_bytes state.(EVMState.memory) src size in
+                                       let new_memory := EVMMemory.update_bytes memory' dest bytes in
+                                       let new_state := EVMState.update_memory state new_memory in
+                                       ([], new_state, Status.Running)
+                | _ => ([], state, Status.Error "MCOPY expects 3 inputs")
+                end
+      | EXTCODEHASH => match inputs with
+                | [addr] => let hash := EVMMemorySegment.hash (state.(EVMState.code) addr) in
+                             ([hash], state, Status.Running)
+                | _ => ([], state, Status.Error "EXTCODEHASH expects 1 input")
+                end
+      | CREATE => match inputs with
+                | [value; offset; size] => let (code, memory') := EVMMemory.get_bytes (EVMState.memory state) offset size in
+                                           let addr := state.(EVMState.address) in 
+                                           let addr_u8_list := List.map (fun i => U8.to_t (Z.shiftr (U256.val addr) (8 * (31 - Z.of_nat i)) mod 256)) (List.seq 0 32) in
+                                           let addr_l_ext := addr_u8_list ++ state.(EVMState.nonce) in
+                                           let naddr := EVMState.hash addr_l_ext in 
+                                           let new_state1 := EVMState.update_code state naddr code in
+                                           let new_state2 := EVMState.update_memory new_state1 memory' in
+                                           ([naddr], new_state2, Status.Running)
+                | _ => ([], state, Status.Error "CREATE expects 3 inputs")
+                end
+      | CREATE2 => match inputs with
+                | [value; offset; size; salt] => 
+                                           let (code, memory') := EVMMemory.get_bytes (EVMState.memory state) offset size in
+                                           let addr := state.(EVMState.address) in 
+                                           let addr_u8_list := List.map (fun i => U8.to_t (Z.shiftr (U256.val addr) (8 * (31 - Z.of_nat i)) mod 256)) (List.seq 0 32) in
+                                           let salt_u8_list := List.map (fun i => U8.to_t (Z.shiftr (U256.val salt) (8 * (31 - Z.of_nat i)) mod 256)) (List.seq 0 32) in
+                                           let addr_l_ext := addr_u8_list ++ salt_u8_list in
+                                           let naddr := EVMState.hash addr_l_ext in 
+                                           let new_state1 := EVMState.update_code state naddr code in
+                                           let new_state2 := EVMState.update_memory new_state1 memory' in
+                                           ([naddr], new_state2, Status.Running)
+                | _ => ([], state, Status.Error "CREATE2 expects 4 inputs")
+                end
+      | CALL => match inputs with
+                | [gas; to; value; argsOffset; argsSize; retOffset; retSize] => 
+                    let (v, return_data) := EVMState.invoke state gas to value argsOffset argsSize retOffset retSize in
+                    let new_state := EVMState.update_return_data state return_data in
+                    ([v], new_state, Status.Running)
+                  | _ => ([], state, Status.Error "CALL expects 7 inputs")
+                end
+      | CALLCODE => match inputs with
+                | [gas; to; value; argsOffset; argsSize; retOffset; retSize] => 
+                    let (v, return_data) := EVMState.invoke state gas to value argsOffset argsSize retOffset retSize in
+                    let new_state := EVMState.update_return_data state return_data in
+                    ([v], new_state, Status.Running)
+                  | _ => ([], state, Status.Error "CALLCODE expects 7 inputs")
+                end
+      | DELEGATECALL => match inputs with
+                | [gas; to; argsOffset; argsSize; retOffset; retSize] => 
+                    let (v, return_data) := EVMState.invoke state gas to U256.zero argsOffset argsSize retOffset retSize in
+                    let new_state := EVMState.update_return_data state return_data in
+                    ([v], new_state, Status.Running)
+                  | _ => ([], state, Status.Error "DELEGATECALL expects 6 inputs")
+                end
+      | STATICCALL => match inputs with
+                | [gas; to; argsOffset; argsSize; retOffset; retSize] => 
+                    let (v, return_data) := EVMState.invoke state gas to U256.zero argsOffset argsSize retOffset retSize in
+                    let new_state := EVMState.update_return_data state return_data in
+                    ([v], new_state, Status.Running)
+                  | _ => ([], state, Status.Error "STATICCALL expects 6 inputs")
+                end
+      | RETURN => match inputs with
+                | [offset; size] => ([], state, Status.Terminated)
+                | _ => ([], state, Status.Error "RETURN expects 2 inputs")
+                end
+      | REVERT => match inputs with
+                | [offset; size] => ([], state, Status.Reverted)
+                | _ => ([], state, Status.Error "REVERT expects 2 inputs")
+                end
+      | SELFDESTRUCT => match inputs with
+                | [beneficiary] => ([], state, Status.Terminated)
+                | _ => ([], state, Status.Error "SELFDESTRUCT expects 1 input")
+                end
+      | INVALID => ([], state, Status.Error "Invalid opcode")
+      | LOG0 => ([], state, Status.Running)
+      | LOG1 => ([], state, Status.Running)
+      | LOG2 => ([], state, Status.Running)
+      | LOG3 => ([], state, Status.Running)
+      | LOG4 => ([], state, Status.Running)
+      | CHAINID => match inputs with
+                | [] => ([state.(EVMState.chainid)], state, Status.Running)
+                | _ => ([], state, Status.Error "CHAINID expects 0 inputs")
+                end
+      | BASEFEE => match inputs with
+                | [] => ([state.(EVMState.basefee)], state, Status.Running)
+                | _ => ([], state, Status.Error "BASEFEE expects 0 inputs")
+                end
+      | BLOBBASEFEE => match inputs with
+                | [] => ([state.(EVMState.blobbasefee)], state, Status.Running)
+                | _ => ([], state, Status.Error "BLOBBASEFEE expects 0 inputs")
+                end
+      | ORIGIN => match inputs with
+                | [] => ([state.(EVMState.origin)], state, Status.Running)
+                | _ => ([], state, Status.Error "ORIGIN expects 0 inputs")
+                end
+      | GASPRICE => match inputs with
+                | [] => ([state.(EVMState.gasprice)], state, Status.Running)
+                | _ => ([], state, Status.Error "GASPRICE expects 0 inputs")
+                end
+      | BLOCKHASH => match inputs with
+                | [block_number] => let blockhash := state.(EVMState.blockhash) block_number in
+                                     ([blockhash], state, Status.Running)
+                | _ => ([], state, Status.Error "BLOCKHASH expects 1 input")
+                end
+      | BLOBHASH => match inputs with
+                | [block_number] => let blobhash := state.(EVMState.blobhash) block_number in
+                                     ([blobhash], state, Status.Running)
+                | _ => ([], state, Status.Error "BLOBHASH expects 1 input")
+                end
+      | COINBASE => match inputs with
+                | [] => ([state.(EVMState.coinbase)], state, Status.Running)
+                | _ => ([], state, Status.Error "COINBASE expects 0 inputs")
+                end
+      | TIMESTAMP => match inputs with
+                | [] => ([state.(EVMState.timestamp)], state, Status.Running)
+                | _ => ([], state, Status.Error "TIMESTAMP expects 0 inputs")
+                end
+      | NUMBER => match inputs with
+                | [] => ([state.(EVMState.number)], state, Status.Running)
+                | _ => ([], state, Status.Error "NUMBER expects 0 inputs")
+                end
+      | DIFFICULTY => match inputs with
+                | [] => ([state.(EVMState.difficulty)], state, Status.Running)
+                | _ => ([], state, Status.Error "DIFFICULTY expects 0 inputs")
+                end
+      | PREVRANDAO => match inputs with
+                | [] => ([state.(EVMState.difficulty)], state, Status.Running)
+                | _ => ([], state, Status.Error "PREVRANDAO expects 0 inputs")
+                end
+      | GASLIMIT => match inputs with
+                | [] => ([state.(EVMState.gaslimit)], state, Status.Running)
+                | _ => ([], state, Status.Error "GASLIMIT expects 0 inputs")
+                 end
+      | MEMORYGUARD => match inputs with
+                | [size] => ([], state, Status.Running) 
+                | _ => ([], state, Status.Error "MEMORYGUARD expects 1 input")
+                end
+      | DATASIZE => match inputs with 
+                | [x] => ([], state, Status.Running)
+                | _ => ([], state, Status.Error "DATASIZE expects 1 input")
+                end
+      | DATAOFFSET => match inputs with
+                | [x] => ([], state, Status.Running)
+                | _ => ([], state, Status.Error "DATAOFFSET expects 1 input")
+                end
+      | DATACOPY => match inputs with
+                | [t; f; l] => ([], state, Status.Running)
+                | _ => ([], state, Status.Error "DATACOPY expects 3 inputs")
+                end
+      | LINKERSYMBOL => match inputs with
+                | [library_id] => ([], state, Status.Running)
+                | _ => ([], state, Status.Error "LINKERSYMBOL expects 1 inputs")
+                end
+      | SETIMMUTABLE => match inputs with
+                | [offset; name; value] => ([], state, Status.Running)
+                | _ => ([], state, Status.Error "SETIMMUTABLE expects 3 inputs")
+                end
+      | LOADIMMUTABLE => match inputs with
+                | [name] => ([], state, Status.Running)  
+                | _ => ([], state, Status.Error "LOADIMMUTABLE expects 1 input")
+                end 
+    end. 
 
     Definition show (op: t): string :=
       match op with
