@@ -1268,6 +1268,68 @@ Module EVMDialect <: DIALECT.
   Definition execute_opcode (state: dialect_state_t) (op: opcode_t) (inputs: list value_t): (list value_t * dialect_state_t * Status.t) :=
     EVM_opcode.execute state op inputs.
 
+  Definition opcode_indep_state (op: opcode_t) := 
+    match op with
+    | EVM_opcode.ADD => true
+    | EVM_opcode.SUB => true
+    | EVM_opcode.MUL => true
+    | EVM_opcode.DIV => true
+    | EVM_opcode.SDIV => true
+    | EVM_opcode.MOD => true
+    | EVM_opcode.SMOD => true
+    | EVM_opcode.EXP => true
+    | EVM_opcode.NOT => true
+    | EVM_opcode.LT => true
+    | EVM_opcode.GT => true
+    | EVM_opcode.SLT => true
+    | EVM_opcode.SGT => true
+    | EVM_opcode.EQ => true
+    | EVM_opcode.ISZERO => true
+    | EVM_opcode.AND => true
+    | EVM_opcode.OR => true
+    | EVM_opcode.XOR => true
+    | EVM_opcode.BYTE => true
+    | EVM_opcode.SHL => true
+    | EVM_opcode.SHR => true
+    | EVM_opcode.SAR => true
+    | EVM_opcode.CLZ => true
+    | EVM_opcode.ADDMOD => true
+    | EVM_opcode.MULMOD => true
+    | EVM_opcode.SIGNEXTEND => true
+    | _ => false
+    end.
+
+  Ltac solve_injection Hexec_s1 Hres Hstatus :=
+  injection Hexec_s1 as Hres Hstatus;
+  rewrite <- Hres; rewrite <- Hstatus;
+  reflexivity.
+
+  Ltac solve_injection_binary arg Hexec_s1 Hres Hstatus :=
+  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| ];
+  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| ];
+  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| solve_injection Hexec_s1 Hres Hstatus].
+
+  Ltac solve_injection_ternary arg Hexec_s1 Hres Hstatus :=
+  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| ];
+  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| ];
+  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| ];
+  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| solve_injection Hexec_s1 Hres Hstatus].
+
+  Lemma evm_opcode_indep_state_snd: forall (s1 s2: dialect_state_t) (op: opcode_t) (args: list value_t)
+       (res: list value_t) (status: Status.t), 
+    opcode_indep_state op = true -> 
+    execute_opcode s1 op args = (res, s1, status) ->
+    execute_opcode s2 op args = (res, s2, status).
+  Proof.
+    unfold execute_opcode. unfold EVM_opcode.execute.
+    intros s1 s2 op arg res status Hopcode Hexec_s1.
+    destruct op; try (simpl in Hopcode; discriminate Hopcode); (* dependent opcode, trivial *)
+                 try (solve_injection_binary arg Hexec_s1 Hres Hstatus);
+                 try (solve_injection_ternary arg Hexec_s1 Hres Hstatus).
+  Qed.
+  
+  Definition opcode_indep_state_snd := evm_opcode_indep_state_snd.
+
   Definition empty_dialect_state: dialect_state_t :=
     EVMState.empty.
 
@@ -1275,7 +1337,7 @@ Module EVMDialect <: DIALECT.
     Misc.z_to_string (v.(U256.val)).
   
   Definition show_opcode (op: opcode_t): string :=
-    EVM_opcode.show op.     
+    EVM_opcode.show op.
 
 End EVMDialect.
 
