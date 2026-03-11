@@ -469,7 +469,7 @@ Module Liveness_snd (D: DIALECT).
   Proof.
     intros l s1 s2 H_eq_s1_s2.
     unfold apply_inv_phi.
-    destruct l as [out_vars in_sexprs _ _].
+    destruct l as [out_vars in_sexprs _].
     remember (list_to_set out_vars) as outset eqn:E_outset.
     remember (list_to_set (extract_yul_vars in_sexprs)) as inset eqn:E_inset.
 
@@ -3688,7 +3688,7 @@ Lemma check_live_out_complete:
   Qed.
 
   Lemma live_at_handle_jump_aux_1_snd:
-    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid next_bid: BlockID.t) (b next_b: BlockD.t) (pc: nat) (s s' s'': VarSet.t) (st1 st2 st1': StateD.t) (sf1 sf2: StackFrameD.t) (tl: CallStackD.t) (v: VarID.t) (out_vars: list VarID.t) (in_sexprs: list SimpleExprD.t) (H_no_dup: List.NoDup out_vars) (H_same_len: length out_vars = length in_sexprs),
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid next_bid: BlockID.t) (b next_b: BlockD.t) (pc: nat) (s s' s'': VarSet.t) (st1 st2 st1': StateD.t) (sf1 sf2: StackFrameD.t) (tl: CallStackD.t) (v: VarID.t) (out_vars: list VarID.t) (in_sexprs: list SimpleExprD.t) (H_no_dup: List.NoDup out_vars),
       CFGProgD.get_block p fname bid = Some b ->
       CFGProgD.get_block p fname next_bid = Some next_b ->
       live_at_pc p fname bid pc s ->
@@ -3710,7 +3710,7 @@ Lemma check_live_out_complete:
           /\
             equiv_vars_in_top_frame p st1' st2'. (* the top frames are equivalent wrt the accessed variables *)
   Proof.
-    intros p i fname bid next_bid b next_b pc s s' s'' st1 st2 st1' sf1 sf2 tl v out_vars in_sexprs H_no_dup H_same_len.
+    intros p i fname bid next_bid b next_b pc s s' s'' st1 st2 st1' sf1 sf2 tl v out_vars in_sexprs H_no_dup.
     intros H_b_exists H_next_b_exists H_live_at_pc H_live_out H_live_in H_s H_subset H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_jump_aux_st1 H_not_In_v_s.
 
           assert (H_not_In_v_input: ~ In (inl v) in_sexprs).
@@ -3951,7 +3951,7 @@ Lemma check_live_out_complete:
     destruct (CFGProgD.get_block p fname next_bid) as [next_b|] eqn:E_get_b_next.
     
     (* block found *)
-    - destruct (next_b.(phi_function) bid) as [out_vars in_sexprs H_no_dup H_same_len] eqn:E_phi.
+    - destruct (next_b.(phi_function) bid) as [out_vars in_sexprs H_no_dup] eqn:E_phi.
 
       pose proof (at_end_implied_pc_ge_len_bs p fname bid b pc st1 sf1 tl s H_b_exists H_live_at_pc H_get_instr H_call_stack_st1 H_fname_sf1 H_bid_sf1 H_pc_sf1).
 
@@ -3985,7 +3985,7 @@ Lemma check_live_out_complete:
 
           rewrite <- varset_equal_sym in H_sout0.
           pose proof (varset_eq_imp_subset (VarSet.union (VarSet.diff s' (list_to_set out_vars)) (list_to_set (extract_yul_vars in_sexprs))) sout0 H_sout0) as H_subset.          
-          apply (live_at_handle_jump_aux_1_snd p i fname bid next_bid b next_b pc sout sout0 s' st1 st2 st1' sf1 sf2 tl v out_vars in_sexprs H_no_dup H_same_len H_b_exists E_get_b_next H_live_at_pc H_live_out H_live_in_next_pc H_sout H_subset H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_jump_st1 H_not_In_v_s).
+          apply (live_at_handle_jump_aux_1_snd p i fname bid next_bid b next_b pc sout sout0 s' st1 st2 st1' sf1 sf2 tl v out_vars in_sexprs H_no_dup H_b_exists E_get_b_next H_live_at_pc H_live_out H_live_in_next_pc H_sout H_subset H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_jump_st1 H_not_In_v_s).
 
         * subst_var_by_inj H_b_exists H_b0_exists b0.                   
           unfold BlockD.is_cond_jump_block in H_is_cjump.
@@ -4049,7 +4049,7 @@ Qed.
     destruct (CFGProgD.get_block p (StackFrameD.fname top_sf) next_bid) as [next_b|] eqn:H_next_b_exists.
 
     (* block found *)
-    - destruct (phi_function next_b (curr_bid top_sf)) as [out_vars in_sexprs H_no_dup H_same_len] eqn:E_phi.
+    - destruct (phi_function next_b (curr_bid top_sf)) as [out_vars in_sexprs H_no_dup] eqn:E_phi.
 
       unfold handle_jump_aux  in H_handle_jump_st1.
       unfold handle_jump_aux.
@@ -4234,8 +4234,8 @@ Qed.
           rewrite H_next_b0_if_false in H_handle_cond_jump_st1.
 
           
-          destruct (next_b0_if_true.(phi_function) bid) as [out_vars_1 in_sexprs_1 H_no_dup_1 H_same_len_1] eqn:E_phi_1.
-          destruct (next_b0_if_false.(phi_function) bid) as [out_vars_2 in_sexprs_2 H_no_dup_2 H_same_len_2] eqn:E_phi_2.
+          destruct (next_b0_if_true.(phi_function) bid) as [out_vars_1 in_sexprs_1 H_no_dup_1] eqn:E_phi_1.
+          destruct (next_b0_if_false.(phi_function) bid) as [out_vars_2 in_sexprs_2 H_no_dup_2] eqn:E_phi_2.
 
           rewrite varset_equal_sym in H_sout0.
           apply varset_eq_imp_subset in H_sout0.
@@ -4246,9 +4246,9 @@ Qed.
 
           destruct (D.is_true_value (get (locals sf1) cv)) eqn:E_cv.
  
-          * apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_true b next_b0_if_true pc sout sout0 s1' st1 st2 st1' sf1 sf2 tl v out_vars_1 in_sexprs_1 H_no_dup_1   H_same_len_1 H_b_exists H_next_b0_if_true H_live_at_pc H_live_out H_live_at_pc_if_true H_sout' H_sout0_l H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
+          * apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_true b next_b0_if_true pc sout sout0 s1' st1 st2 st1' sf1 sf2 tl v out_vars_1 in_sexprs_1 H_no_dup_1 H_b_exists H_next_b0_if_true H_live_at_pc H_live_out H_live_at_pc_if_true H_sout' H_sout0_l H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
             
-          * apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_false b next_b0_if_false pc sout sout0 s2' st1 st2 st1' sf1 sf2 tl v out_vars_2 in_sexprs_2 H_no_dup_2  H_same_len_2 H_b_exists H_next_b0_if_false H_live_at_pc H_live_out H_live_at_pc_if_false H_sout' H_sout0_r H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
+          * apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_false b next_b0_if_false pc sout sout0 s2' st1 st2 st1' sf1 sf2 tl v out_vars_2 in_sexprs_2 H_no_dup_2 H_b_exists H_next_b0_if_false H_live_at_pc H_live_out H_live_at_pc_if_false H_sout' H_sout0_r H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
 
       
     - subst_var_by_inj H_b_exists H_b0_exists b0.

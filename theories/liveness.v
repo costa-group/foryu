@@ -77,7 +77,7 @@ Module Liveness (D: DIALECT).
   (* Applies the inverse of the phi function. It is like applying the assignment backwards. *)
   Definition apply_inv_phi (renamings: InBlockPhiInfo) (s: VarSet.t) :=
     match renamings with
-    | in_phi_info out_vars in_sexprs _ _ => 
+    | in_phi_info out_vars in_sexprs _ => 
         let in_set := list_to_set (extract_yul_vars in_sexprs) in
         let out_set := list_to_set out_vars in
         (VarSet.union (VarSet.diff s out_set) in_set)

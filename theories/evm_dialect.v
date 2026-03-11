@@ -1,3 +1,5 @@
+From Stdlib Require String.
+Open Scope string_scope.
 Require Import FORYU.dialect.
 Require Import FORYU.misc.
 From Stdlib Require Import ZArith.ZArith.
@@ -1315,15 +1317,46 @@ Module EVMDialect <: DIALECT.
   destruct arg; [solve_injection Hexec_s1 Hres Hstatus| ];
   destruct arg; [solve_injection Hexec_s1 Hres Hstatus| solve_injection Hexec_s1 Hres Hstatus].
 
-  Ltac solve_binary_opcode args msg :=
-  simpl; destruct args;
-      + exists []. exists (Status.Error msg). split; reflexivity.
-      + destruct args.
-        * exists []. exists (Status.Error msg). split; reflexivity.
-        * destruct args.
-          -- exists [U256.sub v v0]. exists Status.Running. split; reflexivity.
-          -- exists []. exists (Status.Error msg). split; reflexivity.
-      - simpl. destruct args.
+  Ltac solve_binary_op op msg args :=
+  simpl;
+  destruct args as [|v [|v0 [|v1 args]]];
+  (* We use [ | | | ] to explicitly handle the 4 cases created by the destruct above *)
+  [ 
+    (* Case: args = [] *)
+    (exists []; exists (Status.Error msg); split; reflexivity) 
+  | (* Case: args = [v] *)
+    (exists []; exists (Status.Error msg); split; reflexivity)
+  | (* Case: args = [v; v0] -> SUCCESS *)
+    (exists [op v v0]; exists Status.Running; split; reflexivity)
+  | (* Case: args = [v; v0; v1; ...] *)
+    (exists []; exists (Status.Error msg); split; reflexivity)
+  ].
+
+  Ltac solve_unary_op op msg args :=
+  simpl;
+  destruct args as [|v [|v0 rest]];
+  [ (* Case: [] *)
+    (exists []; exists (Status.Error msg); split; reflexivity) 
+  | (* Case: [v] -> SUCCESS *)
+    (exists [op v]; exists Status.Running; split; reflexivity)
+  | (* Case: [v; v0; ...] *)
+    (exists []; exists (Status.Error msg); split; reflexivity)
+  ].
+
+  Ltac solve_ternary_op op msg args :=
+  simpl;
+  destruct args as [|v [|v0 [|v1 [|v2 rest]]]];
+  [ (* Case: [] *)
+    (exists []; exists (Status.Error msg); split; reflexivity) 
+  | (* Case: [v] *)
+    (exists []; exists (Status.Error msg); split; reflexivity)
+  | (* Case: [v; v0] *)
+    (exists []; exists (Status.Error msg); split; reflexivity)
+  | (* Case: [v; v0; v1] -> SUCCESS *)
+    (exists [op v v0 v1]; exists Status.Running; split; reflexivity)
+  | (* Case: [v; v0; v1; v2; ...] *)
+    (exists []; exists (Status.Error msg); split; reflexivity)
+  ].
 
   Lemma evm_opcode_indep_state_snd: forall (op: opcode_t),
     opcode_indep_state op = true -> 
@@ -1333,43 +1366,35 @@ Module EVMDialect <: DIALECT.
     execute_opcode s2 op args = (res, s2, status).
   Proof.
     unfold execute_opcode. intros op Hopcode s1 s2 args.
-    destruct op.
-    - simpl. exists []. exists Status.Terminated. split; reflexivity.
-    - simpl. destruct args.
-      + exists []. exists (Status.Error "ADD expects 2 inputs"). split; reflexivity.
-      + destruct args.
-        * exists []. exists (Status.Error "ADD expects 2 inputs"). split; reflexivity.
-        * destruct args.
-          -- exists [U256.add v v0]. exists Status.Running. split; reflexivity.
-          -- exists []. exists (Status.Error "ADD expects 2 inputs"). split; reflexivity.
-    - simpl. destruct args.
-      + exists []. exists (Status.Error "SUB expects 2 inputs"). split; reflexivity.
-      + destruct args.
-        * exists []. exists (Status.Error "SUB expects 2 inputs"). split; reflexivity.
-        * destruct args.
-          -- exists [U256.sub v v0]. exists Status.Running. split; reflexivity.
-          -- exists []. exists (Status.Error "SUB expects 2 inputs"). split; reflexivity.
-      - simpl. destruct args.
-
-        * exists []. exists (Status.Error "ADD expects 2 inputs"). split; reflexivity.
-        * destruct args.
-          -- exists [U256.add v v0]. exists Status.Running. split; reflexivity.
-          -- exists []. exists (Status.Error "ADD expects 2 inputs"). split; reflexivity.
-    try (simpl in Hopcode; discriminate Hopcode); (* dependent opcode,
-  
-  forall (s1 s2: dialect_state_t) (op: opcode_t) (args: list value_t)
-       (res: list value_t) (status: Status.t), 
-    opcode_indep_state op = true -> 
-    execute_opcode s1 op args = (res, s1, status) ->
-    execute_opcode s2 op args = (res, s2, status).
-  Proof.
-    unfold execute_opcode. unfold EVM_opcode.execute.
-    intros s1 s2 op arg res status Hopcode Hexec_s1.
-    destruct op; try (simpl in Hopcode; discriminate Hopcode); (* dependent opcode, trivial *)
-                 try (solve_injection_binary arg Hexec_s1 Hres Hstatus);
-                 try (solve_injection_ternary arg Hexec_s1 Hres Hstatus).
+    destruct op; try (simpl in Hopcode; discriminate Hopcode).
+    - solve_binary_op (U256.add) "ADD expects 2 inputs" args.
+    - solve_binary_op (U256.sub) "SUB expects 2 inputs" args.
+    - solve_binary_op (U256.mul) "MUL expects 2 inputs" args.
+    - solve_binary_op (U256.div) "DIV expects 2 inputs" args.
+    - solve_binary_op (U256.sdiv) "SDIV expects 2 inputs" args.
+    - solve_binary_op (U256.mod_evm) "MOD expects 2 inputs" args.
+    - solve_binary_op (U256.smod) "SMOD expects 2 inputs" args.
+    - solve_binary_op (U256.exp) "EXP expects 2 inputs" args.
+    - solve_unary_op (U256.not) "NOT expects 1 input" args.
+    - solve_binary_op (U256.lt) "LT expects 2 inputs" args.
+    - solve_binary_op (U256.gt) "GT expects 2 inputs" args.
+    - solve_binary_op (U256.slt) "SLT expects 2 inputs" args.
+    - solve_binary_op (U256.sgt) "SGT expects 2 inputs" args.
+    - solve_binary_op (U256.eq) "EQ expects 2 inputs" args.
+    - solve_unary_op (U256.iszero) "ISZERO expects 1 input" args.
+    - solve_binary_op (U256.and) "AND expects 2 inputs" args.
+    - solve_binary_op (U256.or) "OR expects 2 inputs" args.
+    - solve_binary_op (U256.xor) "XOR expects 2 inputs" args.
+    - solve_binary_op (U256.byte) "BYTE expects 2 inputs" args.
+    - solve_binary_op (U256.shl) "SHL expects 2 inputs" args.
+    - solve_binary_op (U256.shr) "SHR expects 2 inputs" args.
+    - solve_binary_op (U256.sar) "SAR expects 2 inputs" args.
+    - solve_unary_op (U256.clz) "CLZ expects 1 input" args.
+    - solve_ternary_op (U256.addmod) "ADDMOD expects 3 inputs" args.
+    - solve_ternary_op (U256.mulmod) "MULMOD expects 3 inputs" args. 
+    - solve_binary_op (U256.signextend) "SIGNEXTEND expects 2 inputs" args.
   Qed.
-  
+      
   Definition opcode_indep_state_snd := evm_opcode_indep_state_snd.
 
   Definition empty_dialect_state: dialect_state_t :=

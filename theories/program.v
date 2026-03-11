@@ -285,14 +285,14 @@ Module PhiInfo (D: DIALECT).
   Module SimpleExprD := SimpleExpr(D).
 
   Inductive InBlockPhiInfo :=
-  | in_phi_info (out_vars: list VarID.t) (in_sexprs: list SimpleExprD.t) (H_no_dup: List.NoDup out_vars) (H_same_le: length out_vars = length in_sexprs).
+  | in_phi_info (out_vars: list VarID.t) (in_sexprs: list SimpleExprD.t) (H_no_dup: List.NoDup out_vars).
   
   Definition t := BlockID.t -> InBlockPhiInfo.
 
   Definition show (phi_info: t) : string :=
     let show_in_block_phi_info (bid: BlockID.t) (info: InBlockPhiInfo) : string :=
         match info with
-        | in_phi_info out_vars in_sexprs _ _ =>
+        | in_phi_info out_vars in_sexprs _ =>
             match (out_vars, in_sexprs) with 
             | ([], []) => ""
             | (out_vars, in_sexprs) => 
@@ -313,7 +313,7 @@ Module PhiInfo (D: DIALECT).
 
   (* an empty map for a block *)
   Definition empty_in_phi_info :=
-    in_phi_info [] [] (NoDup_nil VarID.t) (eq_refl (length [])).
+    in_phi_info [] [] (NoDup_nil VarID.t).
 
   (* The empty phi function maps every block ID to the empty map. *)
   Definition empty :=  
@@ -327,7 +327,7 @@ Module PhiInfo (D: DIALECT).
     | false => empty_in_phi_info
     | true => match Nat.eqb (length out_vars) (length in_vars) with
               | false => empty_in_phi_info
-              | true  => (in_phi_info out_vars in_vars _ _)
+              | true  => (in_phi_info out_vars in_vars _)
               end
     end.
   Next Obligation.
@@ -336,11 +336,11 @@ Module PhiInfo (D: DIALECT).
     exact Heq_anonymous0.
   Defined.
 
-  Next Obligation.
+  (*Next Obligation.
     symmetry in Heq_anonymous.
     rewrite Nat.eqb_eq in Heq_anonymous.
     exact Heq_anonymous.
-  Defined.
+  Defined.*)
 
   Definition construct_ (l: list (VarID.t * SimpleExprD.t)) :  InBlockPhiInfo :=
     let vars := List.map (fun p => fst p) l in
