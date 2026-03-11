@@ -55,10 +55,11 @@ Module Type DIALECT.
   Parameter opcode_indep_state : opcode_t -> bool. 
   
   (* If [opcode_indep_state op = true], then the execution of [op] should not depend on the dialect state. *)
-  Parameter opcode_indep_state_snd : forall (s1 s2: dialect_state_t) (op: opcode_t) (args: list value_t)
-       (res: list value_t) (status: Status.t), 
+  Parameter opcode_indep_state_snd : forall (op: opcode_t),
     opcode_indep_state op = true -> 
-    execute_opcode s1 op args = (res, s1, status) ->
+    forall (s1 s2: dialect_state_t) (args: list value_t), 
+    exists (res: list value_t) (status: Status.t),
+    execute_opcode s1 op args = (res, s1, status) /\
     execute_opcode s2 op args = (res, s2, status).
 
   (* An empty dialect state, which is mainly used to testing *)

@@ -1315,7 +1315,49 @@ Module EVMDialect <: DIALECT.
   destruct arg; [solve_injection Hexec_s1 Hres Hstatus| ];
   destruct arg; [solve_injection Hexec_s1 Hres Hstatus| solve_injection Hexec_s1 Hres Hstatus].
 
-  Lemma evm_opcode_indep_state_snd: forall (s1 s2: dialect_state_t) (op: opcode_t) (args: list value_t)
+  Ltac solve_binary_opcode args msg :=
+  simpl; destruct args;
+      + exists []. exists (Status.Error msg). split; reflexivity.
+      + destruct args.
+        * exists []. exists (Status.Error msg). split; reflexivity.
+        * destruct args.
+          -- exists [U256.sub v v0]. exists Status.Running. split; reflexivity.
+          -- exists []. exists (Status.Error msg). split; reflexivity.
+      - simpl. destruct args.
+
+  Lemma evm_opcode_indep_state_snd: forall (op: opcode_t),
+    opcode_indep_state op = true -> 
+    forall (s1 s2: dialect_state_t) (args: list value_t), 
+    exists (res: list value_t) (status: Status.t),
+    execute_opcode s1 op args = (res, s1, status) /\
+    execute_opcode s2 op args = (res, s2, status).
+  Proof.
+    unfold execute_opcode. intros op Hopcode s1 s2 args.
+    destruct op.
+    - simpl. exists []. exists Status.Terminated. split; reflexivity.
+    - simpl. destruct args.
+      + exists []. exists (Status.Error "ADD expects 2 inputs"). split; reflexivity.
+      + destruct args.
+        * exists []. exists (Status.Error "ADD expects 2 inputs"). split; reflexivity.
+        * destruct args.
+          -- exists [U256.add v v0]. exists Status.Running. split; reflexivity.
+          -- exists []. exists (Status.Error "ADD expects 2 inputs"). split; reflexivity.
+    - simpl. destruct args.
+      + exists []. exists (Status.Error "SUB expects 2 inputs"). split; reflexivity.
+      + destruct args.
+        * exists []. exists (Status.Error "SUB expects 2 inputs"). split; reflexivity.
+        * destruct args.
+          -- exists [U256.sub v v0]. exists Status.Running. split; reflexivity.
+          -- exists []. exists (Status.Error "SUB expects 2 inputs"). split; reflexivity.
+      - simpl. destruct args.
+
+        * exists []. exists (Status.Error "ADD expects 2 inputs"). split; reflexivity.
+        * destruct args.
+          -- exists [U256.add v v0]. exists Status.Running. split; reflexivity.
+          -- exists []. exists (Status.Error "ADD expects 2 inputs"). split; reflexivity.
+    try (simpl in Hopcode; discriminate Hopcode); (* dependent opcode,
+  
+  forall (s1 s2: dialect_state_t) (op: opcode_t) (args: list value_t)
        (res: list value_t) (status: Status.t), 
     opcode_indep_state op = true -> 
     execute_opcode s1 op args = (res, s1, status) ->
