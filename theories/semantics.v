@@ -151,9 +151,9 @@ Module SmallStep (D: DIALECT).
     match CFGProgD.get_block p sf.(fname) next_bid with
     | None => error s  "Target block not found in the smart contract"
     | Some next_b =>
-      match next_b.(phi_function) sf.(curr_bid) with   (* This is the phi-function of next_b that refers to the current block *)
-      | in_phi_info out_vars in_sexprs => 
-        handle_jump_aux p next_bid sf rsf s out_vars in_sexprs
+      match (snd next_b.(phi_function)) sf.(curr_bid) with   (* This is the phi-function of next_b that refers to the current block *)
+      | in_phi_info in_sexprs => 
+        handle_jump_aux p next_bid sf rsf s (fst next_b.(phi_function)) in_sexprs
       end
     end.
 

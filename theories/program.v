@@ -285,21 +285,19 @@ Module PhiInfo (D: DIALECT).
   Module SimpleExprD := SimpleExpr(D).
 
   Inductive InBlockPhiInfo :=
-  | in_phi_info (out_vars: list VarID.t) (in_sexprs: list SimpleExprD.t).
+  (*| in_phi_info (out_vars: list VarID.t) (in_sexprs: list SimpleExprD.t).*)
+  | in_phi_info (in_sexprs: list SimpleExprD.t).
   
   Definition t := BlockID.t -> InBlockPhiInfo.
 
   Definition show (phi_info: t) : string :=
-    let show_in_block_phi_info (bid: BlockID.t) (info: InBlockPhiInfo) : string :=
-        match info with
-        | in_phi_info out_vars in_sexprs =>
-            match (out_vars, in_sexprs) with 
-            | ([], []) => ""
-            | (out_vars, in_sexprs) => 
-                BlockID.show bid ++ ": " ++
-                String.concat ", " (List.map VarID.show out_vars) ++ " := " ++
-            String.concat ", " (List.map SimpleExprD.show in_sexprs)
-            end
+    let show_in_block_phi_info (bid: BlockID.t) (in_phi_info: InBlockPhiInfo) : string :=
+        match in_phi_info with
+        | in_phi_info in_sexprs => 
+            if in_sexprs then
+                BlockID.show bid ++ ": " ++ String.concat ", " (List.map SimpleExprD.show in_sexprs)
+            else
+                ""
         end
     in
     let first_blocks := List.map (N.of_nat) (List.seq 0 1000) in
@@ -313,7 +311,7 @@ Module PhiInfo (D: DIALECT).
 
   (* an empty map for a block *)
   Definition empty_in_phi_info :=
-    in_phi_info [] [].
+    in_phi_info [].
 
   (* The empty phi function maps every block ID to the empty map. *)
   Definition empty :=  
@@ -322,12 +320,15 @@ Module PhiInfo (D: DIALECT).
   (* IMPORTANT: when there is an error, it uses a default value
   instead of failing. It is done this way so the current parser keeps
   working, should be changed one the new parser is ready *)
+  Definition construct (in_vars: list SimpleExprD.t) : InBlockPhiInfo :=
+    in_phi_info in_vars.
+  (*
   Program Definition construct (out_vars: list VarID.t) (in_vars: list SimpleExprD.t) :  InBlockPhiInfo :=
     match Misc.nodupb VarID.t VarID.eqb out_vars with
     | false => empty_in_phi_info
     | true => match Nat.eqb (length out_vars) (length in_vars) with
               | false => empty_in_phi_info
-              | true  => (in_phi_info out_vars in_vars)
+              | true  => (in_phi_info in_vars)
               end
     end.
   (*Next Obligation.
@@ -341,11 +342,18 @@ Module PhiInfo (D: DIALECT).
     rewrite Nat.eqb_eq in Heq_anonymous.
     exact Heq_anonymous.
   Defined.*)
+  *)
 
+  (*
   Definition construct_ (l: list (VarID.t * SimpleExprD.t)) :  InBlockPhiInfo :=
     let vars := List.map (fun p => fst p) l in
     let exps := List.map (fun p => snd p) l in
     construct vars exps.
+  *)
+  Definition construct_ (l: list (VarID.t * SimpleExprD.t)) :  InBlockPhiInfo :=
+    (*let vars := List.map (fun p => fst p) l in*)
+    let exps := List.map (fun p => snd p) l in
+    construct exps.
 
 End PhiInfo.
 
@@ -406,26 +414,28 @@ Module Block (D: DIALECT).
   (* Block of code of CFG-YUL *)
   Record t : Type := {
       bid : BlockID.t;
-      phi_function : PhiInfoD.t;
+      phi_function : (list VarID.t) * PhiInfoD.t; (* out_vars & mapping BlockID -> in_exps *)
       exit_info : ExitInfoD.t;
       instructions : list (InstrD.t); (* List of instructions in the block *)
     }.
 
   Definition show (b: t) : string :=
-    let phi_str := PhiInfoD.show b.(phi_function) in
+    let (out_vars, phi_info) := b.(phi_function) in
+    let out_vars_str := "[" ++ (String.concat ", " (List.map VarID.show out_vars)) ++ "]" in
+    let phi_str := PhiInfoD.show phi_info in
     let phi_str_format := match phi_str with
                         | "" => "\n"
                         | _ => "\n        " ++ phi_str ++ "\n"
                         end in
     "\n\n    ##" ++ BlockID.show b.(bid) ++ "##\n" ++
-    "    Phi function: " ++ phi_str_format ++
+    "    Phi function: " ++ out_vars_str ++ " := " ++phi_str_format ++
     "    Exit info: " ++ ExitInfoD.show b.(exit_info) ++ "\n" ++
     "    Instructions:\n" ++ String.concat "\n" (List.map InstrD.show b.(instructions)).
 
-  Definition construct (bid: BlockID.t) (phi_function : PhiInfoD.t) (exit_info : ExitInfoD.t) (instructions : list (InstrD.t)) :=
+  Definition construct (bid: BlockID.t) (out_vars: list VarID.t) (phi_function : PhiInfoD.t) (exit_info : ExitInfoD.t) (instructions : list (InstrD.t)) :=
     {|
       bid := bid;
-      phi_function := phi_function;
+      phi_function := (out_vars, phi_function);
       exit_info := exit_info;
       instructions := instructions;
     |}.

@@ -461,15 +461,16 @@ Module Liveness_snd (D: DIALECT).
     reflexivity.
   Qed.
 
+  
   (* [apply_inv_phi] produces equal sets when applied to equal sets *)
   Lemma apply_inv_phi_preserves_equal:
-    forall l s1 s2,
+    forall out_vars l s1 s2,
       VarSet.Equal s1 s2 ->
-      VarSet.Equal (apply_inv_phi l s1) (apply_inv_phi l s2).
+      VarSet.Equal (apply_inv_phi out_vars l s1) (apply_inv_phi out_vars l s2).
   Proof.
-    intros l s1 s2 H_eq_s1_s2.
+    intros out_vars l s1 s2 H_eq_s1_s2.
     unfold apply_inv_phi.
-    destruct l as [out_vars in_sexprs].
+    destruct l as [in_sexprs].
     remember (list_to_set out_vars) as outset eqn:E_outset.
     remember (list_to_set (extract_yul_vars in_sexprs)) as inset eqn:E_inset.
 
@@ -547,10 +548,10 @@ Module Liveness_snd (D: DIALECT).
     apply (prop_live_set_bkw_aux_preserves_equal (Datatypes.length l) (rev l) s1 s2 H_eq_s1_s2).
   Qed.
 
- 
+  
   (*
-    The following co-inductive defintions are for live variables properties,
-    they coincide with the equations that we explianed in liveness.v
+    The following co-inductive definitions are for live variables properties,
+    they coincide with the equations that we explained in liveness.v
     
     - live_out p fname bid s: s is the set of live variables at the exit of the block p/fname/bid
     - live_in p fname bid s: s is the set of live variables at the entry of the block p/fname/bid
@@ -577,7 +578,7 @@ Module Liveness_snd (D: DIALECT).
     BlockD.is_jump_block b = Some next_bid -> (* the block ends with a jump, and next_bid is the id of the next block *)
     live_in p fname next_bid s -> (* s is the set of live variables at the entry of p/fname/next_bid *)
     CFGProgD.get_block p fname next_bid = Some next_b -> (* next_b is the block with id next_bid *)
-    VarSet.Equal sout (apply_inv_phi (next_b.(phi_function) bid) s) ->
+    VarSet.Equal sout (apply_inv_phi (fst (next_b.(phi_function))) ((snd (next_b.(phi_function)) bid)) s) ->
     live_out p fname bid sout  (* sout is the set of live variable at the exit of p/fname/bid *)
 
   (* A block with a conditional jump *)
@@ -588,7 +589,8 @@ Module Liveness_snd (D: DIALECT).
     live_in p fname next_bid_if_false s2 -> (* s2 is the set of live variables at the entry of p/fname/next_bid_if_false *)
     CFGProgD.get_block p fname next_bid_if_true = Some next_b_if_true -> (* next_b_if_true is the block with id next_bid_if_true *)
     CFGProgD.get_block p fname next_bid_if_false = Some next_b_if_false -> (* next_b_if_false is the block with id next_bid_if_false *)
-    VarSet.Equal sout (VarSet.union (apply_inv_phi (next_b_if_true.(phi_function) bid) s1) (apply_inv_phi (next_b_if_false.(phi_function) bid) s2)) ->
+    VarSet.Equal sout (VarSet.union (apply_inv_phi (fst (next_b_if_true.(phi_function))) (snd next_b_if_true.(phi_function) bid) s1) 
+                                    (apply_inv_phi (fst (next_b_if_false.(phi_function))) (snd next_b_if_false.(phi_function) bid) s2)) ->
     live_out p fname bid sout
   with
     live_in (p : CFGProgD.t) : FuncName.t -> BlockID.t -> VarSet.t -> Prop :=
@@ -870,7 +872,7 @@ Module Liveness_snd (D: DIALECT).
             exists next_b next_b_in_info next_b_out_info,
             CFGProgD.get_block p fname next_bid = Some next_b /\ 
               f_info next_bid = Some (next_b_in_info,next_b_out_info) /\
-              VarSet.Equal b_out_info (apply_inv_phi (next_b.(phi_function) b.(bid)) next_b_in_info)
+              VarSet.Equal b_out_info (apply_inv_phi (fst next_b.(phi_function)) (snd next_b.(phi_function) b.(bid)) next_b_in_info)
         | ExitInfoD.ConditionalJump cond_var next_bid_if_true next_bid_if_false => 
             exists next_b_if_true next_b_ift_in_info next_b_ift_out_info next_b_if_false next_b_iff_in_info next_b_iff_out_info,
             CFGProgD.get_block p fname next_bid_if_true = Some next_b_if_true /\ 
@@ -878,8 +880,8 @@ Module Liveness_snd (D: DIALECT).
               f_info next_bid_if_true = Some (next_b_ift_in_info,next_b_ift_out_info) /\
               f_info next_bid_if_false = Some (next_b_iff_in_info,next_b_iff_out_info) /\
               VarSet.Equal b_out_info (VarSet.union
-                                         (apply_inv_phi (phi_function next_b_if_true b.(bid)) next_b_ift_in_info)
-                                         (apply_inv_phi (phi_function next_b_if_false b.(bid)) next_b_iff_in_info))
+                                         (apply_inv_phi (fst next_b_if_true.(phi_function)) (snd next_b_if_true.(phi_function) b.(bid)) next_b_ift_in_info)
+                                         (apply_inv_phi (fst next_b_if_false.(phi_function)) (snd next_b_if_false.(phi_function) b.(bid)) next_b_iff_in_info))
         end.
  
   Definition snd_block_in_info (r: prog_live_info_t) (fname: FuncName.t) (b: BlockD.t) : Prop :=
@@ -3951,7 +3953,7 @@ Lemma check_live_out_complete:
     destruct (CFGProgD.get_block p fname next_bid) as [next_b|] eqn:E_get_b_next.
     
     (* block found *)
-    - destruct (next_b.(phi_function) bid) as [out_vars in_sexprs] eqn:E_phi.
+    - destruct ((phi_function next_b).2 bid) as [in_sexprs] eqn:E_phi.
 
       pose proof (at_end_implied_pc_ge_len_bs p fname bid b pc st1 sf1 tl s H_b_exists H_live_at_pc H_get_instr H_call_stack_st1 H_fname_sf1 H_bid_sf1 H_pc_sf1).
 
@@ -3984,8 +3986,8 @@ Lemma check_live_out_complete:
           rewrite E_phi in H_sout0.
 
           rewrite <- varset_equal_sym in H_sout0.
-          pose proof (varset_eq_imp_subset (VarSet.union (VarSet.diff s' (list_to_set out_vars)) (list_to_set (extract_yul_vars in_sexprs))) sout0 H_sout0) as H_subset.          
-          apply (live_at_handle_jump_aux_1_snd p i fname bid next_bid b next_b pc sout sout0 s' st1 st2 st1' sf1 sf2 tl v out_vars in_sexprs H_b_exists E_get_b_next H_live_at_pc H_live_out H_live_in_next_pc H_sout H_subset H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_jump_st1 H_not_In_v_s).
+          pose proof (varset_eq_imp_subset (VarSet.union (VarSet.diff s' (list_to_set (phi_function next_b).1)) (list_to_set (extract_yul_vars in_sexprs))) sout0 H_sout0) as H_subset.          
+          apply (live_at_handle_jump_aux_1_snd p i fname bid next_bid b next_b pc sout sout0 s' st1 st2 st1' sf1 sf2 tl v (phi_function next_b).1 in_sexprs H_b_exists E_get_b_next H_live_at_pc H_live_out H_live_in_next_pc H_sout H_subset H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_jump_st1 H_not_In_v_s).
 
         * subst_var_by_inj H_b_exists H_b0_exists b0.                   
           unfold BlockD.is_cond_jump_block in H_is_cjump.
@@ -4049,12 +4051,12 @@ Qed.
     destruct (CFGProgD.get_block p (StackFrameD.fname top_sf) next_bid) as [next_b|] eqn:H_next_b_exists.
 
     (* block found *)
-    - destruct (phi_function next_b (curr_bid top_sf)) as [out_vars in_sexprs] eqn:E_phi.
+    - destruct ((phi_function next_b).2 (curr_bid top_sf)) as [in_sexprs] eqn:E_phi.
 
       unfold handle_jump_aux  in H_handle_jump_st1.
       unfold handle_jump_aux.
 
-      destruct (set_all (locals top_sf) out_vars (eval_sexpr in_sexprs top_sf)) as [locals'|] eqn:E_set_all.
+      destruct (set_all (locals top_sf) (phi_function next_b).1 (eval_sexpr in_sexprs top_sf)) as [locals'|] eqn:E_set_all.
 
       (* set_all succ *)
       + remember {|
@@ -4234,8 +4236,8 @@ Qed.
           rewrite H_next_b0_if_false in H_handle_cond_jump_st1.
 
           
-          destruct (next_b0_if_true.(phi_function) bid) as [out_vars_1 in_sexprs_1] eqn:E_phi_1.
-          destruct (next_b0_if_false.(phi_function) bid) as [out_vars_2 in_sexprs_2] eqn:E_phi_2.
+          destruct (next_b0_if_true.(phi_function).2 bid) as [in_sexprs_1] eqn:E_phi_1.
+          destruct (next_b0_if_false.(phi_function).2 bid) as [in_sexprs_2] eqn:E_phi_2.
 
           rewrite varset_equal_sym in H_sout0.
           apply varset_eq_imp_subset in H_sout0.
@@ -4246,9 +4248,9 @@ Qed.
 
           destruct (D.is_true_value (get (locals sf1) cv)) eqn:E_cv.
  
-          * apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_true b next_b0_if_true pc sout sout0 s1' st1 st2 st1' sf1 sf2 tl v out_vars_1 in_sexprs_1 H_b_exists H_next_b0_if_true H_live_at_pc H_live_out H_live_at_pc_if_true H_sout' H_sout0_l H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
+          * apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_true b next_b0_if_true pc sout sout0 s1' st1 st2 st1' sf1 sf2 tl v next_b0_if_true.(phi_function).1 in_sexprs_1 H_b_exists H_next_b0_if_true H_live_at_pc H_live_out H_live_at_pc_if_true H_sout' H_sout0_l H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
             
-          * apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_false b next_b0_if_false pc sout sout0 s2' st1 st2 st1' sf1 sf2 tl v out_vars_2 in_sexprs_2 H_b_exists H_next_b0_if_false H_live_at_pc H_live_out H_live_at_pc_if_false H_sout' H_sout0_r H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
+          * apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_false b next_b0_if_false pc sout sout0 s2' st1 st2 st1' sf1 sf2 tl v next_b0_if_false.(phi_function).1 in_sexprs_2 H_b_exists H_next_b0_if_false H_live_at_pc H_live_out H_live_at_pc_if_false H_sout' H_sout0_r H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
 
       
     - subst_var_by_inj H_b_exists H_b0_exists b0.
