@@ -285,14 +285,14 @@ Module PhiInfo (D: DIALECT).
   Module SimpleExprD := SimpleExpr(D).
 
   Inductive InBlockPhiInfo :=
-  | in_phi_info (out_vars: list VarID.t) (in_sexprs: list SimpleExprD.t) (H_no_dup: List.NoDup out_vars).
+  | in_phi_info (out_vars: list VarID.t) (in_sexprs: list SimpleExprD.t).
   
   Definition t := BlockID.t -> InBlockPhiInfo.
 
   Definition show (phi_info: t) : string :=
     let show_in_block_phi_info (bid: BlockID.t) (info: InBlockPhiInfo) : string :=
         match info with
-        | in_phi_info out_vars in_sexprs _ =>
+        | in_phi_info out_vars in_sexprs =>
             match (out_vars, in_sexprs) with 
             | ([], []) => ""
             | (out_vars, in_sexprs) => 
@@ -313,30 +313,30 @@ Module PhiInfo (D: DIALECT).
 
   (* an empty map for a block *)
   Definition empty_in_phi_info :=
-    in_phi_info [] [] (NoDup_nil VarID.t).
+    in_phi_info [] [].
 
   (* The empty phi function maps every block ID to the empty map. *)
   Definition empty :=  
       fun bid : BlockID.t => empty_in_phi_info.
 
-  (* IMPORTANT: when there is an error, it uses a defualt value
+  (* IMPORTANT: when there is an error, it uses a default value
   instead of failing. It is done this way so the current parser keeps
-  working, should be changed one the new parser is tready *)
+  working, should be changed one the new parser is ready *)
   Program Definition construct (out_vars: list VarID.t) (in_vars: list SimpleExprD.t) :  InBlockPhiInfo :=
     match Misc.nodupb VarID.t VarID.eqb out_vars with
     | false => empty_in_phi_info
     | true => match Nat.eqb (length out_vars) (length in_vars) with
               | false => empty_in_phi_info
-              | true  => (in_phi_info out_vars in_vars _)
+              | true  => (in_phi_info out_vars in_vars)
               end
     end.
-  Next Obligation.
+  (*Next Obligation.
     apply Is_true_eq_right in Heq_anonymous0.
     apply (Misc.nodupb_spec VarID.t VarID.eqb VarID.eqb_eq VarID.eq_dec) in Heq_anonymous0.
     exact Heq_anonymous0.
   Defined.
 
-  (*Next Obligation.
+  Next Obligation.
     symmetry in Heq_anonymous.
     rewrite Nat.eqb_eq in Heq_anonymous.
     exact Heq_anonymous.
