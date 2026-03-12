@@ -1301,22 +1301,6 @@ Module EVMDialect <: DIALECT.
     | _ => false
     end.
 
-  Ltac solve_injection Hexec_s1 Hres Hstatus :=
-  injection Hexec_s1 as Hres Hstatus;
-  rewrite <- Hres; rewrite <- Hstatus;
-  reflexivity.
-
-  Ltac solve_injection_binary arg Hexec_s1 Hres Hstatus :=
-  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| ];
-  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| ];
-  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| solve_injection Hexec_s1 Hres Hstatus].
-
-  Ltac solve_injection_ternary arg Hexec_s1 Hres Hstatus :=
-  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| ];
-  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| ];
-  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| ];
-  destruct arg; [solve_injection Hexec_s1 Hres Hstatus| solve_injection Hexec_s1 Hres Hstatus].
-
   Ltac solve_binary_op op msg args :=
   simpl;
   destruct args as [|v [|v0 [|v1 args]]];

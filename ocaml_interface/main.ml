@@ -389,6 +389,7 @@ let extract_sexpr (s: string) : Checker.Checker.ExitInfo.SimpleExprD.t =
       failwith ("Invalid simple expression string: " ^ s)
 
 
+(* Extracts a list of SimpleExprs from a JSON array *)
 let extract_sexprs (sexprs_json: Yojson.Safe.t) : Checker.Checker.ExitInfo.SimpleExprD.t list =
   List.map (fun s -> match s with
                       | `String s' -> extract_sexpr s'
@@ -396,6 +397,15 @@ let extract_sexprs (sexprs_json: Yojson.Safe.t) : Checker.Checker.ExitInfo.Simpl
            (to_list sexprs_json)
 
 
+(* Extracts a list of phi instructions from a JSON array with Phi instructions of the form
+   {"out": "<var>", "in": ["<expr1>", "<expr2>", ...]} 
+   Generates a result of the form 
+   ( [[<expr1_row1>, <expr2_row1>, ...], [<expr1_row2>, <expr2_row2>, ...], ...], 
+      [<outvar1>,                         <outvar2>,                        ...]) 
+   where the first component is a list of rows of the phi instruction 
+   (each row is a list of simple expressions) and the second component is the list 
+   of output variables of the phi instructions.   
+*)
 let rec extract_phi_instrs (phi_instrs_json: Yojson.Safe.t list) : 
     (Checker.Checker.ExitInfo.SimpleExprD.t list) list * Checker.VarID.t list = 
   match phi_instrs_json with
