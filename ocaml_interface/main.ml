@@ -418,58 +418,31 @@ let rec extract_phi_instrs (phi_instrs_json: Yojson.Safe.t list) :
                   let s = extract_sexprs (member "in" instr)
                   in (s :: sexprs, v :: vars)
 
-
-let pair_vars_with_columns
-    (rows: Checker.Checker.ExitInfo.SimpleExprD.t list list)
-    (vars: Checker.VarID.t list)
-  : (Checker.VarID.t list * Checker.Checker.ExitInfo.SimpleExprD.t list) list =
-  let row_count = List.length rows in
-  if row_count <> List.length vars then
-    failwith "pair_vars_with_columns: vars length must match number of rows";
-  let rec transpose acc rows =
-    match rows with
-    | [] -> List.rev acc
-    | _ ->
-        if List.exists (fun r -> r = []) rows then
-          if List.for_all (fun r -> r = []) rows then List.rev acc
-          else failwith "pair_vars_with_columns: rows have different lengths"
-        else
-          let heads = List.map List.hd rows in
-          let tails = List.map List.tl rows in
-          transpose (heads :: acc) tails
-  in
-  let cols = transpose [] rows in
-  List.map (fun col -> (vars, col)) cols       
-
-(*
-(* Debugging code *)
-let print_pair_vars_with_columns (pvwc: (Checker.VarID.t list * Checker.Checker.ExitInfo.SimpleExprD.t list) list) : unit =
-  List.iter (fun (vars, sexprs) ->
-    let vars_str = String.concat ", " (List.map n_to_string vars) in
-    let sexprs_str = String.concat ", " (List.map simple_expr_to_string sexprs) in
-    Printf.printf "Vars: [%s] | SimpleExprs: [%s]\n" vars_str sexprs_str
-  ) pvwc
+(* Function to transpose lists of simple expressions and assign to the same block*)                  
+let rec transpose = function
+  | []             -> []
+  | [] :: _        -> [] (* Base case for empty inner lists *)
+  | lists          -> 
+      (List.map List.hd lists) :: (transpose (List.map List.tl lists))
 
 
-let () =
-  let l = pair_vars_with_columns 
-    [[Inl (int_to_n 1); Inl (int_to_n 2); Inr (Checker.Zpos (int_to_pos 55))]; 
-    [Inr (Checker.Zpos (int_to_pos 3)); Inr (Checker.Zpos (int_to_pos 4)); Inl (int_to_n 88)]]
-    [int_to_n 42; int_to_n 0] in
-  print_pair_vars_with_columns l;;
-(*******************)
-*)
-
-
-let rec gen_phi_function (lp: (Checker.VarID.t list * Checker.Checker.ExitInfo.SimpleExprD.t list) list) 
-                     (bids: Checker.BlockID.t list) : Checker.Checker.EVMPhiInfo.t =
-  match (lp, bids) with
-  | ([], []) -> fun _ -> Checker.Checker.EVMPhiInfo.Coq_in_phi_info ([], [])
-  | ((vars, sexprs) :: lp_rest, bid :: bids_rest) ->
-      let rest_phi = gen_phi_function lp_rest bids_rest in
-      fun b -> if b = bid then Checker.Checker.EVMPhiInfo.Coq_in_phi_info (vars, sexprs)
+let rec gen_phi_function' (sexprs: (Checker.Checker.ExitInfo.SimpleExprD.t list) list) 
+       (bids: Checker.BlockID.t list) : Checker.Checker.EVMPhiInfo.t =
+  match (sexprs, bids) with
+  | ([], []) -> fun _ -> []
+  | (sexprs_row :: sexprs_rest, bid :: bids_rest) ->
+      let rest_phi = gen_phi_function' sexprs_rest bids_rest in
+      fun b -> if b = bid then sexprs_row
                else rest_phi b
-  | _ -> failwith "gen_phi_function: lp and bids must have the same length"               
+  | _ -> failwith "gen_phi_function': sexprs and bids must have the same length"
+
+let gen_phi_pair (sexprs: (Checker.Checker.ExitInfo.SimpleExprD.t list) list) 
+       (outvars: Checker.VarID.t list) (bids: Checker.BlockID.t list) 
+       : (Checker.VarID.t list) * Checker.Checker.EVMPhiInfo.t =
+  let trans = transpose sexprs in
+  let f = gen_phi_function' trans bids in
+  (outvars, f)
+
 
 
 let extract_phi_info (phi_instrs : Yojson.Safe.t list) (entries : Yojson.Safe.t list) = 
@@ -478,10 +451,9 @@ let extract_phi_info (phi_instrs : Yojson.Safe.t list) (entries : Yojson.Safe.t 
   let bids = List.map (fun entry -> match entry with
                                 | `String s -> extract_bid s
                                 | _ -> failwith "Invalid entry in block") entries in
-  let exprs, vars = extract_phi_instrs phi_instrs in
-  if dup_vars vars then failwith "Duplicate variables in phi instructions";
-  let lp = pair_vars_with_columns exprs vars in
-  gen_phi_function lp bids
+  let exprs, out_vars = extract_phi_instrs phi_instrs in
+  if dup_vars out_vars then failwith "Duplicate out variables in phi instructions";
+  gen_phi_pair exprs out_vars bids
 
 
 let extract_exit_info (exit_info: Yojson.Safe.t) : Checker.Checker.ExitInfo.t =
