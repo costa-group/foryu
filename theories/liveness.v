@@ -216,7 +216,6 @@ Module Liveness (D: DIALECT).
                     match (f_info next_bid) with
                     | None => false
                     | Some (next_b_in_info,next_b_out_info) =>
-                     (* VarSet.equal b_out_info (apply_inv_phi (BlockD.phi_function next_b b.(BlockD.bid)) next_b_in_info) *)
                         VarSet.equal b_out_info (apply_inv_phi (fst next_b.(phi_function)) (snd (next_b.(phi_function)) b.(BlockD.bid)) next_b_in_info)
                     end
                 end
@@ -236,8 +235,6 @@ Module Liveness (D: DIALECT).
                             | None => false
                             | Some (next_b_iff_in_info,next_b_iff_out_info) =>
                                 VarSet.equal b_out_info (VarSet.union
-                                (* (apply_inv_phi (BlockD.phi_function next_b_if_true b.(BlockD.bid)) next_b_ift_in_info)
-                                   (apply_inv_phi (BlockD.phi_function next_b_if_false b.(BlockD.bid)) next_b_iff_in_info)) *)
                                    (apply_inv_phi (fst next_b_if_true.(phi_function)) (snd next_b_if_true.(phi_function) b.(BlockD.bid)) next_b_ift_in_info)
                                    (apply_inv_phi (fst next_b_if_false.(phi_function)) (snd next_b_if_false.(phi_function) b.(BlockD.bid)) next_b_iff_in_info))
                             end
@@ -291,7 +288,6 @@ Module Liveness (D: DIALECT).
       match f_info b.(BlockD.bid) with
       | None => false
       | Some (b_in_info,b_out_info) =>
-          (* VarSet.equal b_in_info (prop_live_set_bkw b.(BlockD.instructions) (add_jump_var_if_applicable b b_out_info)) *)
           VarSet.subset (prop_live_set_bkw b.(BlockD.instructions) (add_jump_var_if_applicable b b_out_info)) b_in_info
       end
     end.

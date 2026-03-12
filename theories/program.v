@@ -317,41 +317,10 @@ Module PhiInfo (D: DIALECT).
   Definition empty :=  
       fun bid : BlockID.t => empty_in_phi_info.
 
-  (* IMPORTANT: when there is an error, it uses a default value
-  instead of failing. It is done this way so the current parser keeps
-  working, should be changed one the new parser is ready *)
   Definition construct (in_vars: list SimpleExprD.t) : InBlockPhiInfo :=
     in_phi_info in_vars.
-  (*
-  Program Definition construct (out_vars: list VarID.t) (in_vars: list SimpleExprD.t) :  InBlockPhiInfo :=
-    match Misc.nodupb VarID.t VarID.eqb out_vars with
-    | false => empty_in_phi_info
-    | true => match Nat.eqb (length out_vars) (length in_vars) with
-              | false => empty_in_phi_info
-              | true  => (in_phi_info in_vars)
-              end
-    end.
-  (*Next Obligation.
-    apply Is_true_eq_right in Heq_anonymous0.
-    apply (Misc.nodupb_spec VarID.t VarID.eqb VarID.eqb_eq VarID.eq_dec) in Heq_anonymous0.
-    exact Heq_anonymous0.
-  Defined.
-
-  Next Obligation.
-    symmetry in Heq_anonymous.
-    rewrite Nat.eqb_eq in Heq_anonymous.
-    exact Heq_anonymous.
-  Defined.*)
-  *)
-
-  (*
+  
   Definition construct_ (l: list (VarID.t * SimpleExprD.t)) :  InBlockPhiInfo :=
-    let vars := List.map (fun p => fst p) l in
-    let exps := List.map (fun p => snd p) l in
-    construct vars exps.
-  *)
-  Definition construct_ (l: list (VarID.t * SimpleExprD.t)) :  InBlockPhiInfo :=
-    (*let vars := List.map (fun p => fst p) l in*)
     let exps := List.map (fun p => snd p) l in
     construct exps.
 
