@@ -644,19 +644,17 @@ Module Constancy_checker_snd (D: DIALECT).
 
   (* ** Wiring the whole-program checker down to a specific block **
 
-  [CFGProgD.get_func]/[CFGFunD.get_block] both resolve via
-  [List.find], so a successful lookup's own result is (a) a member of
-  the list searched, and (b) matches the query on the field being
-  compared. *)
+  [CFGProgD.get_func]/[CFGFunD.get_block] both resolve via a [FuncNameMap]/
+  [BlockMap] index built from [functions]/[blocks] (see program.v), so a
+  successful lookup's own result is (a) a member of the list indexed, and
+  (b) matches the query on the field being compared -- exactly what
+  [get_func_sound]/[get_block_sound] give directly. *)
   Lemma get_func_in :
     forall (p: CFGProgD.t) (fn: FuncName.t) (f: CFGFunD.t),
       CFGProgD.get_func p fn = Some f -> In f p.(functions).
   Proof.
     intros p fn f Hget.
-    unfold CFGProgD.get_func in Hget.
-    destruct (List.find (fun f0 => FuncName.eqb f0.(CFGFunD.name) fn) p.(functions)) as [f'|] eqn:Hfind; try discriminate.
-    injection Hget as Hget. subst f'.
-    exact (proj1 (List.find_some _ _ Hfind)).
+    exact (proj1 (CFGProgD.get_func_sound p fn f Hget)).
   Qed.
 
   Lemma get_func_name_eq :
@@ -664,10 +662,7 @@ Module Constancy_checker_snd (D: DIALECT).
       CFGProgD.get_func p fn = Some f -> f.(CFGFunD.name) = fn.
   Proof.
     intros p fn f Hget.
-    unfold CFGProgD.get_func in Hget.
-    destruct (List.find (fun f0 => FuncName.eqb f0.(CFGFunD.name) fn) p.(functions)) as [f'|] eqn:Hfind; try discriminate.
-    injection Hget as Hget. subst f'.
-    apply FuncName.eqb_eq. exact (proj2 (List.find_some _ _ Hfind)).
+    exact (proj2 (CFGProgD.get_func_sound p fn f Hget)).
   Qed.
 
   Lemma get_block_in :
@@ -678,10 +673,7 @@ Module Constancy_checker_snd (D: DIALECT).
     intros p fn bid f b Hgetf Hgetb.
     unfold CFGProgD.get_block in Hgetb.
     rewrite Hgetf in Hgetb.
-    unfold CFGFunD.get_block in Hgetb.
-    destruct (List.find (fun b0 => BlockID.eqb b0.(BlockD.bid) bid) f.(blocks)) as [b'|] eqn:Hfind; try discriminate.
-    injection Hgetb as Hgetb. subst b'.
-    exact (proj1 (List.find_some _ _ Hfind)).
+    exact (proj1 (CFGFunD.get_block_sound f bid b Hgetb)).
   Qed.
 
   Lemma get_block_bid_eq :
@@ -692,10 +684,7 @@ Module Constancy_checker_snd (D: DIALECT).
     intros p fn bid f b Hgetf Hgetb.
     unfold CFGProgD.get_block in Hgetb.
     rewrite Hgetf in Hgetb.
-    unfold CFGFunD.get_block in Hgetb.
-    destruct (List.find (fun b0 => BlockID.eqb b0.(BlockD.bid) bid) f.(blocks)) as [b'|] eqn:Hfind; try discriminate.
-    injection Hgetb as Hgetb. subst b'.
-    apply BlockID.eqb_eq. exact (proj2 (List.find_some _ _ Hfind)).
+    exact (proj2 (CFGFunD.get_block_sound f bid b Hgetb)).
   Qed.
 
   Lemma check_const_functions_snd :

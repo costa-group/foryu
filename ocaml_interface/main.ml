@@ -546,6 +546,7 @@ let extract_function (fname: string) (fbody: Yojson.Safe.t) : Checker.Checker.EV
     Checker.Checker.EVMCFGFun.args = args;
     Checker.Checker.EVMCFGFun.blocks = blocks;
     Checker.Checker.EVMCFGFun.entry_bid = entry_bid;
+    Checker.Checker.EVMCFGFun.block_index = Checker.Checker.EVMCFGFun.build_block_index blocks;
   }
 
 
@@ -559,16 +560,24 @@ let extract_prog (flatjson: Yojson.Safe.t) (sc_name: string) : Checker.Checker.E
   { Checker.Checker.EVMCFGProg.name = string_to_char_list sc_name;
     Checker.Checker.EVMCFGProg.functions = funs;
     Checker.Checker.EVMCFGProg.main = string_to_char_list main_fun;
+    Checker.Checker.EVMCFGProg.func_index = Checker.Checker.EVMCFGProg.build_func_index funs;
   }
 
 
-let rec create_block_liveness_info (blocks_liveness: (Checker.BlockID.t * (Checker.Checker.EVMLiveness.VarSet.t * Checker.Checker.EVMLiveness.VarSet.t) option ) list) : 
+(* [func_live_info_t]/[prog_live_info_t] are plain Rocq functions
+   (BlockID.t -> option ... / FuncName.t -> option ...), not finite maps --
+   Rocq has no visibility into how OCaml builds a value of that type, so a
+   Hashtbl-backed closure is just as valid as (and, for large functions,
+   far faster than) a linear chain of "if b = bid then ... else ..."
+   closures, which cost O(n) per lookup and O(n^2) total across a whole
+   function's edges. *)
+let create_block_liveness_info (blocks_liveness: (Checker.BlockID.t * (Checker.Checker.EVMLiveness.VarSet.t * Checker.Checker.EVMLiveness.VarSet.t) option ) list) :
       Checker.Checker.EVMLiveness.func_live_info_t =
-  match blocks_liveness with
-  | [] -> fun _ -> None
-  | (bid, live_info_pair) :: rest ->
-      let rest_info = create_block_liveness_info rest in
-      fun b -> if b = bid then live_info_pair else rest_info b
+  let tbl = Hashtbl.create (List.length blocks_liveness) in
+  List.iter (fun (bid, live_info_pair) -> Hashtbl.replace tbl bid live_info_pair) blocks_liveness;
+  fun b -> match Hashtbl.find_opt tbl b with
+           | Some live_info_pair -> live_info_pair
+           | None -> None
 
 
 let extract_block_liveness (block: Yojson.Safe.t) : Checker.BlockID.t * (Checker.Checker.EVMLiveness.VarSet.t * Checker.Checker.EVMLiveness.VarSet.t) option =
@@ -602,14 +611,11 @@ let extract_funct_liveness (fbody: Yojson.Safe.t) : Checker.Checker.EVMLiveness.
 
 
 
-let rec create_liveness_info (funs: (string * Checker.Checker.EVMLiveness.func_live_info_t) list) : 
+let create_liveness_info (funs: (string * Checker.Checker.EVMLiveness.func_live_info_t) list) :
         Checker.Checker.EVMLiveness.prog_live_info_t =
-  match funs with
-  | [] -> fun _ -> None
-  | (fname, finfo) :: rest -> 
-      let rest_info = create_liveness_info rest in
-      fun f -> if f = string_to_char_list fname then Some finfo
-               else rest_info f
+  let tbl = Hashtbl.create (List.length funs) in
+  List.iter (fun (fname, finfo) -> Hashtbl.replace tbl (string_to_char_list fname) finfo) funs;
+  fun f -> Hashtbl.find_opt tbl f
 
 
 let extract_liveness_info (flatjson: Yojson.Safe.t) : Checker.Checker.EVMLiveness.prog_live_info_t =
@@ -688,13 +694,14 @@ let extract_blocks_constancy (blocks: Yojson.Safe.t list) : (Checker.BlockID.t *
   List.map extract_block_constancy blocks
 
 
-let rec create_block_const_info (blocks_const: (Checker.BlockID.t * Checker.Checker.EVMConstancy.block_const_info_t option) list) :
+(* Hashtbl-backed, same rationale as create_block_liveness_info above. *)
+let create_block_const_info (blocks_const: (Checker.BlockID.t * Checker.Checker.EVMConstancy.block_const_info_t option) list) :
       Checker.Checker.EVMConstancy.func_const_info_t =
-  match blocks_const with
-  | [] -> fun _ -> None
-  | (bid, const_info) :: rest ->
-      let rest_info = create_block_const_info rest in
-      fun b -> if b = bid then const_info else rest_info b
+  let tbl = Hashtbl.create (List.length blocks_const) in
+  List.iter (fun (bid, const_info) -> Hashtbl.replace tbl bid const_info) blocks_const;
+  fun b -> match Hashtbl.find_opt tbl b with
+           | Some const_info -> const_info
+           | None -> None
 
 
 (* Extracts the constancy information from a function body in JSON *)
@@ -706,14 +713,11 @@ let extract_funct_const_info (fbody: Yojson.Safe.t) : Checker.Checker.EVMConstan
   create_block_const_info blocks_const
 
 
-let rec create_const_info (funs: (string * Checker.Checker.EVMConstancy.func_const_info_t) list) :
+let create_const_info (funs: (string * Checker.Checker.EVMConstancy.func_const_info_t) list) :
         Checker.Checker.EVMConstancy.prog_const_info_t =
-  match funs with
-  | [] -> fun _ -> None
-  | (fname, finfo) :: rest ->
-      let rest_info = create_const_info rest in
-      fun f -> if f = string_to_char_list fname then Some finfo
-               else rest_info f
+  let tbl = Hashtbl.create (List.length funs) in
+  List.iter (fun (fname, finfo) -> Hashtbl.replace tbl (string_to_char_list fname) finfo) funs;
+  fun f -> Hashtbl.find_opt tbl f
 
 
 let extract_const_info (flatjson: Yojson.Safe.t) : Checker.Checker.EVMConstancy.prog_const_info_t =

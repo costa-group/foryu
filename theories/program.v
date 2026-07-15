@@ -13,6 +13,9 @@ From Stdlib Require Export Strings.String.
 From Stdlib Require Import MSets.
 From Stdlib Require Import NArith.
 From Stdlib Require Import Arith.
+From Stdlib Require Import FSets.FMapAVL.
+From Stdlib Require Import FSets.FMapFacts.
+From Stdlib Require Import Structures.OrderedTypeEx.
 
 Global Open Scope string_scope.
 Global Open Scope Z_scope.
@@ -257,6 +260,20 @@ Module FuncName.
 End FuncName.
 
 
+(* Finite maps used by [CFGFun.get_block]/[CFGProg.get_func] below to
+resolve a block/function in O(log n) instead of the O(n) linear scan a
+[List.find] over [blocks]/[functions] would cost -- and since these are
+looked up once per CFG edge, across every block of a function, an O(n)
+lookup makes the whole check O(n^2). [BlockID.t]/[FuncName.t] don't depend
+on any dialect, so these maps are defined once, up front, rather than
+inside the [CFGFun(D)]/[CFGProg(D)] functors. *)
+Module BlockMap := FMapAVL.Make(N_as_OT).
+Module BlockMapFacts := FMapFacts.WFacts_fun N_as_OT BlockMap.
+
+Module FuncNameMap := FMapAVL.Make(String_as_OT).
+Module FuncNameMapFacts := FMapFacts.WFacts_fun String_as_OT FuncNameMap.
+
+
 
 
 Module ExitInfo (D: DIALECT).
@@ -460,14 +477,27 @@ End Block.
 
 Module CFGFun (D: DIALECT).
   Module BlockD := Block(D). (* Required to access Block(D) *)
-  
+
+  (* [build_block_index]/[get_block] resolve a block by id via [BlockMap]
+  (O(log n)) instead of scanning [blocks] (O(n)) on every call -- see the
+  comment on [BlockMap] above. *)
+  Definition build_block_index (bs: list BlockD.t) : BlockMap.t BlockD.t :=
+    List.fold_left (fun acc b => BlockMap.add b.(BlockD.bid) b acc) bs (BlockMap.empty BlockD.t).
+
     (* A function is a collection of blocks, an entry block ID, and a name. *)
   Record t : Type := {
       name : FuncName.t;
       args : list VarID.t; (* Input parameters *)
       blocks : list BlockD.t; (* List of blocks *)
       entry_bid : BlockID.t; (* The ID of the entry block. *)
-      H_nodup : NoDup args
+      H_nodup : NoDup args;
+      block_index : BlockMap.t BlockD.t; (* built once by [construct] from [blocks], via [build_block_index] *)
+      (* Prop-sorted (erased by extraction, like [H_nodup]): ties
+      [block_index] to [blocks] as an invariant of the type itself, so
+      [get_block]'s soundness ([get_block_sound] below) holds
+      unconditionally for every [f : t] instead of only for those built
+      by [construct] specifically. *)
+      H_block_index : block_index = build_block_index blocks
     }.
 
   Definition show (f: t) : string :=
@@ -481,8 +511,10 @@ Module CFGFun (D: DIALECT).
 
   Program Definition construct (name : FuncName.t) (args : list VarID.t) (blocks : list BlockD.t) (entry_bid : BlockID.t) : t :=
     match Misc.nodupb VarID.t VarID.eqb args with
-    | false => {| name := name; blocks := []; entry_bid := entry_bid; H_nodup := (NoDup_nil VarID.t)|}
-    | true => {| name := name; blocks := blocks; entry_bid := entry_bid; H_nodup := _ |}
+    | false => {| name := name; blocks := []; entry_bid := entry_bid; H_nodup := (NoDup_nil VarID.t);
+                  block_index := build_block_index []; H_block_index := eq_refl |}
+    | true => {| name := name; blocks := blocks; entry_bid := entry_bid; H_nodup := _;
+                  block_index := build_block_index blocks; H_block_index := eq_refl |}
     end.
   Next Obligation.
     apply Is_true_eq_right in Heq_anonymous.
@@ -491,11 +523,67 @@ Module CFGFun (D: DIALECT).
   Defined.
 
   Definition get_block (f: t) (bid: BlockID.t) : option BlockD.t :=
-    match List.find (fun b => BlockID.eqb b.(BlockD.bid) bid) f.(blocks) with
-    | Some block => Some block
-    | None => None
-    end.
-  
+    BlockMap.find bid f.(block_index).
+
+  (* Generalizes [build_block_index_sound] below to an arbitrary starting
+  accumulator [acc], so the induction on [bs] can go through: at each step
+  the result found either comes from the [x] just folded in (covered by
+  [In]) or was already reachable through [acc] (covered by the recursive
+  disjunct, discharged by the invariant hypothesis once [bs] is empty). *)
+  Lemma build_block_index_aux_sound :
+    forall (bs: list BlockD.t) (acc: BlockMap.t BlockD.t) (bid: BlockID.t) (b: BlockD.t),
+      (forall b', BlockMap.find bid acc = Some b' -> b'.(BlockD.bid) = bid) ->
+      BlockMap.find bid (List.fold_left (fun a x => BlockMap.add x.(BlockD.bid) x a) bs acc) = Some b ->
+      b.(BlockD.bid) = bid /\ (In b bs \/ BlockMap.find bid acc = Some b).
+  Proof.
+    induction bs as [| x xs IH]; intros acc bid b Hinv Hfind.
+    - simpl in Hfind. split.
+      + apply Hinv. exact Hfind.
+      + right. exact Hfind.
+    - simpl in Hfind.
+      assert (Hinv' : forall b', BlockMap.find bid (BlockMap.add x.(BlockD.bid) x acc) = Some b' -> b'.(BlockD.bid) = bid).
+      { intros b' Hb'.
+        rewrite BlockMapFacts.add_o in Hb'.
+        destruct (BlockMapFacts.eq_dec x.(BlockD.bid) bid) as [Heq | Hneq].
+        - injection Hb' as Hb'. subst b'. exact Heq.
+        - apply Hinv. exact Hb'.
+      }
+      destruct (IH (BlockMap.add x.(BlockD.bid) x acc) bid b Hinv' Hfind) as [Hbid [Hin | Hfacc]].
+      + split; [exact Hbid | left; right; exact Hin].
+      + rewrite BlockMapFacts.add_o in Hfacc.
+        destruct (BlockMapFacts.eq_dec x.(BlockD.bid) bid) as [Heq | Hneq].
+        * injection Hfacc as Hfacc. subst b. split; [exact Heq | left; left; reflexivity].
+        * split; [exact Hbid | right; exact Hfacc].
+  Qed.
+
+  (* The specification [get_block] needs: a successful lookup's result is
+  (a) a member of the blocks indexed, and (b) matches the query id -- the
+  same two facts [List.find_some] gave for free before, now proved once
+  here instead of ad hoc at every call site. *)
+  Lemma build_block_index_sound :
+    forall (bs: list BlockD.t) (bid: BlockID.t) (b: BlockD.t),
+      BlockMap.find bid (build_block_index bs) = Some b ->
+      In b bs /\ b.(BlockD.bid) = bid.
+  Proof.
+    intros bs bid b Hfind.
+    unfold build_block_index in Hfind.
+    assert (Hinv0 : forall b', BlockMap.find bid (BlockMap.empty BlockD.t) = Some b' -> b'.(BlockD.bid) = bid).
+    { intros b' Hcontra. rewrite BlockMapFacts.empty_o in Hcontra. discriminate. }
+    destruct (build_block_index_aux_sound bs (BlockMap.empty BlockD.t) bid b Hinv0 Hfind) as [Hbid [Hin | Hfacc]].
+    - split; [exact Hin | exact Hbid].
+    - rewrite BlockMapFacts.empty_o in Hfacc. discriminate.
+  Qed.
+
+  Lemma get_block_sound :
+    forall (f: t) (bid: BlockID.t) (b: BlockD.t),
+      get_block f bid = Some b -> In b f.(blocks) /\ b.(BlockD.bid) = bid.
+  Proof.
+    intros f bid b Hget.
+    unfold get_block in Hget.
+    rewrite f.(H_block_index) in Hget.
+    exact (build_block_index_sound f.(blocks) bid b Hget).
+  Qed.
+
   Definition valid_function (f: t) :=
     forall b,
       In b (blocks f) <-> get_block f b.(BlockD.bid) = Some b.
@@ -507,12 +595,20 @@ Module CFGProg (D: DIALECT).
   Module CFGFunD := CFGFun(D). (* Required to access Function(D) *)
   Module BlockD := CFGFunD.BlockD.
   Module InstrD := BlockD.InstrD.
-  
+
+  (* Same rationale as [CFGFun.build_block_index]: [get_func] is looked up
+  once per function call site across the whole program, so an O(n) scan
+  of [functions] is worth replacing with an O(log n) [FuncNameMap] lookup. *)
+  Definition build_func_index (fs: list CFGFunD.t) : FuncNameMap.t CFGFunD.t :=
+    List.fold_left (fun acc f => FuncNameMap.add f.(CFGFunD.name) f acc) fs (FuncNameMap.empty CFGFunD.t).
+
   (* A smart contract is a collection of functions and a main function. *)
   Record t : Type := {
     name : string; (* Name of the smart contract *)
     functions : list CFGFunD.t; (* List of functions in the smart contract *)
     main: FuncName.t; (* The main function of the smart contract *)
+    func_index : FuncNameMap.t CFGFunD.t; (* built once by [construct] from [functions] *)
+    H_func_index : func_index = build_func_index functions (* see H_block_index in CFGFun *)
   }.
 
   Definition show (p: t) : string :=
@@ -520,24 +616,72 @@ Module CFGProg (D: DIALECT).
     "Main: " ++ FuncName.show p.(main) ++ "\n" ++
     "Functions: " ++ String.concat "\n" (List.map CFGFunD.show p.(functions)).
 
+  Definition get_func (sc: t) (fname: FuncName.t) : option CFGFunD.t :=
+    FuncNameMap.find fname sc.(func_index).
+
   Definition get_function_names (p: t) : list FuncName.t :=
     List.map (fun f => f.(CFGFunD.name)) p.(functions).
 
   Definition get_blocks_ids (p: t) (funcname : FuncName.t) : list BlockID.t :=
-    match List.find (fun f => FuncName.eqb f.(CFGFunD.name) funcname) p.(functions) with
+    match get_func p funcname with
     | Some func => List.map (fun b => b.(BlockD.bid)) func.(CFGFunD.blocks)
     | _ => []
     end.
-    
+
 
   Definition construct (name : string) (main: FuncName.t) (functions : list CFGFunD.t) : t :=
-    {| name := name; functions := functions; main := main |}.
+    {| name := name; functions := functions; main := main;
+       func_index := build_func_index functions; H_func_index := eq_refl |}.
 
-  Definition get_func (sc: t) (fname: FuncName.t) : option CFGFunD.t :=
-    match List.find (fun f => FuncName.eqb f.(CFGFunD.name) fname) sc.(functions) with
-    | Some func => Some func
-    | None => None
-    end.
+  Lemma build_func_index_aux_sound :
+    forall (fs: list CFGFunD.t) (acc: FuncNameMap.t CFGFunD.t) (fname: FuncName.t) (f: CFGFunD.t),
+      (forall f', FuncNameMap.find fname acc = Some f' -> f'.(CFGFunD.name) = fname) ->
+      FuncNameMap.find fname (List.fold_left (fun a x => FuncNameMap.add x.(CFGFunD.name) x a) fs acc) = Some f ->
+      f.(CFGFunD.name) = fname /\ (In f fs \/ FuncNameMap.find fname acc = Some f).
+  Proof.
+    induction fs as [| x xs IH]; intros acc fname f Hinv Hfind.
+    - simpl in Hfind. split.
+      + apply Hinv. exact Hfind.
+      + right. exact Hfind.
+    - simpl in Hfind.
+      assert (Hinv' : forall f', FuncNameMap.find fname (FuncNameMap.add x.(CFGFunD.name) x acc) = Some f' -> f'.(CFGFunD.name) = fname).
+      { intros f' Hf'.
+        rewrite FuncNameMapFacts.add_o in Hf'.
+        destruct (FuncNameMapFacts.eq_dec x.(CFGFunD.name) fname) as [Heq | Hneq].
+        - injection Hf' as Hf'. subst f'. exact Heq.
+        - apply Hinv. exact Hf'.
+      }
+      destruct (IH (FuncNameMap.add x.(CFGFunD.name) x acc) fname f Hinv' Hfind) as [Hname [Hin | Hfacc]].
+      + split; [exact Hname | left; right; exact Hin].
+      + rewrite FuncNameMapFacts.add_o in Hfacc.
+        destruct (FuncNameMapFacts.eq_dec x.(CFGFunD.name) fname) as [Heq | Hneq].
+        * injection Hfacc as Hfacc. subst f. split; [exact Heq | left; left; reflexivity].
+        * split; [exact Hname | right; exact Hfacc].
+  Qed.
+
+  Lemma build_func_index_sound :
+    forall (fs: list CFGFunD.t) (fname: FuncName.t) (f: CFGFunD.t),
+      FuncNameMap.find fname (build_func_index fs) = Some f ->
+      In f fs /\ f.(CFGFunD.name) = fname.
+  Proof.
+    intros fs fname f Hfind.
+    unfold build_func_index in Hfind.
+    assert (Hinv0 : forall f', FuncNameMap.find fname (FuncNameMap.empty CFGFunD.t) = Some f' -> f'.(CFGFunD.name) = fname).
+    { intros f' Hcontra. rewrite FuncNameMapFacts.empty_o in Hcontra. discriminate. }
+    destruct (build_func_index_aux_sound fs (FuncNameMap.empty CFGFunD.t) fname f Hinv0 Hfind) as [Hname [Hin | Hfacc]].
+    - split; [exact Hin | exact Hname].
+    - rewrite FuncNameMapFacts.empty_o in Hfacc. discriminate.
+  Qed.
+
+  Lemma get_func_sound :
+    forall (sc: t) (fname: FuncName.t) (f: CFGFunD.t),
+      get_func sc fname = Some f -> In f sc.(functions) /\ f.(CFGFunD.name) = fname.
+  Proof.
+    intros sc fname f Hget.
+    unfold get_func in Hget.
+    rewrite sc.(H_func_index) in Hget.
+    exact (build_func_index_sound sc.(functions) fname f Hget).
+  Qed.
 
   Definition get_block (sc: t) (fname: FuncName.t) (bid: BlockID.t) : option BlockD.t :=
     match get_func sc fname with
@@ -582,27 +726,16 @@ Module CFGProg (D: DIALECT).
     - intros H_get_block.
       unfold get_block in H_get_block.
       destruct (get_func p f) as [func|] eqn:E_get_func; try discriminate.
-      unfold get_func in E_get_func.
-      destruct (find (fun f0 : CFGFunD.t => FuncName.eqb (CFGFunD.name f0) f)) as [func'|] eqn:E_find_func'; try discriminate.
-      injection E_get_func as H_func'_eq_func.
-      subst func'.
 
-      unfold CFGFunD.get_block in H_get_block.
-      destruct (find (fun b : CFGFunD.BlockD.t => BlockID.eqb (CFGFunD.BlockD.bid b) bid) (CFGFunD.blocks func)) as [b'|] eqn:E_find_b'; try discriminate.
-        
-      injection H_get_block as H_b'_eq_b.
-      subst b'.
-
-      pose proof (find_some (fun f0 : CFGFunD.t => FuncName.eqb (CFGFunD.name f0) f) (functions p) E_find_func' ) as [H_in_func_pfs H_func_name_eqb_f].
-      
-      pose proof (find_some (fun b : CFGFunD.BlockD.t => BlockID.eqb (CFGFunD.BlockD.bid b) bid) (CFGFunD.blocks func) E_find_b') as [H_in_b_funcbs H_b_bid_eqb_bid].
+      pose proof (get_func_sound p f func E_get_func) as [H_in_func_pfs H_func_name_eq_f].
+      pose proof (CFGFunD.get_block_sound func bid b H_get_block) as [H_in_b_funcbs H_b_bid_eq_bid].
 
       exists func.
       repeat split.
       + apply H_in_func_pfs.
       + apply H_in_b_funcbs.
-      + apply H_func_name_eqb_f.
-      + apply H_b_bid_eqb_bid.
+      + apply FuncName.eqb_eq. exact H_func_name_eq_f.
+      + apply BlockID.eqb_eq. exact H_b_bid_eq_bid.
 
     - intros H_exists_f0.
       destruct H_exists_f0 as [f0 [In_f0_pfs [In_b_f0bs [H_f0_name_eqb_f H_b_bid_eqb_b]]]].

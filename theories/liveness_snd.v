@@ -907,15 +907,8 @@ Module Liveness_snd (D: DIALECT).
   Proof.
     intros p fname bid b H_exists.
     unfold CFGProgD.get_block in H_exists.
-    destruct (CFGProgD.get_func p fname) as [func|]; try discriminate.
-    unfold get_block in H_exists.
-    destruct (find (fun b : BlockD.t => BlockID.eqb b.(BlockD.bid) bid) func.(blocks)) as [block|] eqn:H_find; try discriminate.
-    apply find_some in H_find.
-    destruct H_find as [_ H_find].
-    rewrite BlockID.eqb_eq in H_find.
-    injection H_exists as H_t0_b.
-    rewrite H_t0_b in H_find.
-    apply H_find.
+    destruct (CFGProgD.get_func p fname) as [func|] eqn:E_get_func; try discriminate.
+    exact (proj2 (CFGFunD.get_block_sound func bid b H_exists)).
   Qed.
 
    
