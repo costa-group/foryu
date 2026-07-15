@@ -655,16 +655,23 @@ let extract_block_const_info (const_l: Yojson.Safe.t list) : Checker.Checker.EVM
 
 
 (* Extracts the constancy info of a single block. A missing "constancy" key
-   means the analysis was not run for this block (None). When present, it
-   must have exactly one entry per instruction plus one (the trailing
-   block-exit entry), matching block_const_info_t; any other length is
-   malformed input and fails loudly rather than being silently accepted. *)
+   means the analysis makes no claims for this block: it is treated as
+   Some, with one empty VarMap per program point (ninstrs+1 of them) --
+   the vacuous claim, which is always sound (an empty claim is trivially a
+   subset of whatever check_const_pp/check_const_edges actually derive) and
+   lets the rest of the program's constancy claims still be checked. When
+   the key is present, it must have exactly one entry per instruction plus
+   one (the trailing block-exit entry), matching block_const_info_t; any
+   other length is malformed input and fails loudly rather than being
+   silently accepted. *)
 let extract_block_constancy (block: Yojson.Safe.t) : Checker.BlockID.t * Checker.Checker.EVMConstancy.block_const_info_t option =
   let bid = match block |> member "id" with
     | `String s -> extract_bid s
     | _ -> failwith "Invalid block ID in constancy info" in
   match block |> member "constancy" with
-  | `Null -> (bid, None)
+  | `Null ->
+      let ninstrs = get_nintrs_block block in
+      (bid, Some (List.init (ninstrs + 1) (fun _ -> Checker.VarMap.empty)))
   | `List const_l ->
       let ninstrs = get_nintrs_block block in
       let nentries = List.length const_l in

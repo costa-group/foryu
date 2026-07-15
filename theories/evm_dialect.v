@@ -3,6 +3,7 @@ Open Scope string_scope.
 Require Import FORYU.dialect.
 Require Import FORYU.misc.
 From Stdlib Require Import ZArith.ZArith.
+From Stdlib Require Import ZArith.Zpow_facts.
 From Stdlib Require Import Lists.List.
 Import ListNotations.
 From Stdlib Require Strings.HexString.
@@ -136,8 +137,15 @@ Module U256.
         let y := get_signed_value y in
         to_t (x mod y).
     
+  (* [Z.pow] on the raw exponent would compute [(val x) ^ (val y)] as an
+  exact arbitrary-precision integer before ever reducing mod [modulus] --
+  since [val y] can be any 256-bit number, that is not just slow but
+  mathematically unrepresentable (e.g. [2 ^ (2^256)] has more bits than
+  atoms in the observable universe). [Zpow_mod] computes the same result
+  via modular exponentiation (repeated squaring with a mod-reduction at
+  each step), so every intermediate value stays bounded by [modulus]. *)
   Definition exp (x y: U256.t): U256.t :=
-      to_t ((val x) ^ (val y)).
+      to_t (Zpow_facts.Zpow_mod (val x) (val y) modulus).
 
   Definition not (x: U256.t): U256.t :=
       to_t (2^256 - (val x) - 1).
@@ -177,16 +185,33 @@ Module U256.
   Definition byte (n x: U256.t): U256.t := (* SHL and MOD 256 *)
     to_t ( ( (val x) / (256 ^ (31 - (val n)))) mod 256). (* this could be improved to eliminate the call to to_t *)
 
+  (* Real EVM semantics: a shift amount >= 256 always yields 0 (SHL/SHR) or
+  the sign-extended result (SAR), regardless of how much larger than 256 it
+  is. Without this guard, [2 ^ (val x)] is computed as an exact arbitrary-
+  precision integer for the *unbounded* literal shift amount -- e.g. a
+  perfectly ordinary [shl(0xffffffff, v)] (common in compiled bytecode,
+  which relies on this very truncation rule) would otherwise force
+  computing [2^4294967295], a number with over four billion bits. *)
   Definition shl (x y: U256.t): U256.t :=
-    to_t ((val y) * (2 ^ (val x))).
+    if 256 <=? (val x) then
+      zero
+    else
+      to_t ((val y) * (2 ^ (val x))).
 
   Definition shr (x y: U256.t): U256.t :=
-    to_t ((val y) / (2 ^ (val x))). (* this could be improved to eliminate the call to to_t *)
+    if 256 <=? (val x) then
+      zero
+    else
+      to_t ((val y) / (2 ^ (val x))). (* this could be improved to eliminate the call to to_t *)
 
   Definition sar (shift value: U256.t): U256.t :=
-    let signed_value := get_signed_value value in
-    let shifted_value := signed_value / (2 ^ (val shift)) in
-    to_t shifted_value.
+    if 256 <=? (val shift) then
+      if (get_signed_value value) <? 0 then to_t (modulus - 1) (* all-ones: sign-extends a negative value *)
+      else zero
+    else
+      let signed_value := get_signed_value value in
+      let shifted_value := signed_value / (2 ^ (val shift)) in
+      to_t shifted_value.
 
 
   (** Count the number of constructors in a positive number *)
@@ -211,10 +236,12 @@ Module U256.
     to_t (256 - len). 
 
   Definition addmod (x y m: U256.t): U256.t :=
-    to_t ( ((val x) + (val y)) mod (val m) ). (* this could be improved to eliminate the call to to_t *)
+    if (val m) =? 0 then zero
+    else to_t ( ((val x) + (val y)) mod (val m) ). (* this could be improved to eliminate the call to to_t *)
 
   Definition mulmod (x y m: U256.t): U256.t :=
-   to_t ( ((val x) * (val y)) mod (val m)). (* this could be improved to eliminate the call to to_t *)
+    if (val m) =? 0 then zero
+    else to_t ( ((val x) * (val y)) mod (val m)). (* this could be improved to eliminate the call to to_t *)
 
     (* From https://github.com/formal-land/coq-of-solidity/blob/638c9fdbcbe64e359d337b805a952eb2437ad4ce/coq/CoqOfSolidity/simulations/CoqOfSolidity.v#L549 *)
   Definition signextend (ai ax: U256.t): U256.t :=
@@ -882,7 +909,7 @@ Module EVM_opcode.
                 | _ => ([], state, Status.Error "SLOAD expects 1 input")
           end
       | SSTORE => match inputs with
-                | [value; addr] => let new_storage := EVMStorage.update state.(EVMState.storage) addr value in
+                | [addr; value] => let new_storage := EVMStorage.update state.(EVMState.storage) addr value in
                                    let new_state := EVMState.update_storage state new_storage in
                                    ([], new_state, Status.Running)
                 | _ => ([], state, Status.Error "SSTORE expects 2 inputs")
@@ -893,7 +920,7 @@ Module EVM_opcode.
                 | _ => ([], state, Status.Error "TLOAD expects 1 input")
                 end
       | TSTORE => match inputs with
-                | [value; addr] => let new_tstorage := EVMStorage.update state.(EVMState.tstorage) addr value in
+                | [addr; value] => let new_tstorage := EVMStorage.update state.(EVMState.tstorage) addr value in
                                    let new_state := EVMState.update_tstorage state new_tstorage in
                                    ([], new_state, Status.Running)
                 | _ => ([], state, Status.Error "TSTORE expects 2 inputs")
@@ -1259,7 +1286,7 @@ Module EVMDialect <: DIALECT.
   Definition eqb_spec := U256.eqb_spec.
 
   Definition is_true_value (v: value_t): bool :=
-    U256.eqb v U256.zero. (* 0 or 1? *)
+    negb (U256.eqb v U256.zero).
 
   Definition opcode_t := EVM_opcode.t.
 
