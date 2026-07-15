@@ -4,26 +4,19 @@
 
 cfg_dir="benchmark/semanticTests_cfg"
 #cfg_dir="benchmark/grey_stack_too_deep_cfg"
-nblocks=0
-ninstrs=0
-output_size=""
+#cfg_dir="benchmark/1k_most_called_cfg"
 foryu="bin/static_foryu"
 
-echo "filename,nblocks,ninstrs,time(ns),verdict"
+# --csv already reports json-processing status, size, and per-analysis timings
+# and verdicts in one line -- column order matches the --liveness/--constancy
+# order below (liveness first, then constancy).
+echo "filename,json_processing,nblocks,ninstrs,preprocess_time(ns),liveness_extract_time(ns),liveness_check_time(ns),liveness_verdict,constancy_extract_time(ns),constancy_check_time(ns),constancy_verdict"
 
 find ${cfg_dir} -type f -name "*.json" -print0 | while IFS= read -r -d '' f; do
-    output_size=$(${foryu} -i ${f} -size)
-	read nblocks ninstrs <<< "$output_size"
-	start=$(date +%s%N)
-	ret=`${foryu} -i ${f}`
-
-	if [ $? -ne 0 ]; then
-		echo "ERROR ${f}"
-		exit -1
+	line=$("${foryu}" --liveness subset --constancy --csv -i "${f}")
+	if [ -z "${line}" ]; then
+		echo "${f},CRASH"
+	else
+		echo "${line}"
 	fi
-
-	end=$(date +%s%N)
-	ts=$((end - start))
-		
-	echo "${f},$nblocks,$ninstrs,${ts},${ret}"		
 done

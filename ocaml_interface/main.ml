@@ -618,13 +618,6 @@ let extract_liveness_info (flatjson: Yojson.Safe.t) : Checker.Checker.EVMLivenes
   create_liveness_info liveness_func
 
 
-let extract_prog_and_liveness (flatjson: Yojson.Safe.t) (sc_name: string) 
-       : Checker.Checker.EVMCFGProg.t * Checker.Checker.EVMLiveness.prog_live_info_t =
-  let p : Checker.Checker.EVMCFGProg.t = extract_prog flatjson sc_name in
-  let liveness_info : Checker.Checker.EVMLiveness.prog_live_info_t = extract_liveness_info flatjson in
-  (p, liveness_info)
-
-
 let get_nintrs_block (block: Yojson.Safe.t) : int =
   match block |> member "instructions" with
   | `List bs -> List.length bs
@@ -645,25 +638,192 @@ let get_size (json: Yojson.Safe.t) : int * int =
 
 
 
+(******* Takes a flat JSON and returns constancy information *******)
+
+(* Extracts one program-point's constancy map from a JSON object of the
+   form {"v2": "0x00", "v3": "0x00", ...} *)
+let extract_pp_const_info (pp_json: Yojson.Safe.t) : Checker.Checker.EVMConstancy.pp_const_info_t =
+  List.fold_left
+    (fun acc (var_s, val_json) -> Checker.VarMap.add (extract_var var_s) (extract_val (to_string val_json)) acc)
+    Checker.VarMap.empty
+    (to_assoc pp_json)
+
+
+(* Extracts a block's constancy info from a JSON list of program-point maps *)
+let extract_block_const_info (const_l: Yojson.Safe.t list) : Checker.Checker.EVMConstancy.block_const_info_t =
+  List.map extract_pp_const_info const_l
+
+
+(* Extracts the constancy info of a single block. A missing "constancy" key
+   means the analysis was not run for this block (None). When present, it
+   must have exactly one entry per instruction plus one (the trailing
+   block-exit entry), matching block_const_info_t; any other length is
+   malformed input and fails loudly rather than being silently accepted. *)
+let extract_block_constancy (block: Yojson.Safe.t) : Checker.BlockID.t * Checker.Checker.EVMConstancy.block_const_info_t option =
+  let bid = match block |> member "id" with
+    | `String s -> extract_bid s
+    | _ -> failwith "Invalid block ID in constancy info" in
+  match block |> member "constancy" with
+  | `Null -> (bid, None)
+  | `List const_l ->
+      let ninstrs = get_nintrs_block block in
+      let nentries = List.length const_l in
+      if nentries <> ninstrs + 1 then
+        failwith (Printf.sprintf
+          "Invalid constancy info in block %s: expected %d entries (ninstrs+1 with ninstrs=%d), got %d"
+          (to_string (block |> member "id")) (ninstrs + 1) ninstrs nentries)
+      else
+        (bid, Some (extract_block_const_info const_l))
+  | _ -> failwith "Invalid 'constancy' field in block (must be list)"
+
+
+let extract_blocks_constancy (blocks: Yojson.Safe.t list) : (Checker.BlockID.t * Checker.Checker.EVMConstancy.block_const_info_t option) list =
+  List.map extract_block_constancy blocks
+
+
+let rec create_block_const_info (blocks_const: (Checker.BlockID.t * Checker.Checker.EVMConstancy.block_const_info_t option) list) :
+      Checker.Checker.EVMConstancy.func_const_info_t =
+  match blocks_const with
+  | [] -> fun _ -> None
+  | (bid, const_info) :: rest ->
+      let rest_info = create_block_const_info rest in
+      fun b -> if b = bid then const_info else rest_info b
+
+
+(* Extracts the constancy information from a function body in JSON *)
+let extract_funct_const_info (fbody: Yojson.Safe.t) : Checker.Checker.EVMConstancy.func_const_info_t =
+  let blocks = match fbody |> member "blocks" with
+    | `List blocks_l -> blocks_l
+    | _ -> failwith "Invalid blocks in function body for constancy info" in
+  let blocks_const = extract_blocks_constancy blocks in
+  create_block_const_info blocks_const
+
+
+let rec create_const_info (funs: (string * Checker.Checker.EVMConstancy.func_const_info_t) list) :
+        Checker.Checker.EVMConstancy.prog_const_info_t =
+  match funs with
+  | [] -> fun _ -> None
+  | (fname, finfo) :: rest ->
+      let rest_info = create_const_info rest in
+      fun f -> if f = string_to_char_list fname then Some finfo
+               else rest_info f
+
+
+let extract_const_info (flatjson: Yojson.Safe.t) : Checker.Checker.EVMConstancy.prog_const_info_t =
+  let funs_json_assoc = flatjson |> to_assoc in
+  let const_func = List.map (fun (fname, fbody) -> (fname, extract_funct_const_info fbody)) funs_json_assoc in
+  create_const_info const_func
+
+
+
+(******* Pretty-printing constancy information (for -v debugging; there is no
+   Rocq-side "show" for constancy like EVMLiveness.show_prog_live_info_t, so
+   this walks the extracted program/constancy info directly) *******)
+
+let show_pp_const_info (pp: Checker.Checker.EVMConstancy.pp_const_info_t) : string =
+  let pairs = Checker.VarMap.elements pp in
+  "{" ^ String.concat ", " (List.map (fun (v, k) ->
+      (char_list_to_string (Checker.VarID.show v)) ^ "=" ^ (char_list_to_string (Checker.EVMDialect.show_value k)))
+    pairs) ^ "}"
+
+
+let show_block_const_info (b_info: Checker.Checker.EVMConstancy.block_const_info_t) : string =
+  String.concat "\n        " (List.mapi (fun i pp -> Printf.sprintf "pp%d: %s" i (show_pp_const_info pp)) b_info)
+
+
+let show_func_const_info (f_info: Checker.Checker.EVMConstancy.func_const_info_t option) (f: Checker.Checker.EVMCFGFun.t) : string =
+  match f_info with
+  | None -> ""
+  | Some f_info ->
+      let blocks = Checker.Checker.EVMCFGFun.blocks f in
+      let block_strings = List.filter_map (fun block ->
+          let bid = Checker.Checker.EVMBlock.bid block in
+          match f_info bid with
+          | None -> None
+          | Some b_info -> Some ("    " ^ (char_list_to_string (Checker.BlockID.show bid)) ^ ": " ^ (show_block_const_info b_info)))
+        blocks in
+      String.concat "\n" block_strings
+
+
+let show_prog_const_info (r: Checker.Checker.EVMConstancy.prog_const_info_t) (p: Checker.Checker.EVMCFGProg.t) : string =
+  let funcs = Checker.Checker.EVMCFGProg.functions p in
+  let func_strings = List.map (fun f ->
+      let fname = Checker.Checker.EVMCFGFun.name f in
+      (char_list_to_string fname) ^ "\n" ^ (show_func_const_info (r fname) f))
+    funcs in
+  String.concat "\n" func_strings
+
+
+(* [Liveness(EVMDialect)] (used for [EVMCFGProg]/[extract_prog]) and
+   [Constancy(EVMDialect)] (used for [EVMConstancy.check_const_program])
+   each build their own internal copy of [SmallStep(EVMDialect)] /
+   [CFGProg(EVMDialect)] (the latter via [Constancy_snd(EVMDialect)] -- see
+   the sharing comment on [Constancy] in constancy.v for the same class of
+   issue one layer down). Rocq's kernel does not unify these two separate
+   functor applications, so extraction emits [EVMCFGProg.t] and
+   [EVMConstancy.SmallStepD.CFGProgD.t] as distinct abstract OCaml types,
+   even though both are extracted from the exact same Rocq record
+   definition ([CFGProg.t] applied to [EVMDialect]) and therefore have an
+   identical runtime representation. [Obj.magic] here is a value-preserving
+   reinterpretation between two names for that one representation, not an
+   unsafe type-punning cast -- same idiom as the [__] placeholder above,
+   used elsewhere in this file to plug an analogous extraction gap. *)
+let prog_for_constancy (p: Checker.Checker.EVMCFGProg.t) : Checker.Checker.EVMConstancy.SmallStepD.CFGProgD.t =
+  Obj.magic p
+
+
+
 (******* Main program *******)
 
 (* Arguments *)
 let input_file = ref ""
 let size = ref false
-let subset = ref false
+(* [None] means the flag was never given on the command line, which means
+   the analysis is not run at all -- there is no "check by default" mode.
+   [Some "no"] (explicitly passed) behaves the same as [None] for whether
+   the analysis runs, but is tracked identically to any other value in
+   [analysis_order] below. *)
+let liveness_mode : string option ref = ref None (* None | Some ("no"|"subset"|"optimal") *)
+let constancy_flag = ref false (* --constancy takes no argument: present -> run it, absent -> don't *)
 let verbose = ref false
+let csv_mode = ref false
+
+(* Records the order in which --liveness/--constancy appear on the command
+   line, for --csv's "columns in the same order the flags appear" -- a
+   repeated flag moves to the position of its last occurrence. *)
+let analysis_order : string list ref = ref []
+let record_order tag =
+  analysis_order := (List.filter (fun t -> t <> tag) !analysis_order) @ [tag]
+
+let liveness_selected () = match !liveness_mode with Some m when m <> "no" -> true | _ -> false
+let constancy_selected () = !constancy_flag
 
 let speclist = [
   ("-i", Arg.Set_string input_file, "Input JSON file");
   ("-size", Arg.Set size, "Print size of the input file");
-  ("-subset", Arg.Set subset, "Checks non-optimal liveness information");
-  ("-v", Arg.Set verbose, "Prints the extracted program and liveness information from the JSON file (for debugging)");
+  ("--liveness", Arg.Symbol (["no"; "subset"; "optimal"], (fun s -> liveness_mode := Some s; record_order "liveness")),
+   " Liveness check: 'subset' checks the weaker subset property, 'optimal' checks exact equality. Omitting this flag (or passing 'no') runs no liveness check at all.");
+  ("--constancy", Arg.Unit (fun () -> constancy_flag := true; record_order "constancy"),
+   " Constancy check: if given, the constancy checker runs; if omitted, it doesn't.");
+  ("-v", Arg.Set verbose, "Prints the extracted program and the requested (--liveness/--constancy) analysis information from the JSON file (for debugging)");
+  ("--csv", Arg.Set csv_mode,
+   " Prints one CSV line instead of the normal output: filename, JSON_PROCESSING_OK|JSON_PROCESSING_ERROR, nblocks, ninstrs, preprocess_time_ns, then per selected analysis (in the order --liveness/--constancy appear): extract_time_ns, check_time_ns, result. On a JSON-processing failure every column but filename is empty; on a per-analysis failure that analysis's two time columns are empty and its result is LIVENESS_ERROR/CONSTANCY_ERROR. Mutually exclusive with -size/-v.");
 ]
 
 let anon_fun arg =
   raise (Arg.Bad ("Unexpected argument: " ^ arg))
 
-let usage_msg = "Usage: ./checker [-size] [-subset] [-v] -i filename.json"
+let usage_msg = "Usage: ./checker [-size] [--liveness subset|optimal|no] [--constancy] [-v] [--csv] -i filename.json"
+
+(* Wall-clock elapsed time of [f ()], in whole nanoseconds. Note this is
+   really only microsecond-resolution in practice (Unix.gettimeofday),
+   same caveat as the ns timings already produced by the shell scripts
+   around this binary (fm26.sh etc.). *)
+let time_call (f: unit -> 'a) : 'a * string =
+  let t0 = Unix.gettimeofday () in
+  let r = f () in
+  let t1 = Unix.gettimeofday () in
+  (r, Printf.sprintf "%.0f" ((t1 -. t0) *. 1e9))
 
 let () =
   Arg.parse speclist anon_fun usage_msg;
@@ -674,6 +834,11 @@ let () =
     exit 1
   );
 
+  if !csv_mode && (!verbose || !size) then (
+    prerr_endline "Error: --csv cannot be combined with -v or -size.";
+    exit 1
+  );
+
   if !size then (
     let _, flat_d = read_json_to_flat !input_file in
     let block_count, instr_count = get_size flat_d in
@@ -681,27 +846,99 @@ let () =
     exit 0
   );
 
+  if !csv_mode then begin
+    (* JSON processing bundles everything shared by every analysis --
+       parsing, flattening, renaming, sizing, and building the extracted
+       program -- as a single caught unit, so one bad input file still
+       yields exactly one well-formed CSV row instead of aborting a batch
+       run. *)
+    let json_result =
+      try
+        let (prog, nblocks, ninstrs, flat_d'), t_preprocess =
+          time_call (fun () ->
+            let sc_main, flat_d = read_json_to_flat !input_file in
+            let flat_d' = rename_fun_calls flat_d in
+            let nblocks, ninstrs = get_size flat_d' in
+            let prog = extract_prog flat_d' sc_main in
+            (prog, nblocks, ninstrs, flat_d'))
+        in
+        Some (prog, nblocks, ninstrs, flat_d', t_preprocess)
+      with _ -> None
+    in
+    let selected = List.filter (fun tag -> match tag with
+        | "liveness" -> liveness_selected ()
+        | "constancy" -> constancy_selected ()
+        | _ -> false)
+      !analysis_order in
+    let columns =
+      match json_result with
+      | None ->
+          let n_empty = 3 + 3 * (List.length selected) in
+          "JSON_PROCESSING_ERROR" :: (List.init n_empty (fun _ -> ""))
+      | Some (prog, nblocks, ninstrs, flat_d', t_preprocess) ->
+          let analysis_columns tag =
+            match tag with
+            | "liveness" ->
+                (try
+                   let live_info, t_extract = time_call (fun () -> extract_liveness_info flat_d') in
+                   let check_fn = if !liveness_mode = Some "subset" then Checker.Checker.EVMLiveness.check_program_subset
+                                  else Checker.Checker.EVMLiveness.check_program in
+                   let ok, t_check = time_call (fun () -> check_fn prog live_info) in
+                   [t_extract; t_check; (if ok then "LIVENESS_VALID" else "LIVENESS_INVALID")]
+                 with _ -> [""; ""; "LIVENESS_ERROR"])
+            | "constancy" ->
+                (try
+                   let const_info, t_extract = time_call (fun () -> extract_const_info flat_d') in
+                   let ok, t_check = time_call (fun () ->
+                     Checker.Checker.EVMConstancy.check_const_program (prog_for_constancy prog) const_info) in
+                   [t_extract; t_check; (if ok then "CONSTANCY_VALID" else "CONSTANCY_INVALID")]
+                 with _ -> [""; ""; "CONSTANCY_ERROR"])
+            | _ -> []
+          in
+          "JSON_PROCESSING_OK" :: (string_of_int nblocks) :: (string_of_int ninstrs) :: t_preprocess
+          :: (List.concat_map analysis_columns selected)
+    in
+    print_endline (String.concat "," (!input_file :: columns));
+    exit 0
+  end;
+
   let sc_main, flat_d = read_json_to_flat !input_file in
   let flat_d' = rename_fun_calls flat_d in
   (*let json_flatd' = Yojson.Safe.pretty_to_string flat_d' in
   let _ = print_endline json_flatd' in *)
-  let prog, liveness_info = extract_prog_and_liveness flat_d' sc_main in
-  if !verbose then
+  let prog = extract_prog flat_d' sc_main in
+
+  if !verbose then begin
     let prog_str = char_list_to_string (Checker.Checker.EVMCFGProg.show prog) in
     let prog_str = Str.global_replace (Str.regexp "\\\\n") "\n" prog_str in
-    let liveness_info_str = char_list_to_string (Checker.Checker.EVMLiveness.show_prog_live_info_t liveness_info prog) in
-    let liveness_info_str = Str.global_replace (Str.regexp "\\\\n") "\n" liveness_info_str in
     Printf.printf "Program:\n%s\n" prog_str;
-    Printf.printf "#####################################\n#####################################\n#####################################\n\n";
-    Printf.printf "Liveness info:\n%s\n" liveness_info_str;
-  else
-    let func = if !subset then Checker.Checker.EVMLiveness.check_program_subset 
-               else Checker.Checker.EVMLiveness.check_program in
-    let b = func prog liveness_info in
-      if b then 
-        print_endline "LIVENESS_VALID"
-      else
-        print_endline "LIVENESS_INVALID"
+    if liveness_selected () then begin
+      let liveness_info = extract_liveness_info flat_d' in
+      let liveness_info_str = char_list_to_string (Checker.Checker.EVMLiveness.show_prog_live_info_t liveness_info prog) in
+      let liveness_info_str = Str.global_replace (Str.regexp "\\\\n") "\n" liveness_info_str in
+      Printf.printf "#####################################\n#####################################\n#####################################\n\n";
+      Printf.printf "Liveness info:\n%s\n" liveness_info_str
+    end;
+    if constancy_selected () then begin
+      let const_info = extract_const_info flat_d' in
+      let const_info_str = show_prog_const_info const_info prog in
+      Printf.printf "#####################################\n#####################################\n#####################################\n\n";
+      Printf.printf "Constancy info:\n%s\n" const_info_str
+    end
+  end else begin
+    if liveness_selected () then begin
+      let liveness_info = extract_liveness_info flat_d' in
+      let check_fn = if !liveness_mode = Some "subset" then Checker.Checker.EVMLiveness.check_program_subset
+                     else Checker.Checker.EVMLiveness.check_program in
+      let ok = check_fn prog liveness_info in
+      print_endline (if ok then "LIVENESS_VALID" else "LIVENESS_INVALID")
+    end;
+    if constancy_selected () then begin
+      let const_info = extract_const_info flat_d' in
+      let ok = Checker.Checker.EVMConstancy.check_const_program (prog_for_constancy prog) const_info in
+      print_endline (if ok then "CONSTANCY_VALID" else "CONSTANCY_INVALID")
+    end
+  end
 
 
 (***** Examples of Program and Liveness Info  as OCaml expressions ******)
