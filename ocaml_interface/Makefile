@@ -2,7 +2,7 @@
 default: all ;
 
 MAIN = main.ml
-PACKAGES = yojson,zarith
+PACKAGES = yojson,zarith,unix
 EXE = foryu
 STATIC_EXE = static_foryu
 

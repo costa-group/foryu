@@ -2756,12 +2756,7 @@ Lemma check_live_out_complete:
         rewrite E_st2'.
         rewrite <- H_error_st1.
         
-        unfold equiv_vars_in_top_frame in H_equiv_top_frames_st1_st2.
-        simpl in H_equiv_top_frames_st1_st2.
-        unfold equiv_vars_in_top_frame.
-        simpl.
- 
-        destruct (call_stack st1); destruct (call_stack st2); try destruct H_equiv_top_frames_st1_st2 as [H1 [H2 [H3 H4]]]; repeat split; try (reflexivity || assumption).        
+        exact H_equiv_top_frames_st1_st2.
     Qed.
 
     Lemma app_nil_hd:

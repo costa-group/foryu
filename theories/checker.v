@@ -3,6 +3,7 @@ Require Export FORYU.semantics.
 Require Export FORYU.evm_dialect.
 Require Export FORYU.liveness.
 (*Require Export FORYU.liveness_subset.*)
+Require Export FORYU.constancy.
 
 From Stdlib Require Import NArith.
 From Stdlib Require Import ZArith.ZArith.
@@ -21,5 +22,6 @@ Module Checker.
     Module EVMState := EVMSmallStep.StateD.
     Module EVMPhiInfo := EVMBlock.PhiInfoD.
     Module ExitInfo := EVMBlock.ExitInfoD.
-        
+    Module EVMConstancy := Constancy(EVMDialect).
+
 End Checker.
