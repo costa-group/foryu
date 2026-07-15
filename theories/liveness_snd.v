@@ -3291,7 +3291,7 @@ Lemma check_live_out_complete:
       + remember {|
           Liveness_snd.StateD.call_stack :=
           {|
-            Liveness_snd.StackFrameD.fname := StackFrameD.fname sf2;
+            Liveness_snd.StackFrameD.fname := func_name;
             Liveness_snd.StackFrameD.locals := locals';
             Liveness_snd.StackFrameD.curr_bid := entry_bid func;
             Liveness_snd.StackFrameD.pc := 0
@@ -3306,12 +3306,15 @@ Lemma check_live_out_complete:
       destruct H_equiv_st1_st2' as [H_lt_i [H_len_call_stack [H_status [H_dialect [hl' [tl' [sf1' [sf2' [H_split_i_st1' [H_split_i_st2' H_equiv_sf1_sf2']]]]]]]]]].
       destruct_equiv_frames H_equiv_sf1_sf2'.
 
-      pose proof (split_on_same_i i st1.(call_stack) [] hl' tl tl' sf1 sf1' H_split_i_st1 H_split_i_st1') as [H_l'_1 [H_tl_1 H_sf1]]. 
-      pose proof (split_on_same_i i st2.(call_stack) [] hl' tl tl' sf2 sf2' H_split_i_st2 H_split_i_st2') as [H_l'_2 [H_tl_2 H_sf2]]. 
+      pose proof (split_on_same_i i st1.(call_stack) [] hl' tl tl' sf1 sf1' H_split_i_st1 H_split_i_st1') as [H_l'_1 [H_tl_1 H_sf1]].
+      pose proof (split_on_same_i i st2.(call_stack) [] hl' tl tl' sf2 sf2' H_split_i_st2 H_split_i_st2') as [H_l'_2 [H_tl_2 H_sf2]].
       subst hl' tl' sf1' sf2'.
 
-      rewrite H_fname_sf1 in H_exec_func.
-      rewrite H_fname_sf2 in E_st2'.
+      (* The pushed frame's fname is [func_name] (the callee being called),
+         not the caller frame's own fname, so it is already syntactically
+         identical on the st1'/st2' side -- no rewriting via
+         H_fname_sf1/H_fname_sf2 is needed here (unlike under the old,
+         buggy, execute_func). *)
 
       repeat split; try reflexivity.
       * exact H_b_exists.
@@ -3327,7 +3330,7 @@ Lemma check_live_out_complete:
         ** rewrite H_len_tl.
            lia.
         ** exists [{|
-                    Liveness_snd.StackFrameD.fname := fname;
+                    Liveness_snd.StackFrameD.fname := func_name;
                     Liveness_snd.StackFrameD.locals := locals';
                     Liveness_snd.StackFrameD.curr_bid := entry_bid func;
                     Liveness_snd.StackFrameD.pc := 0
@@ -3397,7 +3400,7 @@ Lemma check_live_out_complete:
       + remember {|
                    Liveness_snd.StateD.call_stack :=
                    {|
-                      Liveness_snd.StackFrameD.fname := StackFrameD.fname top_sf;
+                      Liveness_snd.StackFrameD.fname := func_name;
                       Liveness_snd.StackFrameD.locals := locals';
                       Liveness_snd.StackFrameD.curr_bid := entry_bid func;
                       Liveness_snd.StackFrameD.pc := 0
@@ -3435,11 +3438,11 @@ Lemma check_live_out_complete:
            simpl.    
            reflexivity.
         ** exists ({|
-  Liveness_snd.StackFrameD.fname := StackFrameD.fname top_sf;
+  Liveness_snd.StackFrameD.fname := func_name;
   Liveness_snd.StackFrameD.locals := locals';
   Liveness_snd.StackFrameD.curr_bid := entry_bid func;
   Liveness_snd.StackFrameD.pc := 0
-|}::top_sf :: hl'), tl, sf1, sf2. 
+|}::top_sf :: hl'), tl, sf1, sf2.
            repeat split; try assumption.      
           repeat split; try assumption.
           *** simpl.

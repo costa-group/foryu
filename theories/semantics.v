@@ -99,7 +99,7 @@ Module SmallStep (D: DIALECT).
         | None => error s "Failed to create initial variable assignment" 
         | Some locals' =>
             let sf' := {|
-                        fname := sf.(StackFrameD.fname);
+                        fname := fname;
                         locals := locals';
                         curr_bid := entry_bid;
                         pc := 0

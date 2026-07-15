@@ -1,4 +1,4 @@
-Require Export Coq.Lists.List.
+From Stdlib Require Export Lists.List.
 Import ListNotations.
 
 Module ListFunctions.
