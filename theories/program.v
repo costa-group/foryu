@@ -386,6 +386,12 @@ Module Block (D: DIALECT).
       phi_function : (list VarID.t) * PhiInfoD.t; (* out_vars & mapping BlockID -> in_exps *)
       exit_info : ExitInfoD.t;
       instructions : list (InstrD.t); (* List of instructions in the block *)
+      H_phi_nodup : NoDup (fst phi_function); (* a block's phi-defined
+      out-vars must be duplicate-free: [phi_source]'s own first-match
+      lookup and the runtime's last-write-wins [set_all] semantics
+      only agree when there is at most one occurrence of each variable
+      to begin with (mirrors [InstrD.H_nodup] for the exact same
+      reason, one level up) *)
     }.
 
   Definition show (b: t) : string :=
@@ -401,13 +407,20 @@ Module Block (D: DIALECT).
     "    Exit info: " ++ ExitInfoD.show b.(exit_info) ++ "\n" ++
     "    Instructions:\n" ++ String.concat "\n" (List.map InstrD.show b.(instructions)).
 
-  Definition construct (bid: BlockID.t) (out_vars: list VarID.t) (phi_function : PhiInfoD.t) (exit_info : ExitInfoD.t) (instructions : list (InstrD.t)) :=
-    {|
-      bid := bid;
-      phi_function := (out_vars, phi_function);
-      exit_info := exit_info;
-      instructions := instructions;
-    |}.
+  (* IMPORTANT: mirrors [InstrD.construct] -- when [out_vars] has
+  duplicates, it uses a default (empty out-vars) value instead of
+  failing, for the same reason: keeping the current parser working
+  until it is updated to guarantee this itself. *)
+  Program Definition construct (bid: BlockID.t) (out_vars: list VarID.t) (phi_function : PhiInfoD.t) (exit_info : ExitInfoD.t) (instructions : list (InstrD.t)) : t :=
+    match Misc.nodupb VarID.t VarID.eqb out_vars with
+    | true => {| bid := bid; phi_function := (out_vars, phi_function); exit_info := exit_info; instructions := instructions; H_phi_nodup := _ |}
+    | false => {| bid := bid; phi_function := ([], phi_function); exit_info := exit_info; instructions := instructions; H_phi_nodup := (NoDup_nil VarID.t) |}
+    end.
+  Next Obligation.
+    apply Is_true_eq_right in Heq_anonymous.
+    apply (Misc.nodupb_spec VarID.t VarID.eqb VarID.eqb_eq VarID.eq_dec) in Heq_anonymous.
+    exact Heq_anonymous.
+  Defined.
   
   Definition is_return_block (b : t) :=
     match b.(exit_info) with
