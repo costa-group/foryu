@@ -2,9 +2,9 @@
 
 # ulimit -s unlimited
 
-cfg_dir="benchmark/semanticTests_cfg"
+#cfg_dir="benchmark/semanticTests_cfg"
 #cfg_dir="benchmark/grey_stack_too_deep_cfg"
-#cfg_dir="benchmark/1k_most_called_cfg"
+cfg_dir="benchmark/1k_most_called_cfg"
 foryu="bin/static_foryu"
 
 # --csv already reports json-processing status, size, and per-analysis timings

@@ -727,8 +727,11 @@ let show_pp_const_info (pp: Checker.Checker.EVMConstancy.pp_const_info_t) : stri
     pairs) ^ "}"
 
 
+(* One line per program point (a block with n instructions always has n+1
+   entries, pp0..ppn); every entry is printed on its own line, including an
+   empty pp0, so none of them can be mistaken for missing. *)
 let show_block_const_info (b_info: Checker.Checker.EVMConstancy.block_const_info_t) : string =
-  String.concat "\n        " (List.mapi (fun i pp -> Printf.sprintf "pp%d: %s" i (show_pp_const_info pp)) b_info)
+  String.concat "\n" (List.mapi (fun i pp -> Printf.sprintf "        pp%d: %s" i (show_pp_const_info pp)) b_info)
 
 
 let show_func_const_info (f_info: Checker.Checker.EVMConstancy.func_const_info_t option) (f: Checker.Checker.EVMCFGFun.t) : string =
@@ -740,7 +743,7 @@ let show_func_const_info (f_info: Checker.Checker.EVMConstancy.func_const_info_t
           let bid = Checker.Checker.EVMBlock.bid block in
           match f_info bid with
           | None -> None
-          | Some b_info -> Some ("    " ^ (char_list_to_string (Checker.BlockID.show bid)) ^ ": " ^ (show_block_const_info b_info)))
+          | Some b_info -> Some ("    " ^ (char_list_to_string (Checker.BlockID.show bid)) ^ ":\n" ^ (show_block_const_info b_info)))
         blocks in
       String.concat "\n" block_strings
 

@@ -290,19 +290,24 @@ Module PhiInfo (D: DIALECT).
   
   Definition t := BlockID.t -> InBlockPhiInfo.
 
-  Definition show (phi_info: t) : string :=
+  (* [bids] are the candidate predecessor block IDs to probe [phi_info]
+  with -- in practice, the enclosing function's blocks (see [Block.show]),
+  since [phi_info] returns the empty [InBlockPhiInfo] for anything that is
+  not an actual predecessor, so scanning a superset of the real
+  predecessors is harmless: [show_in_block_phi_info] filters those down to
+  "" and they get dropped below. *)
+  Definition show (bids: list BlockID.t) (phi_info: t) : string :=
     let show_in_block_phi_info (bid: BlockID.t) (in_phi_info: InBlockPhiInfo) : string :=
         match in_phi_info with
-        | in_phi_info in_sexprs => 
-            if in_sexprs then
-                BlockID.show bid ++ ": " ++ String.concat ", " (List.map SimpleExprD.show in_sexprs)
-            else
-                ""
+        | in_phi_info in_sexprs =>
+            match in_sexprs with
+            | [] => ""
+            | _ => BlockID.show bid ++ ": " ++ String.concat ", " (List.map SimpleExprD.show in_sexprs)
+            end
         end
     in
-    let first_blocks := List.map (N.of_nat) (List.seq 0 1000) in
-    let phi_info_strings : list string := List.map (fun bid => show_in_block_phi_info bid (phi_info bid)) first_blocks in
-    let phi_info_strings_clean : list string := 
+    let phi_info_strings : list string := List.map (fun bid => show_in_block_phi_info bid (phi_info bid)) bids in
+    let phi_info_strings_clean : list string :=
       List.filter (fun s => negb (String.eqb s "")) phi_info_strings in
     match phi_info_strings_clean with
     | [] => ""
@@ -394,10 +399,13 @@ Module Block (D: DIALECT).
       reason, one level up) *)
     }.
 
-  Definition show (b: t) : string :=
+  (* [all_bids] are the enclosing function's block IDs, passed down from
+  [CFGFun.show] so [PhiInfoD.show] can scan the actual candidate
+  predecessors instead of a hardcoded range. *)
+  Definition show (all_bids: list BlockID.t) (b: t) : string :=
     let (out_vars, phi_info) := b.(phi_function) in
     let out_vars_str := "[" ++ (String.concat ", " (List.map VarID.show out_vars)) ++ "]" in
-    let phi_str := PhiInfoD.show phi_info in
+    let phi_str := PhiInfoD.show all_bids phi_info in
     let phi_str_format := match phi_str with
                         | "" => "\n"
                         | _ => "\n        " ++ phi_str ++ "\n"
@@ -463,11 +471,12 @@ Module CFGFun (D: DIALECT).
     }.
 
   Definition show (f: t) : string :=
+    let all_bids := List.map (fun b => b.(BlockD.bid)) f.(blocks) in
     "--------------------------------------\n" ++
     "Function " ++ FuncName.show f.(name) ++ "(" ++ String.concat ", " (List.map VarID.show f.(args)) ++ ")\n" ++
     "Entry: " ++ BlockID.show f.(entry_bid) ++ "\n" ++
     "Blocks:\n" ++
-    String.concat "\n" (List.map BlockD.show f.(blocks)) ++
+    String.concat "\n" (List.map (BlockD.show all_bids) f.(blocks)) ++
     "\n--------------------------------------\n".
 
   Program Definition construct (name : FuncName.t) (args : list VarID.t) (blocks : list BlockD.t) (entry_bid : BlockID.t) : t :=

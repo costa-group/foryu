@@ -1385,7 +1385,7 @@ Module EVMDialect <: DIALECT.
     EVMState.empty.
 
   Definition show_value (v: value_t): string :=
-    Misc.z_to_string (v.(U256.val)).
+    HexString.of_Z (v.(U256.val)).
   
   Definition show_opcode (op: opcode_t): string :=
     EVM_opcode.show op.
