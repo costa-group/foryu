@@ -157,8 +157,11 @@ Module SmallStep (D: DIALECT).
       end
     end.
 
-  Definition handle_cond_jump (p: CFGProgD.t) (cond_var:  VarID.t) (bid_if_true bid_if_false: BlockID.t)  (sf: StackFrameD.t) (rsf: list StackFrameD.t) (s: StateD.t): StateD.t :=
-    let cond_val := LocalsD.get sf.(locals) cond_var in
+  Definition handle_cond_jump (p: CFGProgD.t) (cond: SimpleExprD.t) (bid_if_true bid_if_false: BlockID.t)  (sf: StackFrameD.t) (rsf: list StackFrameD.t) (s: StateD.t): StateD.t :=
+    let cond_val := match cond with
+                     | inl var => LocalsD.get sf.(locals) var
+                     | inr val => val
+                     end in
     if D.is_true_value cond_val
     then handle_jump p bid_if_true sf rsf s
     else handle_jump p bid_if_false sf rsf s.

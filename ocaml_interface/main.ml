@@ -460,8 +460,8 @@ let extract_exit_info (exit_info: Yojson.Safe.t) : Checker.Checker.ExitInfo.t =
   match to_string (member "type" exit_info) with
   | "Terminated" -> Checker.Checker.ExitInfo.Terminate
   | "MainExit" -> Checker.Checker.ExitInfo.Terminate
-  | "ConditionalJump" -> 
-      let cond = extract_var (to_string (member "cond" exit_info)) in
+  | "ConditionalJump" ->
+      let cond = extract_sexpr (to_string (member "cond" exit_info)) in
       let btrue, bfalse = match to_list (member "targets" exit_info) with
         | [`String btrue; `String bfalse] -> (extract_bid btrue, extract_bid bfalse)
         | _ -> failwith "Invalid targets in ConditionalJump exit info (must be list of 2 strings)" in
@@ -967,7 +967,7 @@ let varl : Checker.VarID.t list = [var42; var0]
 let sexpr1 : Checker.Checker.ExitInfo.SimpleExprD.t = Inr val7
 let sexpr2 : Checker.Checker.ExitInfo.SimpleExprD.t = Inl var42
 let fname : Checker.FuncName.t = string_to_char_list "my_function"
-let exit1 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.ConditionalJump (var42, bid, bid)
+let exit1 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.ConditionalJump (sexpr2, bid, bid)
 let exit2 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.Jump bid
 let exit3 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.ReturnBlock [sexpr1; sexpr2]
 let exit4 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.Terminate
@@ -1029,7 +1029,7 @@ SUMMARY OF OCAML TYPES:
 * Checker.Checker.ExitInfo.SimpleExprD.t = Inl Checker.n | Inr Checker.z
 * Checker.FuncName.t = char list
 * Checker.Checker.ExitInfo.t = 
-    | Checker.Checker.ExitInfo.ConditionalJump of VarID.t * BlockID.t * BlockID.t
+    | Checker.Checker.ExitInfo.ConditionalJump of Checker.Checker.ExitInfo.SimpleExprD.t * BlockID.t * BlockID.t
     | Checker.Checker.ExitInfo.Jump of BlockID.t
     | Checker.Checker.ExitInfo.ReturnBlock of Checker.Checker.ExitInfo.SimpleExprD.t list
     | Checker.Checker.ExitInfo.Terminate

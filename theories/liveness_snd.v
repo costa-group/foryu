@@ -582,7 +582,7 @@ Module Liveness_snd (D: DIALECT).
     live_out p fname bid sout  (* sout is the set of live variable at the exit of p/fname/bid *)
 
   (* A block with a conditional jump *)
-  | lo_block_w_cond_jump (fname : FuncName.t) (bid next_bid_if_true next_bid_if_false:  BlockID.t) (cond_var: VarID.t) (b next_b_if_true next_b_if_false: BlockD.t) (s1 s2 sout: VarSet.t):
+  | lo_block_w_cond_jump (fname : FuncName.t) (bid next_bid_if_true next_bid_if_false:  BlockID.t) (cond_var: SimpleExprD.t) (b next_b_if_true next_b_if_false: BlockD.t) (s1 s2 sout: VarSet.t):
     CFGProgD.get_block p fname bid = Some b -> (* the block exists *)
     BlockD.is_cond_jump_block b = Some (cond_var, next_bid_if_true, next_bid_if_false) -> (* the block ends with a conditional jump, and next_bid_if_true and next_bid_if_false are the identifiers of the next blocks *)
     live_in p fname next_bid_if_true s1 ->  (* s1 is the set of live at the entry of p/fname/next_bid_if_true *)
@@ -1512,7 +1512,7 @@ Lemma check_live_out_complete:
   Definition accessed_vars (b: BlockD.t) (pc: nat) (s: VarSet.t) :=
     ( pc = (length b.(instructions)) /\
         match b.(exit_info) with
-        | ExitInfoD.ConditionalJump cv _ _ => (VarSet.Equal s (VarSet.add cv VarSet.empty))
+        | ExitInfoD.ConditionalJump cond _ _ => (VarSet.Equal s (list_to_set (extract_yul_vars [cond])))
         | ExitInfoD.ReturnBlock rvs => (VarSet.Equal s (list_to_set (extract_yul_vars rvs)))
         | _ => VarSet.Equal s VarSet.empty
         end
@@ -1901,33 +1901,45 @@ Lemma check_live_out_complete:
         destruct H_acc as [ [H_pc_sf1_eq_len H_match]| [H_pc_sf1 H_args]].
         
         * destruct (BlockD.exit_info b) as [cv | | rvs | ] eqn:E_b_exit.
-          ** destruct H_live_at_pc.
-             *** unfold add_jump_var_if_applicable in H2.
-                 rewrite H_exists_b in H.
-                 injection H as H.
-                 subst b0.
-                 rewrite E_b_exit in H2.
-                 pose proof (In_preserves_eq s0 (VarSet.add cv VarSet.empty) v0 H_match H_v0_not_In_s0).
-                 unfold VarSet.Equal in H_match.
+          ** destruct cv as [cvar | cval] eqn:E_cv.
+             *** (* the branch condition is a variable: same reasoning as before *)
+                 simpl in H_match.
+                 destruct H_live_at_pc.
+                 **** unfold add_jump_var_if_applicable in H2.
+                      rewrite H_exists_b in H.
+                      injection H as H.
+                      subst b0.
+                      rewrite E_b_exit in H2.
+                      simpl in H2.
+                      pose proof (In_preserves_eq s0 (VarSet.add cvar VarSet.empty) v0 H_match H_v0_not_In_s0).
+                      unfold VarSet.Equal in H_match.
 
-                 rewrite (VarSet.add_spec) in H.
-                 destruct H.
-                 **** subst v0.
-                      pose proof (not_In_preserves_eq sout (VarSet.add cv s) v H2 H_not_In_v_s) as H_not_In_v_add_cv_s.
-                      rewrite VarSet.add_spec in H_not_In_v_add_cv_s.
-                      apply Decidable.not_or in H_not_In_v_add_cv_s.
-                      destruct H_not_In_v_add_cv_s.
-                      assert(cv<>v). intro. contradiction (symmetry H4).
-                      apply (H_eq_assgin_up_to_v cv H4).
-                 **** pose proof (VarSet.empty_spec).
-                      unfold VarSet.Empty in H3.
-                      pose proof (H3 v0) as H3.
-                      contradiction.
-             *** rewrite H_exists_b in H.
-                 injection H as H.
-                 subst b0.
-                 rewrite H_pc_sf1_eq_len in H0.
-                 contradiction (Nat.lt_irrefl (length (BlockD.instructions b))).
+                      rewrite (VarSet.add_spec) in H.
+                      destruct H.
+                      ***** subst v0.
+                            pose proof (not_In_preserves_eq sout (VarSet.add cvar s) v H2 H_not_In_v_s) as H_not_In_v_add_cv_s.
+                            rewrite VarSet.add_spec in H_not_In_v_add_cv_s.
+                            apply Decidable.not_or in H_not_In_v_add_cv_s.
+                            destruct H_not_In_v_add_cv_s.
+                            assert(cvar<>v). intro. contradiction (symmetry H4).
+                            apply (H_eq_assgin_up_to_v cvar H4).
+                      ***** pose proof (VarSet.empty_spec).
+                            unfold VarSet.Empty in H3.
+                            pose proof (H3 v0) as H3.
+                            contradiction.
+                 **** rewrite H_exists_b in H.
+                      injection H as H.
+                      subst b0.
+                      rewrite H_pc_sf1_eq_len in H0.
+                      contradiction (Nat.lt_irrefl (length (BlockD.instructions b))).
+             *** (* the branch condition is a literal: nothing is accessed,
+                 same contradiction shape as the unconditional-jump case below *)
+                 simpl in H_match.
+                 pose proof (In_preserves_eq s0 VarSet.empty v0 H_match H_v0_not_In_s0).
+                 pose proof (VarSet.empty_spec).
+                 unfold VarSet.Empty in H0.
+                 pose proof (H0 v0) as H0.
+                 contradiction.
           ** pose proof (In_preserves_eq s0 VarSet.empty v0 H_match H_v0_not_In_s0).
             pose proof (VarSet.empty_spec).
             unfold VarSet.Empty in H0.
@@ -2106,21 +2118,29 @@ Lemma check_live_out_complete:
       unfold accessed_vars in H_accessed_vars.
       destruct H_accessed_vars as [H_pc_eq_len | H_pc_lt_len].
 
-      + destruct H_pc_eq_len as [H_pc_eq_len H_match]. 
+      + destruct H_pc_eq_len as [H_pc_eq_len H_match].
         destruct (BlockD.exit_info b) as [cv | | rvs | ] eqn:E_exit_b.
-        * unfold add_jump_var_if_applicable in H_sout.
-          rewrite E_exit_b in H_sout.
-          pose proof (not_In_preserves_eq sout (VarSet.add cv s) v H_sout H_not_In_v_s) as H_not_In_v_add.
-          pose proof (In_preserves_eq s0 (VarSet.add cv VarSet.empty) v0 H_match H_In_v0_s0) as H_In_v0_add.
-          rewrite VarSet.add_spec in H_not_In_v_add.
-          rewrite VarSet.add_spec in H_In_v0_add.
-          apply Decidable.not_or in H_not_In_v_add.
-          destruct H_not_In_v_add as [H_v_neq_cv H_not_In_v_s'].
-          destruct H_In_v0_add as [H_eq_v0_cv | H_In_v0_empty].
-          ** rewrite H_eq_v0_cv.
-             apply not_eq_sym.
-             apply H_v_neq_cv.
-          ** pose proof (VarSet.empty_spec) as H_empty.
+        * destruct cv as [cvar | cval] eqn:E_cv.
+          ** unfold add_jump_var_if_applicable in H_sout.
+             rewrite E_exit_b in H_sout.
+             simpl in H_sout.
+             simpl in H_match.
+             pose proof (not_In_preserves_eq sout (VarSet.add cvar s) v H_sout H_not_In_v_s) as H_not_In_v_add.
+             pose proof (In_preserves_eq s0 (VarSet.add cvar VarSet.empty) v0 H_match H_In_v0_s0) as H_In_v0_add.
+             rewrite VarSet.add_spec in H_not_In_v_add.
+             rewrite VarSet.add_spec in H_In_v0_add.
+             apply Decidable.not_or in H_not_In_v_add.
+             destruct H_not_In_v_add as [H_v_neq_cv H_not_In_v_s'].
+             destruct H_In_v0_add as [H_eq_v0_cv | H_In_v0_empty].
+             *** rewrite H_eq_v0_cv.
+                 apply not_eq_sym.
+                 apply H_v_neq_cv.
+             *** pose proof (VarSet.empty_spec) as H_empty.
+                 unfold VarSet.Empty in H_empty.
+                 contradiction (H_empty v0).
+          ** simpl in H_match.
+             pose proof (In_preserves_eq s0 VarSet.empty v0 H_match H_In_v0_s0) as H_In_v0_empty.
+             pose proof (VarSet.empty_spec) as H_empty.
              unfold VarSet.Empty in H_empty.
              contradiction (H_empty v0).
         * unfold add_jump_var_if_applicable in H_sout.
@@ -3672,7 +3692,8 @@ Lemma check_live_out_complete:
   Proof.
     intros v s s' b H_not_In_v_s H_s.
     unfold add_jump_var_if_applicable in H_s.
-    destruct (exit_info b); try exact (not_In_preserves_eq s s' v H_s H_not_In_v_s).
+    destruct (exit_info b) as [cond | | | ]; try exact (not_In_preserves_eq s s' v H_s H_not_In_v_s).
+    destruct cond as [cond_var_id | cval]; try exact (not_In_preserves_eq s s' v H_s H_not_In_v_s).
     pose proof (not_In_preserves_eq s (VarSet.add cond_var_id s') v H_s H_not_In_v_s) as H_not_In_v_add.
     rewrite VarSet.add_spec in H_not_In_v_add.
     apply Decidable.not_or in H_not_In_v_add.
@@ -4133,7 +4154,7 @@ Qed.
 
 
   Lemma live_at_handle_cond_jump_1_snd:
-    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid bid_if_true bid_if_false: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t) (st1 st2 st1': StateD.t) (sf1 sf2: StackFrameD.t) (tl: CallStackD.t) (cv v: VarID.t),
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid bid_if_true bid_if_false: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t) (st1 st2 st1': StateD.t) (sf1 sf2: StackFrameD.t) (tl: CallStackD.t) (cv: SimpleExprD.t) (v: VarID.t),
       CFGProgD.get_block p fname bid = Some b ->
       b.(exit_info) = ExitInfoD.ConditionalJump cv bid_if_true bid_if_false ->
       live_at_pc p fname bid pc s ->
@@ -4176,40 +4197,44 @@ Qed.
 
     - subst_var_by_inj H_b_exists H_b0_exists b0.
       assert (H_sout' := H_sout).
-      unfold add_jump_var_if_applicable in H_sout.
-      rewrite H_exit_info in H_sout.
-      pose proof (not_In_preserves_eq sout (VarSet.add cv s) v H_sout H_not_In_v_s) as H_not_In_v_cv_sout.
-      rewrite VarSet.add_spec in H_not_In_v_cv_sout.
-      apply Decidable.not_or in H_not_In_v_cv_sout.
-      destruct H_not_In_v_cv_sout as [H_v_neq_cv H_not_In_v_s_aux].
+      destruct cv as [condv | cval] eqn:E_cv.
 
-      rewrite H_neq_varid_sym in H_v_neq_cv.
+      + (* the branch condition is a variable: sf1 and sf2 agree on its
+        value since it cannot be v (v is not live, condv is) *)
+        unfold add_jump_var_if_applicable in H_sout.
+        rewrite H_exit_info in H_sout.
+        simpl in H_sout.
+        pose proof (not_In_preserves_eq sout (VarSet.add condv s) v H_sout H_not_In_v_s) as H_not_In_v_cv_sout.
+        rewrite VarSet.add_spec in H_not_In_v_cv_sout.
+        apply Decidable.not_or in H_not_In_v_cv_sout.
+        destruct H_not_In_v_cv_sout as [H_v_neq_cv H_not_In_v_s_aux].
 
-      unfold equiv_locals_up_to_v in H_equiv_locals.
-      pose proof (H_equiv_locals cv H_v_neq_cv) as H_equiv_cv.
-      rewrite DialectFactsD.eqb_eq in H_equiv_cv.
-      rewrite <- H_equiv_cv.
+        rewrite H_neq_varid_sym in H_v_neq_cv.
 
+        unfold equiv_locals_up_to_v in H_equiv_locals.
+        pose proof (H_equiv_locals condv H_v_neq_cv) as H_equiv_cv.
+        rewrite DialectFactsD.eqb_eq in H_equiv_cv.
+        rewrite <- H_equiv_cv.
 
-      assert(H_live_out' := H_live_out).
-      destruct H_live_out' as [ fname bid b0 rs' sout0 H_b0_exists H_is_ret H_sout0| fname bid b0 sout0 H_b0_exists H_is_termin | fname bid next_bid' b0 next_b0 s' sout0 H_b0_exists H_is_jump H_live_in_next_pc H_next_b0_exists H_sout0 | fname bid  next_bid_if_true next_bid_if_false cvar b0 next_b0_if_true next_b0_if_false s1' s2' sout0 H_b0_exists H_is_cjump H_live_at_pc_if_true H_live_at_pc_if_false H_next_b0_if_true H_next_b0_if_false H_sout0].
- 
-        + subst_var_by_inj H_b_exists H_b0_exists b0. 
+        assert(H_live_out' := H_live_out).
+        destruct H_live_out' as [ fname bid b0 rs' sout0 H_b0_exists H_is_ret H_sout0| fname bid b0 sout0 H_b0_exists H_is_termin | fname bid next_bid' b0 next_b0 s' sout0 H_b0_exists H_is_jump H_live_in_next_pc H_next_b0_exists H_sout0 | fname bid  next_bid_if_true next_bid_if_false cvar b0 next_b0_if_true next_b0_if_false s1' s2' sout0 H_b0_exists H_is_cjump H_live_at_pc_if_true H_live_at_pc_if_false H_next_b0_if_true H_next_b0_if_false H_sout0].
+
+        * subst_var_by_inj H_b_exists H_b0_exists b0.
           unfold BlockD.is_return_block in H_is_ret.
           rewrite H_exit_info in H_is_ret.
           discriminate H_is_ret.
-          
-        + subst_var_by_inj H_b_exists H_b0_exists b0.                   
+
+        * subst_var_by_inj H_b_exists H_b0_exists b0.
           unfold BlockD.is_terminated_block in H_is_termin.
           rewrite H_exit_info in H_is_termin.
           discriminate H_is_termin.
 
-        + subst_var_by_inj H_b_exists H_b0_exists b0.                 
+        * subst_var_by_inj H_b_exists H_b0_exists b0.
           unfold BlockD.is_jump_block in H_is_jump.
           rewrite H_exit_info in H_is_jump.
           discriminate H_is_jump.
 
-        + subst_var_by_inj H_b_exists H_b0_exists b0.                 
+        * subst_var_by_inj H_b_exists H_b0_exists b0.
           unfold BlockD.is_cond_jump_block in H_is_cjump.
           rewrite H_exit_info in H_is_cjump.
           injection H_is_cjump as H_cvar H_next_1 H_next_2.
@@ -4226,7 +4251,7 @@ Qed.
           rewrite H_next_b0_if_false.
           rewrite H_next_b0_if_false in H_handle_cond_jump_st1.
 
-          
+
           destruct (next_b0_if_true.(phi_function).2 bid) as [in_sexprs_1] eqn:E_phi_1.
           destruct (next_b0_if_false.(phi_function).2 bid) as [in_sexprs_2] eqn:E_phi_2.
 
@@ -4237,13 +4262,66 @@ Qed.
           unfold apply_inv_phi in H_sout0_l.
           unfold apply_inv_phi in H_sout0_r.
 
-          destruct (D.is_true_value (get (locals sf1) cv)) eqn:E_cv.
- 
-          * apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_true b next_b0_if_true pc sout sout0 s1' st1 st2 st1' sf1 sf2 tl v next_b0_if_true.(phi_function).1 in_sexprs_1 H_b_exists H_next_b0_if_true H_live_at_pc H_live_out H_live_at_pc_if_true H_sout' H_sout0_l H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
-            
-          * apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_false b next_b0_if_false pc sout sout0 s2' st1 st2 st1' sf1 sf2 tl v next_b0_if_false.(phi_function).1 in_sexprs_2 H_b_exists H_next_b0_if_false H_live_at_pc H_live_out H_live_at_pc_if_false H_sout' H_sout0_r H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
+          destruct (D.is_true_value (get (locals sf1) condv)) eqn:E_is_true.
 
-      
+          ** apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_true b next_b0_if_true pc sout sout0 s1' st1 st2 st1' sf1 sf2 tl v next_b0_if_true.(phi_function).1 in_sexprs_1 H_b_exists H_next_b0_if_true H_live_at_pc H_live_out H_live_at_pc_if_true H_sout' H_sout0_l H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
+
+          ** apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_false b next_b0_if_false pc sout sout0 s2' st1 st2 st1' sf1 sf2 tl v next_b0_if_false.(phi_function).1 in_sexprs_2 H_b_exists H_next_b0_if_false H_live_at_pc H_live_out H_live_at_pc_if_false H_sout' H_sout0_r H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
+
+      + (* the branch condition is a literal: sf1 and sf2 trivially agree
+        on its value, since it does not depend on locals at all *)
+        assert(H_live_out' := H_live_out).
+        destruct H_live_out' as [ fname bid b0 rs' sout0 H_b0_exists H_is_ret H_sout0| fname bid b0 sout0 H_b0_exists H_is_termin | fname bid next_bid' b0 next_b0 s' sout0 H_b0_exists H_is_jump H_live_in_next_pc H_next_b0_exists H_sout0 | fname bid  next_bid_if_true next_bid_if_false cvar b0 next_b0_if_true next_b0_if_false s1' s2' sout0 H_b0_exists H_is_cjump H_live_at_pc_if_true H_live_at_pc_if_false H_next_b0_if_true H_next_b0_if_false H_sout0].
+
+        * subst_var_by_inj H_b_exists H_b0_exists b0.
+          unfold BlockD.is_return_block in H_is_ret.
+          rewrite H_exit_info in H_is_ret.
+          discriminate H_is_ret.
+
+        * subst_var_by_inj H_b_exists H_b0_exists b0.
+          unfold BlockD.is_terminated_block in H_is_termin.
+          rewrite H_exit_info in H_is_termin.
+          discriminate H_is_termin.
+
+        * subst_var_by_inj H_b_exists H_b0_exists b0.
+          unfold BlockD.is_jump_block in H_is_jump.
+          rewrite H_exit_info in H_is_jump.
+          discriminate H_is_jump.
+
+        * subst_var_by_inj H_b_exists H_b0_exists b0.
+          unfold BlockD.is_cond_jump_block in H_is_cjump.
+          rewrite H_exit_info in H_is_cjump.
+          injection H_is_cjump as H_cvar H_next_1 H_next_2.
+          subst cvar next_bid_if_true next_bid_if_false.
+
+          unfold handle_jump in H_handle_cond_jump_st1.
+          unfold handle_jump.
+          rewrite H_fname_sf2.
+          rewrite H_fname_sf1 in H_handle_cond_jump_st1.
+          rewrite H_bid_sf2.
+          rewrite H_bid_sf1 in H_handle_cond_jump_st1.
+          rewrite H_next_b0_if_true.
+          rewrite H_next_b0_if_true in H_handle_cond_jump_st1.
+          rewrite H_next_b0_if_false.
+          rewrite H_next_b0_if_false in H_handle_cond_jump_st1.
+
+
+          destruct (next_b0_if_true.(phi_function).2 bid) as [in_sexprs_1] eqn:E_phi_1.
+          destruct (next_b0_if_false.(phi_function).2 bid) as [in_sexprs_2] eqn:E_phi_2.
+
+          rewrite varset_equal_sym in H_sout0.
+          apply varset_eq_imp_subset in H_sout0.
+          apply varset_subset_union in H_sout0.
+          destruct H_sout0 as [H_sout0_l H_sout0_r].
+          unfold apply_inv_phi in H_sout0_l.
+          unfold apply_inv_phi in H_sout0_r.
+
+          destruct (D.is_true_value cval) eqn:E_is_true.
+
+          ** apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_true b next_b0_if_true pc sout sout0 s1' st1 st2 st1' sf1 sf2 tl v next_b0_if_true.(phi_function).1 in_sexprs_1 H_b_exists H_next_b0_if_true H_live_at_pc H_live_out H_live_at_pc_if_true H_sout' H_sout0_l H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
+
+          ** apply (live_at_handle_jump_aux_1_snd p i fname bid bid_if_false b next_b0_if_false pc sout sout0 s2' st1 st2 st1' sf1 sf2 tl v next_b0_if_false.(phi_function).1 in_sexprs_2 H_b_exists H_next_b0_if_false H_live_at_pc H_live_out H_live_at_pc_if_false H_sout' H_sout0_r H_equiv_st1_st2  H_split_i_st1  H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
+
     - subst_var_by_inj H_b_exists H_b0_exists b0.
       
       rewrite <- H_fname_sf1 in H_b_exists.
@@ -4256,7 +4334,7 @@ Qed.
   Qed.
 
       Lemma live_at_handle_cond_jump_2_snd:
-    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid bid_if_true bid_if_false: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t) (st1 st2 st1': StateD.t) (top_sf sf1 sf2: StackFrameD.t) (hl tl: CallStackD.t) (cv v: VarID.t),
+    forall (p: CFGProgD.t) (i: nat) (fname: FuncName.t) (bid bid_if_true bid_if_false: BlockID.t) (b: BlockD.t) (pc: nat) (s: VarSet.t) (st1 st2 st1': StateD.t) (top_sf sf1 sf2: StackFrameD.t) (hl tl: CallStackD.t) (cv: SimpleExprD.t) (v: VarID.t),
       CFGProgD.get_block p fname bid = Some b ->
       live_at_pc p fname bid pc s ->
       SmallStepD.get_next_instr st1 p = None ->
@@ -4280,7 +4358,9 @@ Qed.
     unfold handle_cond_jump in H_handle_cond_jump_st1.
     unfold handle_cond_jump.
 
-    destruct (D.is_true_value (get (locals top_sf) cv)) eqn:E_cv.
+    (* top_sf is shared by st1 and st2 here, so the condition value is
+    trivially the same for both, whether cv is a variable or a literal *)
+    destruct (D.is_true_value (match cv with inl var => get (locals top_sf) var | inr val => val end)) eqn:E_cv.
 
     - apply (live_at_handle_jump_2_snd p i fname bid bid_if_true b pc s st1 st2 st1' top_sf sf1 sf2 hl tl v H_b_exists H_live_at_pc H_get_instr H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_cond_jump_st1 H_not_In_v_s).
 
