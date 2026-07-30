@@ -4,4 +4,10 @@
 *.vos
 *.aux
 *.cache
-
+*.cmi
+*.cmx
+ocaml_interface/checker.ml
+*.mli
+*.o
+*__pycache__
+*.ipynb_checkpoints
