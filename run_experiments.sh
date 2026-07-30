@@ -1,10 +1,14 @@
 #!/bin/bash
 
+# Runs the liveness+constancy checker over every *.json file in a cfg
+# folder and prints one CSV line per file (header first).
+#
+# Usage (run from the repo root):
+#   ./run_experiments.sh benchmark/semanticTests_cfg_0_8_34 > semanticTests_0_8_34.csv
+
 # ulimit -s unlimited
 
-#cfg_dir="benchmark/semanticTests_cfg"
-cfg_dir="benchmark/grey_stack_too_deep_cfg"
-#cfg_dir="benchmark/1k_most_called_cfg"
+cfg_dir="${1:?Usage: $0 <cfg_dir>}"
 foryu="bin/static_foryu"
 
 # --csv already reports json-processing status, size, and per-analysis timings
