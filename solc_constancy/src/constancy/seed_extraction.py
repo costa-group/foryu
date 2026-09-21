@@ -9,39 +9,48 @@ Wherever a variable that is still symbolic in the baseline shows up as a plain l
 same argument position in the probe compilation, that variable is known to have that constant
 value.
 
-Matching instructions between the two compilations by output-variable NAME alone is not safe:
-any step that changes an instruction *count* somewhere in a block -- not just 's', which can
-eliminate an instruction via an algebraic rewrite, but also 'T'/'m'/'c' when probed at a point
-where they interact with a repeating cleanup phase (see PROGRESS.md's dated entries) -- shifts
-solc's sequential variable numbering for everything after that point, so two instructions that
-happen to produce the same *name* in both compilations can be completely unrelated. A concrete
-example found in this project's own investigation: probing 'T' at its own last, most productive
-occurrence in the real default sequence produced three different, mutually contradictory values
-for the same global SSA variable across three different blocks -- all wrong, because
-by-name matching coincidentally re-matched three unrelated instructions in a function that
-decodes a struct field-by-field with a repeating instruction pattern.
+Matching instructions between the two compilations by output-variable NAME alone is not safe,
+and neither is matching by fixed position: any step can shift solc's sequential variable
+numbering, or reorder/regroup instructions, well beyond the one thing actually being probed.
+`match_block_instructions` instead partitions each block's instructions by *movability* --
+solc's own documented optimizer concept (https://docs.soliditylang.org/en/latest/internals/
+optimizer.html, libyul/SideEffects.h): an instruction is movable if it's side-effect free and
+depends only on variable values and call-constant environment state (pure arithmetic/logic,
+reads of things like CALLER/TIMESTAMP/CALLDATALOAD that can't change during a call). Everything
+else -- side-effecting opcodes, anything touching memory/storage/transient storage (reads
+included: MLOAD/SLOAD/TLOAD), PC/msize/returndatasize-dependent ops, and (per solc's own default)
+every call to a generated Yul function -- is non-movable: an "anchor" whose relative order with
+respect to other anchors solc's optimizer cannot have changed. Since almost every instruction in
+real yulCFGJson data is a call to a generated function rather than a raw EVM opcode, `_MOVABLE_OPS`
+is deliberately an allowlist of known-pure primitives; anything not on it defaults to non-movable
+-- conservative in the safe direction (it only costs coverage, since an anchor still gets matched,
+just without exploiting reordering flexibility it might have actually had).
 
-Instead, `match_block_instructions` walks a block's baseline/probe instruction lists BACKWARD
-from the end, unifying a baseline<->probe variable correspondence structurally (same op, same
-argument shape, consistent argument-by-argument) rather than by name. A block's live-out
-boundary is unaffected by a purely local, per-block rewrite (successor blocks still need the
-same values), so instructions near the end of the block are the most reliable place to start;
-walking backward from there, a single position where nothing lines up signals a real
-divergence rather than a coincidence. When the immediate next position doesn't unify, a small
-window of alternate offsets is tried, each confirmed by requiring several further instructions
-to also unify consistently (a lookahead, not just one lucky match); a resync is only accepted
-when exactly one candidate offset survives this check -- if none or more than one do, the walk
-stops there rather than guessing, so what's reported is either correct or absent, never wrong.
+Anchors are matched order-preservingly (`_match_anchors`): their sequence can't have been
+reordered, so a same-shape pairing found out of order is a coincidence, not a correspondence, and
+is dropped in favor of the longest order-consistent subset -- a real branch/structural difference
+still leaves some anchors unresolved rather than guessed. Movable instructions are matched as one
+global pool across the *whole* block (`_match_item_set`), not bracketed between adjacent anchors:
+solc is free to reorder a movable instruction across any anchor it has no data or side-effect
+dependency on, confirmed directly against a real contract (a pure address-mask computation moved
+from before an `SLOAD` to after it, since it doesn't touch storage). Both passes use the same
+iterative constraint-propagation primitive: repeatedly commit any instruction with exactly one
+remaining structurally-compatible candidate (checking both operand orderings for a commutative op
+-- `_COMMUTATIVE_OPS` -- since solc is free to reorder those too), which may newly disambiguate
+others via the variable correspondence it confirms; repeat until nothing more resolves. A
+periodic/repetitive pattern that looks locally ambiguous (e.g. three structurally-identical
+`shl`/`sub` pairs building an address mask) resolves this way once *any* one instruction in the
+block has a uniquely-identifiable operand (traced on a real contract: a downstream `and(x, v28)`
+where `v28` is already known from outside the block pins one link, which then resolves the rest
+by elimination) -- no positional offset-window guessing is needed anywhere.
 
-Even an immediate-next-position match can introduce a NEW baseline<->probe variable
-correspondence that isn't anchored by anything else -- e.g. two operands that merely happen to
-sit at the same argument position in an instruction from a periodic/repetitive block (a
-struct's fields being zeroed in a loop-free unrolled sequence is a real example -- see
-PROGRESS.md). Such a correspondence is only trusted once checked against the very next
-instruction, with and without it: if the next instruction unifies fine without it but
-contradicts it once it's added, that proves the correspondence was coincidental, and the match
-that proposed it is treated as failed (falling through to the resync search above) rather than
-silently believed.
+Known, accepted limitation: solc can also *reassociate* a chain of a commutative+associative op
+(e.g. regroup `(0x20+a)+b` into `(b+a)+0x20`), which no per-instruction check can match, since the
+intermediate value on one side has no counterpart instruction on the other at all. Confirmed on a
+real contract this costs nothing in practice for constancy purposes -- the reassociated region was
+itself computing a purely runtime (calldata-dependent) value with no constant to find either way --
+and the design correctly declines to force a match there rather than guessing one. Full algebraic-
+equivalence checking (flattening associative chains, comparing as multisets) is out of scope.
 
 `extract_seed_facts_for_contract` runs this per scope in dominance-order (mirroring
 `parser.cfg_block_list.CFGBlockList.dominant_tree`, built directly off the raw yulCFGJson
@@ -54,18 +63,41 @@ per-block answers going unchecked against each other -- exactly the gap that let
 'T'-occurrence contradiction above slip through undetected before this fix.
 
 Matching blocks themselves is not safe by raw id alone either, for the same underlying reason:
-`_match_blocks_structurally` establishes a baseline<->probe block correspondence from the
+`extract_seed_facts_for_contract` establishes a baseline<->probe block correspondence from the
 scope's shared entry block, propagated via matching CFG-edge shape (exit type + successor
-count), rather than assuming equal ids name the same block. This catches genuinely ambiguous
-cases, but it cannot catch every one: a real, previously-investigated case (see PROGRESS.md)
-turned out to be caused by solc's `StackCompressor` -- a mandatory phase, unrelated to any step
-this module is asked to probe, that can duplicate or restructure large amounts of code to
-resolve "stack too deep" situations, sensitive to stack-pressure differences one extra step can
-introduce. Since the resulting block-count shift can happen inside an otherwise-uniform,
-single-predecessor chain, it produces no observable ambiguity for any purely local block
-matcher (id-based or structural) to catch -- `with_stack_allocation_disabled` (below) is the
-actual fix for that class, used by isolated probing callers (`occurrence_trace.py`,
-`annotate_single_step.py` via `extract_seed_facts`'s `disable_stack_allocation` parameter).
+count, and -- for a ConditionalJump -- the condition variable's own defining instruction, not
+just the branch arity) rather than assuming equal ids name the same block. Block-correspondence
+resolution and instruction matching are interleaved into one dominance-order walk per scope
+(`_match_scope`), not two separate passes: a block's own confirmed `var_map` needs to be ready
+*before* its successors' branch conditions are checked against it, and before any `PhiFunction`
+in a successor can be aligned by predecessor identity (`_reorder_phi_args`, using the raw
+`entries` field solc emits alongside a block's `PhiFunction`s -- one entry per phi input
+position, naming the predecessor block that produced it -- rather than trusting `PhiFunction`
+`in` lists to line up positionally between baseline and probe, which nothing guarantees). The
+branch-condition check itself also recognizes a negated condition (solc wrapping/unwrapping an
+`iszero` and swapping the two branch targets accordingly), not just a literal match.
+
+This catches genuinely ambiguous cases, but it cannot catch every one. Two distinct, accepted
+gaps:
+- A real, previously-investigated case (see PROGRESS.md) turned out to be caused by solc's
+  `StackCompressor` -- a mandatory phase, unrelated to any step this module is asked to probe,
+  that can duplicate or restructure large amounts of code to resolve "stack too deep"
+  situations, sensitive to stack-pressure differences one extra step can introduce. Since the
+  resulting block-count shift can happen inside an otherwise-uniform, single-predecessor chain,
+  it produces no observable ambiguity for any purely local block matcher (id-based or
+  structural) to catch -- `with_stack_allocation_disabled` (below) is the actual fix for that
+  class, used by isolated probing callers (`occurrence_trace.py`, `annotate_single_step.py` via
+  `extract_seed_facts`'s `disable_stack_allocation` parameter).
+- A block whose only non-backward predecessor is itself unresolved stays unresolved too, even
+  when that's a real, principled dead end rather than a matching weakness: traced directly
+  against a real contract (`NFTMarketWrap`, occurrence `T3`, scope `abi_encode_array_address`)
+  a block whose `ConditionalJump` branches on a variable that's provably a compile-time literal
+  (a `LiteralAssignment` from several blocks up) gets eliminated outright by solc's block-joiner
+  once an extra constant-propagating step makes that provable -- there is no counterpart block
+  in probe at all, and the block's other route in is a loop back-edge, unavailable in this
+  single-forward-pass design. No amount of predecessor-fact merging recovers a block that
+  genuinely no longer exists; this is left unresolved on purpose (see
+  `TestMatchScope.test_a_block_whose_sole_route_in_is_a_loop_back_edge_stays_unresolved`).
 """
 import copy
 import logging
@@ -95,9 +127,26 @@ seed_facts_T = Dict[seed_key_T, constant_T]
 # its successors as a seed
 var_map_T = Dict[var_id_T, var_id_T]
 
-# Default tuning for match_block_instructions -- see its docstring
-DEFAULT_LOOKAHEAD = 3
-DEFAULT_RESYNC_WINDOW = 4
+# Commutative ops: both operand orderings are checked when testing structural compatibility,
+# since solc's optimizer is free to reorder these (see the module docstring)
+_COMMUTATIVE_OPS = {"add", "mul", "and", "or", "xor", "eq"}
+
+# Allowlist of primitive ops solc's optimizer treats as movable (see the module docstring and
+# https://docs.soliditylang.org/en/latest/internals/optimizer.html / libyul/SideEffects.h):
+# side-effect free, and depends only on variable values and call-constant environment state.
+# Deliberately an allowlist, not a blocklist -- every call to a generated Yul function (the
+# majority of instructions in real yulCFGJson data) is non-movable by solc's own default, and
+# treating an unrecognized op as non-movable (an anchor) is always the safe direction: it only
+# costs coverage, never correctness.
+_MOVABLE_OPS = {
+    "add", "sub", "mul", "div", "sdiv", "mod", "smod", "exp", "addmod", "mulmod",
+    "signextend", "lt", "gt", "slt", "sgt", "eq", "iszero", "and", "or", "xor", "not",
+    "shl", "shr", "sar", "byte",
+    "address", "origin", "caller", "callvalue", "calldataload", "calldatasize",
+    "gasprice", "coinbase", "timestamp", "number", "difficulty", "prevrandao",
+    "gaslimit", "chainid", "basefee", "blobbasefee", "codesize", "blobhash",
+    "LiteralAssignment", "memoryguard", "datasize", "dataoffset",
+}
 
 
 def is_literal(value: str) -> bool:
@@ -151,110 +200,201 @@ def _try_unify_instructions(baseline_instr: Dict[str, Any], probe_instr: Dict[st
     return pending, facts
 
 
-def _confirm_resync(baseline_instrs: List[Dict[str, Any]], probe_instrs: List[Dict[str, Any]],
-                    baseline_idx: int, probe_idx: int, var_map: var_map_T, lookahead: int) -> \
-        Optional[Tuple[var_map_T, Dict[int, Dict[var_id_T, constant_T]], int, int]]:
+def _instruction_correspondences(baseline_instr: Dict[str, Any], probe_instr: Dict[str, Any], var_map: var_map_T) -> \
+        List[Tuple[List[Tuple[var_id_T, var_id_T]], Dict[var_id_T, constant_T]]]:
     """
-    Confirms a candidate resync point: checks that baseline_idx/probe_idx, and the `lookahead`
-    instructions before them continuing the backward walk, all unify consistently. Returns
-    (extended_var_map, facts_by_index, next_baseline_idx, next_probe_idx) covering everything
-    consumed by the lookahead if the whole window unifies without contradiction, None otherwise.
+    The way baseline_instr could correspond to probe_instr given var_map, as a 0- or 1-element
+    list. Tries the natural (positional) argument order first (_try_unify_instructions); only if
+    that fails, and the op is commutative (_COMMUTATIVE_OPS) with two distinct operands, falls
+    back to the swapped order -- solc's optimizer is free to reorder a commutative op's
+    operands, but preferring the natural order first avoids treating an already-unambiguous
+    instruction as newly ambiguous just because a swap would also happen to parse (e.g.
+    add(v2, v0) against add(v2, 0x20): the positional reading is already a clean, unique match;
+    checking the swap too would spuriously claim v2 = 0x20 as an equally-valid alternative).
+
+    The swapped order is only offered when none of baseline_instr's own arguments are already
+    known in var_map. Otherwise the swap can be used to silently route around a real
+    contradiction rather than genuinely explain a reordering: if var_map already says a
+    baseline argument corresponds to a specific probe variable, and the natural order conflicts
+    with that, swapping operands just to avoid the conflict would fabricate a correspondence
+    for the *other* argument instead of correctly rejecting the whole instruction (confirmed
+    against a real collision case -- see the module docstring's periodic-block example).
     """
-    trial_map = dict(var_map)
-    facts_by_index: Dict[int, Dict[var_id_T, constant_T]] = {}
-    i, j = baseline_idx, probe_idx
-    steps = 0
+    result = _try_unify_instructions(baseline_instr, probe_instr, var_map)
+    if result is not None:
+        return [result]
 
-    while steps <= lookahead and i >= 0 and j >= 0:
-        result = _try_unify_instructions(baseline_instrs[i], probe_instrs[j], trial_map)
-        if result is None:
-            return None
-        pending, facts = result
-        for baseline_var, probe_var in pending:
-            trial_map[baseline_var] = probe_var
-        if facts:
-            facts_by_index[i] = facts
-        i -= 1
-        j -= 1
-        steps += 1
-
-    return trial_map, facts_by_index, i, j
-
-
-def _contradicted_by_next_instruction(baseline_instrs: List[Dict[str, Any]], probe_instrs: List[Dict[str, Any]],
-                                      i: int, j: int, var_map: var_map_T,
-                                      result: Tuple[List[Tuple[var_id_T, var_id_T]], Dict[var_id_T, constant_T]]) -> bool:
-    """
-    Checks whether the match found at (i, j) should be trusted: a NEW baseline<->probe variable
-    correspondence it proposes (one not already in var_map) is only trustworthy if it doesn't
-    immediately conflict with the very next instruction. Compares that next instruction with
-    and without the new correspondence added -- if it unifies fine without but contradicts with,
-    the correspondence was coincidental (see the module docstring's periodic-block example), and
-    the caller should treat (i, j) as if it hadn't unified at all rather than trust it.
-    """
-    pending, _ = result
-    new_vars = [baseline_var for baseline_var, _ in pending if baseline_var not in var_map]
-    if not new_vars or i - 1 < 0 or j - 1 < 0:
-        return False
-
-    without_new_vars = _try_unify_instructions(baseline_instrs[i - 1], probe_instrs[j - 1], var_map) is not None
-
-    trial_map = dict(var_map)
-    for baseline_var, probe_var in pending:
-        trial_map[baseline_var] = probe_var
-    with_new_vars = _try_unify_instructions(baseline_instrs[i - 1], probe_instrs[j - 1], trial_map) is not None
-
-    return without_new_vars and not with_new_vars
-
-
-def match_block_instructions(baseline_instrs: List[Dict[str, Any]], probe_instrs: List[Dict[str, Any]],
-                             seed_var_map: Optional[var_map_T] = None,
-                             lookahead: int = DEFAULT_LOOKAHEAD,
-                             resync_window: int = DEFAULT_RESYNC_WINDOW) -> \
-        Tuple[Dict[int, Dict[var_id_T, constant_T]], var_map_T]:
-    """
-    Matches a block's baseline instructions against its probe instructions by walking both
-    lists backward from the end (see the module docstring for the rationale), returning
-    ({baseline_instruction_index: {var: literal}}, confirmed_var_map). seed_var_map primes the
-    correspondence with facts already confirmed elsewhere (e.g. by a dominating predecessor
-    block) -- both as extra context and as a consistency check: a local match that would
-    contradict a seeded correspondence is rejected exactly like any other inconsistency.
-    """
-    var_map: var_map_T = dict(seed_var_map or {})
-    facts: Dict[int, Dict[var_id_T, constant_T]] = defaultdict(dict)
-    i, j = len(baseline_instrs) - 1, len(probe_instrs) - 1
-
-    while i >= 0 and j >= 0:
-        result = _try_unify_instructions(baseline_instrs[i], probe_instrs[j], var_map)
-        if result is not None and _contradicted_by_next_instruction(baseline_instrs, probe_instrs, i, j,
-                                                                     var_map, result):
-            result = None
-
+    probe_in = probe_instr.get("in", [])
+    baseline_in = baseline_instr.get("in", [])
+    already_known = any(arg in var_map for arg in baseline_in if not is_literal(arg))
+    if not already_known and probe_instr.get("op") in _COMMUTATIVE_OPS and len(probe_in) == 2 \
+            and probe_in[0] != probe_in[1]:
+        swapped = {**probe_instr, "in": [probe_in[1], probe_in[0]]}
+        result = _try_unify_instructions(baseline_instr, swapped, var_map)
         if result is not None:
-            pending, step_facts = result
+            return [result]
+
+    return []
+
+
+def _is_movable(instr: Dict[str, Any]) -> bool:
+    """See _MOVABLE_OPS and the module docstring."""
+    return instr.get("op") in _MOVABLE_OPS
+
+
+def _match_item_set(baseline_items: List[Tuple[int, Dict[str, Any]]], probe_items: List[Tuple[int, Dict[str, Any]]],
+                    var_map: var_map_T) -> Tuple[Dict[int, Dict[var_id_T, constant_T]], var_map_T, Dict[int, int]]:
+    """
+    Structurally matches baseline_items against probe_items (each a list of
+    (original_instruction_index, instruction) pairs) independent of position, via iterative
+    constraint propagation: repeatedly commit any baseline instruction with exactly one
+    remaining structurally-compatible probe candidate (_instruction_correspondences, which
+    accounts for commutative operand order), which may newly disambiguate others by adding to
+    var_map; repeat until no further commits happen. Two baseline instructions that both
+    uniquely want the same probe instruction in the same round are a genuine tie -- neither is
+    committed, mirroring "unique candidate or nothing" everywhere else in this module.
+
+    Mutates and returns var_map. Returns (facts keyed by baseline index, var_map, pairing --
+    {baseline_index: probe_index} for every committed correspondence, used by _match_anchors to
+    check order).
+    """
+    facts: Dict[int, Dict[var_id_T, constant_T]] = defaultdict(dict)
+    pairing: Dict[int, int] = {}
+    remaining_baseline = dict(baseline_items)
+    remaining_probe = dict(probe_items)
+
+    while remaining_baseline and remaining_probe:
+        proposals: Dict[int, List[Tuple[int, List[Tuple[var_id_T, var_id_T]], Dict[var_id_T, constant_T]]]] = \
+            defaultdict(list)
+        for b_idx, b_instr in remaining_baseline.items():
+            matches = [(p_idx, pending, step_facts)
+                      for p_idx, p_instr in remaining_probe.items()
+                      for pending, step_facts in _instruction_correspondences(b_instr, p_instr, var_map)]
+            if len(matches) == 1:
+                p_idx, pending, step_facts = matches[0]
+                proposals[p_idx].append((b_idx, pending, step_facts))
+
+        commits = [(p_idx, props[0]) for p_idx, props in proposals.items() if len(props) == 1]
+        if not commits:
+            break
+
+        for p_idx, (b_idx, pending, step_facts) in commits:
             for baseline_var, probe_var in pending:
                 var_map[baseline_var] = probe_var
             if step_facts:
-                facts[i].update(step_facts)
-            i -= 1
-            j -= 1
-            continue
+                facts[b_idx].update(step_facts)
+            pairing[b_idx] = p_idx
+            del remaining_baseline[b_idx]
+            del remaining_probe[p_idx]
 
-        candidates = []
-        for delta in range(1, resync_window + 1):
-            for candidate_j in (j - delta, j + delta):
-                if not (0 <= candidate_j < len(probe_instrs)):
+    return dict(facts), var_map, pairing
+
+
+def _match_anchors(baseline_anchors: List[Tuple[int, Dict[str, Any]]], probe_anchors: List[Tuple[int, Dict[str, Any]]],
+                   var_map: var_map_T) -> Tuple[Dict[int, Dict[var_id_T, constant_T]], var_map_T]:
+    """
+    Matches a block's anchors (non-movable instructions -- see _is_movable) against the probe's.
+    Anchors additionally can't have been reordered relative to each other (that is what makes
+    them anchors), so order is enforced as an active constraint during the same iterative
+    propagation _match_item_set uses for movable instructions, not as a filter applied
+    afterward: each not-yet-committed baseline anchor is restricted to a [lo, hi] window of
+    probe positions, and committing any anchor narrows every other anchor's window (nothing
+    before it can match at or after its probe position, nothing after it can match at or
+    before). This lets an anchor with a locally-distinctive match (e.g. a literal argument no
+    other candidate shares) resolve first and then pin down neighboring anchors that would
+    otherwise be ambiguous on structure alone -- plain "match then keep the longest order-
+    preserving subset" can't do this, since if nothing is uniquely resolvable without order
+    information in the first place, there is nothing yet to filter. A real branch/structural
+    difference (not just movable-instruction churn) can still leave some anchors genuinely
+    unresolved rather than guessed.
+    """
+    baseline_order = [idx for idx, _ in baseline_anchors]
+    probe_order = [idx for idx, _ in probe_anchors]
+    baseline_by_idx = dict(baseline_anchors)
+    probe_by_idx = dict(probe_anchors)
+
+    lo = [0] * len(baseline_order)
+    hi = [len(probe_order) - 1] * len(baseline_order)
+    committed_probe_position: Dict[int, int] = {}
+    facts: Dict[int, Dict[var_id_T, constant_T]] = {}
+
+    progress = True
+    while progress:
+        progress = False
+        proposals: Dict[int, List[Tuple[int, List[Tuple[var_id_T, var_id_T]], Dict[var_id_T, constant_T]]]] = \
+            defaultdict(list)
+
+        for b_pos, b_idx in enumerate(baseline_order):
+            if b_pos in committed_probe_position:
+                continue
+            b_instr = baseline_by_idx[b_idx]
+            matches = []
+            for p_pos in range(lo[b_pos], hi[b_pos] + 1):
+                p_instr = probe_by_idx[probe_order[p_pos]]
+                for pending, step_facts in _instruction_correspondences(b_instr, p_instr, var_map):
+                    matches.append((p_pos, pending, step_facts))
+            if len(matches) == 1:
+                p_pos, pending, step_facts = matches[0]
+                proposals[p_pos].append((b_pos, pending, step_facts))
+
+        commits = [(p_pos, props[0]) for p_pos, props in proposals.items() if len(props) == 1]
+        if not commits:
+            break
+
+        for p_pos, (b_pos, pending, step_facts) in commits:
+            for baseline_var, probe_var in pending:
+                var_map[baseline_var] = probe_var
+            if step_facts:
+                facts[baseline_order[b_pos]] = step_facts
+            committed_probe_position[b_pos] = p_pos
+            for other_pos in range(len(baseline_order)):
+                if other_pos in committed_probe_position:
                     continue
-                outcome = _confirm_resync(baseline_instrs, probe_instrs, i, candidate_j, var_map, lookahead)
-                if outcome is not None:
-                    candidates.append(outcome)
+                if other_pos < b_pos:
+                    hi[other_pos] = min(hi[other_pos], p_pos - 1)
+                elif other_pos > b_pos:
+                    lo[other_pos] = max(lo[other_pos], p_pos + 1)
+            progress = True
 
-        if len(candidates) != 1:
-            break  # no resync point, or more than one equally plausible -- stop, don't guess
+    return facts, var_map
 
-        var_map, resync_facts, i, j = candidates[0]
-        for idx, idx_facts in resync_facts.items():
-            facts[idx].update(idx_facts)
+
+def match_block_instructions(baseline_instrs: List[Dict[str, Any]], probe_instrs: List[Dict[str, Any]],
+                             seed_var_map: Optional[var_map_T] = None) -> \
+        Tuple[Dict[int, Dict[var_id_T, constant_T]], var_map_T]:
+    """
+    Matches a block's baseline instructions against its probe instructions (see the module
+    docstring for the movable/anchor design), returning ({baseline_instruction_index:
+    {var: literal}}, confirmed_var_map). seed_var_map primes the correspondence with facts
+    already confirmed elsewhere (e.g. by a dominating predecessor block), feeding the
+    constraint propagation from the start.
+
+    Two passes: anchors first (_match_anchors, order-preserving, since their relative order
+    can't have changed), then every movable instruction in the block as one global pool
+    (_match_item_set, not bracketed per anchor-gap -- a movable instruction can legally be
+    reordered across an anchor it doesn't conflict with), seeded by whatever the anchor pass
+    and seed_var_map already confirmed.
+    """
+    var_map: var_map_T = dict(seed_var_map or {})
+
+    baseline_anchors: List[Tuple[int, Dict[str, Any]]] = []
+    baseline_movable: List[Tuple[int, Dict[str, Any]]] = []
+    for idx, instr in enumerate(baseline_instrs):
+        (baseline_movable if _is_movable(instr) else baseline_anchors).append((idx, instr))
+
+    probe_anchors: List[Tuple[int, Dict[str, Any]]] = []
+    probe_movable: List[Tuple[int, Dict[str, Any]]] = []
+    for idx, instr in enumerate(probe_instrs):
+        (probe_movable if _is_movable(instr) else probe_anchors).append((idx, instr))
+
+    anchor_facts, var_map = _match_anchors(baseline_anchors, probe_anchors, var_map)
+    movable_facts, var_map, _ = _match_item_set(baseline_movable, probe_movable, var_map)
+
+    facts: Dict[int, Dict[var_id_T, constant_T]] = defaultdict(dict)
+    for idx, var_facts in anchor_facts.items():
+        facts[idx].update(var_facts)
+    for idx, var_facts in movable_facts.items():
+        facts[idx].update(var_facts)
 
     return dict(facts), var_map
 
@@ -349,36 +489,178 @@ def _predecessors(blocks: List[Dict[str, Any]]) -> Dict[block_id_T, List[block_i
     return predecessors
 
 
-def _propose_successor_mapping(baseline_block: Dict[str, Any],
-                               probe_block: Optional[Dict[str, Any]]) -> Dict[block_id_T, block_id_T]:
+def _defining_instruction(block: Dict[str, Any], var: var_id_T) -> Optional[Dict[str, Any]]:
+    for instr in block.get("instructions", []):
+        if var in instr.get("out", []):
+            return instr
+    return None
+
+
+def _cond_correspondence(baseline_block: Dict[str, Any], probe_block: Dict[str, Any], baseline_cond: var_id_T,
+                         probe_cond: var_id_T, var_map: var_map_T) -> Optional[bool]:
+    """
+    Whether probe_cond is the same branch condition as baseline_cond (True), a negation of it
+    (False -- solc wrapped/unwrapped an `iszero` and swapped the two branch targets
+    accordingly), or unrelated (None), given the variable correspondences already confirmed in
+    var_map.
+
+    Checks var_map first: if baseline_cond is already known (e.g. confirmed several blocks
+    back, not locally re-derivable via _defining_instruction in this block at all), that's
+    reused directly rather than re-deriving the correspondence from local instructions alone.
+    Only falls back to a local structural check (both sides' own defining instruction, via
+    _try_unify_instructions -- now against the real var_map, not a throwaway empty one) when
+    baseline_cond isn't yet known.
+    """
+    if baseline_cond in var_map:
+        if var_map[baseline_cond] == probe_cond:
+            return True
+        probe_cond_instr = _defining_instruction(probe_block, probe_cond)
+        if probe_cond_instr is not None and probe_cond_instr.get("op") == "iszero" \
+                and probe_cond_instr.get("in") == [var_map[baseline_cond]]:
+            return False
+        return None
+
+    baseline_cond_instr = _defining_instruction(baseline_block, baseline_cond)
+    probe_cond_instr = _defining_instruction(probe_block, probe_cond)
+    if baseline_cond_instr is None or probe_cond_instr is None:
+        return None
+
+    if _try_unify_instructions(baseline_cond_instr, probe_cond_instr, var_map) is not None:
+        return True
+
+    if baseline_cond_instr.get("op") == "iszero" and len(baseline_cond_instr.get("in", [])) == 1:
+        inner = baseline_cond_instr["in"][0]
+        if not is_literal(inner):
+            inner_defining = _defining_instruction(baseline_block, inner)
+            if inner_defining is not None and \
+                    _try_unify_instructions(inner_defining, probe_cond_instr, var_map) is not None:
+                return False
+
+    if probe_cond_instr.get("op") == "iszero" and len(probe_cond_instr.get("in", [])) == 1:
+        inner = probe_cond_instr["in"][0]
+        if not is_literal(inner):
+            inner_defining = _defining_instruction(probe_block, inner)
+            if inner_defining is not None and \
+                    _try_unify_instructions(baseline_cond_instr, inner_defining, var_map) is not None:
+                return False
+
+    return None
+
+
+def _propose_successor_mapping(baseline_block: Dict[str, Any], probe_block: Optional[Dict[str, Any]],
+                               var_map: var_map_T) -> Dict[block_id_T, block_id_T]:
     """
     Proposes a baseline->probe successor-block correspondence from one already-confirmed block
     pairing: valid only if both blocks' exit shape agrees (same exit type, same number of
     targets), in which case corresponding successors are read positionally off each block's own
     (raw JSON, solc-ordered) targets list. Returns {} if the shape disagrees or probe_block is
     unknown -- contributing no candidate rather than a wrong one.
+
+    For a ConditionalJump, also requires the branch condition itself to match (_cond_correspondence,
+    using var_map -- the real, already-confirmed correspondence, not a throwaway empty one): a
+    negated match (see _cond_correspondence) is accepted too, with the two branch targets
+    swapped (targets[0] is the zero/falls_to case, targets[1] the nonzero/jump_to case -- see
+    parser.cfg_block.CFGBlock.set_jump_info).
     """
     if probe_block is None:
         return {}
-    if baseline_block.get("exit", {}).get("type") != probe_block.get("exit", {}).get("type"):
+    baseline_exit, probe_exit = baseline_block.get("exit", {}), probe_block.get("exit", {})
+    if baseline_exit.get("type") != probe_exit.get("type"):
         return {}
+
+    negated = False
+    if baseline_exit.get("type") == "ConditionalJump":
+        baseline_cond, probe_cond = baseline_exit.get("cond"), probe_exit.get("cond")
+        if baseline_cond is None or probe_cond is None:
+            return {}
+        if is_literal(baseline_cond) or is_literal(probe_cond):
+            if baseline_cond != probe_cond:
+                return {}
+        else:
+            correspondence = _cond_correspondence(baseline_block, probe_block, baseline_cond, probe_cond, var_map)
+            if correspondence is None:
+                return {}
+            negated = not correspondence
+
     baseline_targets, probe_targets = _successors(baseline_block), _successors(probe_block)
     if len(baseline_targets) != len(probe_targets):
         return {}
+    if negated:
+        probe_targets = list(reversed(probe_targets))
     return dict(zip(baseline_targets, probe_targets))
 
 
-def _match_blocks_structurally(baseline_blocks: List[Dict[str, Any]],
-                               probe_blocks: List[Dict[str, Any]]) -> Dict[block_id_T, block_id_T]:
+def _reorder_phi_args(baseline_block: Dict[str, Any], probe_block: Dict[str, Any],
+                      block_correspondence: Dict[block_id_T, block_id_T]) -> List[Dict[str, Any]]:
     """
-    Baseline->probe block correspondence for one scope, established structurally rather than by
-    trusting equal raw ids (see the module docstring): the scope's shared entry block (position
-    0 in both lists, the same convention _block_dominance_order relies on) anchors the walk, and
-    each further block's correspondence is proposed by its already-resolved predecessors via
-    _propose_successor_mapping. A block is left unresolved (absent from the result) if none of
-    its predecessors are resolved yet, or if its predecessors propose more than one distinct
-    probe counterpart -- mirroring the "unique candidate or nothing" rule already used for
-    instruction matching and cross-block variable seeding.
+    A copy of probe_block's instructions with each PhiFunction's `in` list permuted to align by
+    predecessor identity rather than by raw position: the raw yulCFGJson gives a block with
+    PhiFunctions an `entries` list, one entry per phi input position naming the predecessor
+    block that produced it (parser.parser.process_block_entry), in its own compilation's block-id
+    namespace. Nothing guarantees solc emits a merge block's predecessor list in the same order
+    in both compilations, so a blind positional zip of PhiFunction `in` args (what plain
+    instruction matching does for every other op) can silently misalign them.
+
+    A baseline predecessor with no confirmed correspondence yet (a backward edge, not yet
+    resolved when this block is processed) keeps its phi input in whatever slot is left over
+    once the resolvable ones are placed -- the same blind-positional behavior as before for the
+    part that genuinely can't be determined yet, so this is strictly additive, never a
+    regression. Falls back to probe_block's instructions unchanged if `entries` is missing on
+    either side or the lengths don't line up.
+    """
+    baseline_entries = baseline_block.get("entries")
+    probe_entries = probe_block.get("entries")
+    probe_instructions = probe_block.get("instructions", [])
+    if not baseline_entries or not probe_entries or len(baseline_entries) != len(probe_entries):
+        return probe_instructions
+
+    probe_position_by_id: Dict[block_id_T, int] = {}
+    for position, predecessor_id in enumerate(probe_entries):
+        probe_position_by_id.setdefault(predecessor_id, position)
+
+    permutation: List[Optional[int]] = [None] * len(baseline_entries)
+    used_positions = set()
+    for i, baseline_predecessor in enumerate(baseline_entries):
+        mapped = block_correspondence.get(baseline_predecessor)
+        probe_position = probe_position_by_id.get(mapped) if mapped is not None else None
+        if probe_position is not None and probe_position not in used_positions:
+            permutation[i] = probe_position
+            used_positions.add(probe_position)
+
+    remaining_positions = iter(position for position in range(len(probe_entries)) if position not in used_positions)
+    for i in range(len(permutation)):
+        if permutation[i] is None:
+            permutation[i] = next(remaining_positions)
+
+    reordered = []
+    for instr in probe_instructions:
+        if instr.get("op") == "PhiFunction" and len(instr.get("in", [])) == len(permutation):
+            reordered.append({**instr, "in": [instr["in"][position] for position in permutation]})
+        else:
+            reordered.append(instr)
+    return reordered
+
+
+def _match_scope(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[Dict[str, Any]]) -> \
+        Tuple[Dict[block_id_T, block_id_T], Dict[block_id_T, var_map_T], Dict[block_id_T, Dict[int, Dict[var_id_T, constant_T]]]]:
+    """
+    One dominance-order walk over a scope's blocks that resolves block correspondence and
+    instruction-level facts together (see the module docstring for why these can't be two
+    separate passes any more): the scope's shared entry block (position 0 in both lists, the
+    same convention _block_dominance_order relies on) anchors the walk; each further block's
+    correspondence is proposed by its already-resolved predecessors via
+    _propose_successor_mapping, using each predecessor's own confirmed var_map (for the branch-
+    condition check) -- a block is left unresolved if none of its predecessors are resolved yet
+    (e.g. reachable only via a loop back edge, or via a predecessor that itself never resolved),
+    or if its predecessors propose more than one distinct probe counterpart, mirroring the
+    "unique candidate or nothing" rule used everywhere else in this module. Once resolved, a
+    block's PhiFunctions are realigned by predecessor identity (_reorder_phi_args) and its
+    instructions matched (match_block_instructions), seeded with every resolved non-backward
+    predecessor's var_map merged together (a predecessor disagreement about a shared variable
+    drops that variable from the seed rather than guessing).
+
+    Returns (block_correspondence, var_maps_by_block, facts_by_block) -- facts_by_block only
+    contains entries for blocks that actually produced at least one fact.
 
     This does not, and cannot, protect against every kind of mismatch: a silent single-block
     disappearance inside an otherwise-uniform chain (no branching to create an observable
@@ -386,36 +668,67 @@ def _match_blocks_structurally(baseline_blocks: List[Dict[str, Any]],
     StackCompressor finding, which is the actual fix for that class.
     """
     if not baseline_blocks or not probe_blocks:
-        return {}
+        return {}, {}, {}
 
-    predecessors = _predecessors(baseline_blocks)
     baseline_by_id = {block["id"]: block for block in baseline_blocks}
     probe_by_id = {block["id"]: block for block in probe_blocks}
-    correspondence: Dict[block_id_T, block_id_T] = {baseline_blocks[0]["id"]: probe_blocks[0]["id"]}
+    predecessors = _predecessors(baseline_blocks)
+
+    block_correspondence: Dict[block_id_T, block_id_T] = {baseline_blocks[0]["id"]: probe_blocks[0]["id"]}
+    var_maps_by_block: Dict[block_id_T, var_map_T] = {}
+    facts_by_block: Dict[block_id_T, Dict[int, Dict[var_id_T, constant_T]]] = {}
 
     for block_id in _block_dominance_order(baseline_blocks):
-        if block_id in correspondence:
-            continue
-        candidates = set()
-        for predecessor_id in predecessors.get(block_id, []):
-            predecessor_probe_id = correspondence.get(predecessor_id)
-            if predecessor_probe_id is None:
-                continue
-            proposed = _propose_successor_mapping(baseline_by_id[predecessor_id], probe_by_id.get(predecessor_probe_id))
-            if block_id in proposed:
-                candidates.add(proposed[block_id])
-        if len(candidates) == 1:
-            correspondence[block_id] = candidates.pop()
+        baseline_block = baseline_by_id[block_id]
 
-    return correspondence
+        if block_id not in block_correspondence:
+            candidates = set()
+            for predecessor_id in predecessors.get(block_id, []):
+                predecessor_var_map = var_maps_by_block.get(predecessor_id)
+                predecessor_probe_id = block_correspondence.get(predecessor_id)
+                if predecessor_var_map is None or predecessor_probe_id is None:
+                    continue  # not yet processed -- e.g. reachable only via a loop back edge
+                proposed = _propose_successor_mapping(
+                    baseline_by_id[predecessor_id], probe_by_id.get(predecessor_probe_id), predecessor_var_map)
+                if block_id in proposed:
+                    candidates.add(proposed[block_id])
+            if len(candidates) == 1:
+                candidate = candidates.pop()
+                if candidate in probe_by_id:
+                    block_correspondence[block_id] = candidate
+
+        probe_block = probe_by_id.get(block_correspondence.get(block_id))
+        if probe_block is None:
+            continue
+
+        seed_var_map: var_map_T = {}
+        conflicting: set = set()
+        for predecessor_id in predecessors.get(block_id, []):
+            predecessor_map = var_maps_by_block.get(predecessor_id)
+            if predecessor_map is None:
+                continue  # not yet processed -- e.g. reachable only via a loop back edge
+            for baseline_var, probe_var in predecessor_map.items():
+                if baseline_var in seed_var_map and seed_var_map[baseline_var] != probe_var:
+                    conflicting.add(baseline_var)
+                else:
+                    seed_var_map[baseline_var] = probe_var
+        for baseline_var in conflicting:
+            del seed_var_map[baseline_var]  # predecessors disagree -- unknown, not a guess
+
+        probe_instructions = _reorder_phi_args(baseline_block, probe_block, block_correspondence)
+        block_facts, block_var_map = match_block_instructions(
+            baseline_block.get("instructions", []), probe_instructions, seed_var_map=seed_var_map)
+        var_maps_by_block[block_id] = block_var_map
+        if block_facts:
+            facts_by_block[block_id] = block_facts
+
+    return block_correspondence, var_maps_by_block, facts_by_block
 
 
 def extract_seed_facts_for_contract(baseline_yul_cfg: Yul_CFG_T, probe_yul_cfg: Yul_CFG_T) -> seed_facts_T:
     """
     Walks every block scope shared between the baseline and probe yulCFGJson of the same
-    contract and extracts all seed facts, processing each scope's blocks in dominance order so
-    a block's matcher can be seeded with the variable correspondences its already-processed
-    predecessors confirmed (see the module docstring).
+    contract and extracts all seed facts via _match_scope (see the module docstring).
     """
     facts: seed_facts_T = {}
 
@@ -428,39 +741,15 @@ def extract_seed_facts_for_contract(baseline_yul_cfg: Yul_CFG_T, probe_yul_cfg: 
             logging.warning(f"Scope {scope_path} is missing from the probe compilation; skipping")
             continue
 
-        block_correspondence = _match_blocks_structurally(baseline_blocks, probe_blocks)
-        baseline_blocks_by_id = {block["id"]: block for block in baseline_blocks}
-        probe_blocks_by_id = {block["id"]: block for block in probe_blocks}
-        predecessors = _predecessors(baseline_blocks)
-        var_maps_by_block: Dict[block_id_T, var_map_T] = {}
+        block_correspondence, _, facts_by_block = _match_scope(baseline_blocks, probe_blocks)
 
-        for block_id in _block_dominance_order(baseline_blocks):
-            probe_block = probe_blocks_by_id.get(block_correspondence.get(block_id))
-            if probe_block is None:
+        for block in baseline_blocks:
+            block_id = block["id"]
+            if block_id not in block_correspondence:
                 logging.warning(f"Block {block_id} in scope {scope_path} has no unique structural "
                                 f"correspondence in the probe compilation; skipping")
-                continue
-            baseline_block = baseline_blocks_by_id[block_id]
 
-            seed_var_map: var_map_T = {}
-            conflicting: set = set()
-            for predecessor_id in predecessors.get(block_id, []):
-                predecessor_map = var_maps_by_block.get(predecessor_id)
-                if predecessor_map is None:
-                    continue  # not yet processed -- e.g. reachable only via a loop back edge
-                for baseline_var, probe_var in predecessor_map.items():
-                    if baseline_var in seed_var_map and seed_var_map[baseline_var] != probe_var:
-                        conflicting.add(baseline_var)
-                    else:
-                        seed_var_map[baseline_var] = probe_var
-            for baseline_var in conflicting:
-                del seed_var_map[baseline_var]  # predecessors disagree -- unknown, not a guess
-
-            block_facts, block_var_map = match_block_instructions(
-                baseline_block.get("instructions", []), probe_block.get("instructions", []),
-                seed_var_map=seed_var_map)
-            var_maps_by_block[block_id] = block_var_map
-
+        for block_id, block_facts in facts_by_block.items():
             for instr_idx, var_facts in block_facts.items():
                 for var, value in var_facts.items():
                     facts[(scope_path, block_id, instr_idx, var)] = value

@@ -1,4 +1,4 @@
-from constancy.seed_extraction import (_match_blocks_structurally, extract_seed_facts_for_contract,
+from constancy.seed_extraction import (_match_scope, extract_seed_facts_for_contract,
                                        extract_seed_facts_for_instructions, is_literal, isolate_cleanup_sequence,
                                        iter_block_scopes, match_block_instructions, probe_sequence,
                                        with_stack_allocation_disabled)
@@ -37,30 +37,36 @@ class TestWithStackAllocationDisabled:
         assert result["settings"]["optimizer"]["details"]["yulDetails"]["stackAllocation"] is False
 
 
-class TestMatchBlocksStructurally:
+class TestMatchScope:
     def test_a_silently_vanished_block_produces_a_confident_but_wrong_pairing(self):
         # Mirrors a real bug found against a real contract (see PROGRESS.md): solc's
         # StackCompressor can silently drop one block from a chain of otherwise-identically-
         # shaped ConditionalJump checks. Structural matching can't tell "B1" was ever there --
         # it just sees a uniform chain and confidently walks one link too far
+        cond_instr = {"in": ["v0"], "op": "iszero", "out": ["c"]}
         baseline = [
-            {"id": "B0", "exit": {"type": "ConditionalJump", "targets": ["B1", "D0"]}},
-            {"id": "B1", "exit": {"type": "ConditionalJump", "targets": ["B2", "D1"]}},  # vanishes in probe
-            {"id": "B2", "exit": {"type": "ConditionalJump", "targets": ["B3", "D2"]}},
-            {"id": "B3", "exit": {"type": "Terminated", "targets": []}},
-            {"id": "D0", "exit": {"type": "Terminated", "targets": []}},
-            {"id": "D1", "exit": {"type": "Terminated", "targets": []}},
-            {"id": "D2", "exit": {"type": "Terminated", "targets": []}},
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B1", "D0"]},
+             "instructions": [cond_instr]},
+            {"id": "B1", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B2", "D1"]},  # vanishes in probe
+             "instructions": [cond_instr]},
+            {"id": "B2", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B3", "D2"]},
+             "instructions": [cond_instr]},
+            {"id": "B3", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "D0", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "D1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "D2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
         ]
         probe = [
-            {"id": "B0", "exit": {"type": "ConditionalJump", "targets": ["PB2", "D0"]}},  # skips B1
-            {"id": "PB2", "exit": {"type": "ConditionalJump", "targets": ["PB3", "D1"]}},
-            {"id": "PB3", "exit": {"type": "Terminated", "targets": []}},
-            {"id": "D0", "exit": {"type": "Terminated", "targets": []}},
-            {"id": "D1", "exit": {"type": "Terminated", "targets": []}},
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["PB2", "D0"]},  # skips B1
+             "instructions": [cond_instr]},
+            {"id": "PB2", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["PB3", "D1"]},
+             "instructions": [cond_instr]},
+            {"id": "PB3", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "D0", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "D1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
         ]
 
-        correspondence = _match_blocks_structurally(baseline, probe)
+        correspondence, _, _ = _match_scope(baseline, probe)
 
         # B2 should really correspond to "PB2" (the real, surviving continuation of the check
         # chain) -- but the matcher, seeing only uniform shapes, confidently resolves it one
@@ -72,27 +78,178 @@ class TestMatchBlocksStructurally:
         assert "B3" not in correspondence
 
     def test_predecessors_disagreeing_leaves_a_block_unresolved(self):
+        cond_instr = {"in": ["v0"], "op": "iszero", "out": ["c"]}
         baseline = [
-            {"id": "B0", "exit": {"type": "ConditionalJump", "targets": ["B1", "B2"]}},
-            {"id": "B1", "exit": {"type": "Jump", "targets": ["B3"]}},
-            {"id": "B2", "exit": {"type": "Jump", "targets": ["B3"]}},
-            {"id": "B3", "exit": {"type": "Terminated", "targets": []}},
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B1", "B2"]},
+             "instructions": [cond_instr]},
+            {"id": "B1", "exit": {"type": "Jump", "targets": ["B3"]}, "instructions": []},
+            {"id": "B2", "exit": {"type": "Jump", "targets": ["B3"]}, "instructions": []},
+            {"id": "B3", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
         ]
         probe = [
-            {"id": "B0", "exit": {"type": "ConditionalJump", "targets": ["B1", "B2"]}},
-            {"id": "B1", "exit": {"type": "Jump", "targets": ["P1"]}},
-            {"id": "B2", "exit": {"type": "Jump", "targets": ["P2"]}},
-            {"id": "P1", "exit": {"type": "Terminated", "targets": []}},
-            {"id": "P2", "exit": {"type": "Terminated", "targets": []}},
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B1", "B2"]},
+             "instructions": [cond_instr]},
+            {"id": "B1", "exit": {"type": "Jump", "targets": ["P1"]}, "instructions": []},
+            {"id": "B2", "exit": {"type": "Jump", "targets": ["P2"]}, "instructions": []},
+            {"id": "P1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "P2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
         ]
 
-        correspondence = _match_blocks_structurally(baseline, probe)
+        correspondence, _, _ = _match_scope(baseline, probe)
 
         assert correspondence["B1"] == "B1"
         assert correspondence["B2"] == "B2"
         # B3's two predecessors propose different probe targets (P1 vs P2) -- unresolved,
         # not guessed
         assert "B3" not in correspondence
+
+    def test_conditional_jump_with_a_different_condition_is_not_matched(self):
+        # Same exit shape (ConditionalJump, 2 targets) on both sides, but the condition
+        # variable's own defining instruction differs (iszero vs gt) -- the shape check alone
+        # would let this through; verifying the condition itself catches it
+        baseline = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B1", "B2"]},
+             "instructions": [{"in": ["v0"], "op": "iszero", "out": ["c"]}]},
+            {"id": "B1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+        probe = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["P1", "P2"]},
+             "instructions": [{"in": ["v0"], "op": "gt", "out": ["c"]}]},
+            {"id": "P1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "P2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+
+        correspondence, _, _ = _match_scope(baseline, probe)
+
+        assert correspondence == {"B0": "B0"}
+        assert "B1" not in correspondence
+        assert "B2" not in correspondence
+
+    def test_a_negated_condition_is_matched_with_targets_swapped(self):
+        # Baseline branches on c = iszero(v0); probe branches directly on the un-negated v0
+        # (same lt(...) shape), with the two branch targets swapped accordingly. targets[0] is
+        # the falls_to (cond == 0) target, targets[1] the jump_to (cond != 0) target -- see
+        # parser.cfg_block.CFGBlock.set_jump_info -- so negating the condition means what was
+        # falls_to becomes jump_to and vice versa.
+        lt_instr = {"in": ["0x0f", "s0"], "op": "lt", "out": ["v0"]}
+        baseline = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B1", "B2"]},
+             "instructions": [lt_instr, {"in": ["v0"], "op": "iszero", "out": ["c"]}]},
+            {"id": "B1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+        probe = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "x", "targets": ["P_B2", "P_B1"]},
+             "instructions": [{"in": ["0x0f", "s0"], "op": "lt", "out": ["x"]}]},
+            {"id": "P_B1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "P_B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+
+        correspondence, _, _ = _match_scope(baseline, probe)
+
+        assert correspondence == {"B0": "B0", "B1": "P_B1", "B2": "P_B2"}
+
+    def test_a_block_whose_sole_route_in_is_a_loop_back_edge_stays_unresolved(self):
+        # Mirrors a real case (NFTMarketWrap, occurrence T3, scope abi_encode_array_address):
+        # B1's branch condition (v3) is a compile-time-constant LiteralAssignment from B0, not
+        # locally defined in B1 -- and here (unlike test_a_negated_condition_is_matched...)
+        # B0's own LiteralAssignment doesn't even unify (0x01 vs 0x00), so v3's correspondence
+        # is never established at all. solc's block-joiner can eliminate a block like B1
+        # outright once its condition is provably always-true, leaving no probe counterpart;
+        # B1's own successor B2 then has no other route in except B3, a loop back edge, which
+        # this single-forward-pass design cannot use retroactively. B1 itself still gets a
+        # confident (and, in a real case like this, wrong) correspondence from B0's plain
+        # unconditional Jump -- but that's exactly why the condition check on B1's own branch
+        # exists: it correctly refuses to let that confidence propagate any further.
+        baseline = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
+             "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
+            {"id": "B1", "exit": {"type": "ConditionalJump", "cond": "v3", "targets": ["B4", "B2"]},
+             "instructions": []},
+            {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "B2", "exit": {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]},
+             "instructions": [{"in": ["0x0f", "x"], "op": "lt", "out": ["c2"]}]},
+            {"id": "B6", "exit": {"type": "Jump", "targets": ["B3"]}, "instructions": []},
+            {"id": "B5", "exit": {"type": "Jump", "targets": ["B4"]}, "instructions": []},
+            {"id": "B3", "exit": {"type": "Jump", "targets": ["B1"]}, "instructions": []},  # back edge
+        ]
+        probe = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B2"]},
+             "instructions": [{"in": ["0x00"], "op": "LiteralAssignment", "out": ["v2"]}]},
+            {"id": "B2", "exit": {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]},
+             "instructions": [{"in": ["0x0f", "x"], "op": "lt", "out": ["c2"]}]},
+            {"id": "B6", "exit": {"type": "Jump", "targets": ["B3"]}, "instructions": []},
+            {"id": "B5", "exit": {"type": "Jump", "targets": ["B4"]}, "instructions": []},
+            {"id": "B3", "exit": {"type": "Jump", "targets": ["B2"]}, "instructions": []},  # loop header now B2
+            {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+
+        correspondence, _, _ = _match_scope(baseline, probe)
+
+        assert "B2" not in correspondence
+        assert "B4" not in correspondence
+
+    def test_phi_function_args_are_realigned_by_predecessor_entries_not_position(self):
+        # M's two predecessors (P1, P2) are listed in probe's own "entries" in the opposite
+        # order from baseline's -- nothing guarantees solc emits them in the same order in both
+        # compilations. A blind positional zip of the PhiFunction's "in" args would pair
+        # baseline's a1 (from P1) against probe's b2 (from Q2), contradicting the var_map P1's
+        # own match already established (a1 <-> b1) -- entries-based realignment avoids that.
+        cond_instr = {"in": ["v0"], "op": "iszero", "out": ["c"]}
+        baseline = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["P1", "P2"]},
+             "instructions": [cond_instr]},
+            {"id": "P1", "exit": {"type": "Jump", "targets": ["M"]},
+             "instructions": [{"in": ["0x11"], "op": "LiteralAssignment", "out": ["a1"]}]},
+            {"id": "P2", "exit": {"type": "Jump", "targets": ["M"]},
+             "instructions": [{"in": ["0x22"], "op": "LiteralAssignment", "out": ["a2"]}]},
+            {"id": "M", "exit": {"type": "Terminated", "targets": []}, "entries": ["P1", "P2"],
+             "instructions": [{"in": ["a1", "a2"], "op": "PhiFunction", "out": ["phi"]}]},
+        ]
+        probe = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["Q1", "Q2"]},
+             "instructions": [cond_instr]},
+            {"id": "Q1", "exit": {"type": "Jump", "targets": ["M"]},
+             "instructions": [{"in": ["0x11"], "op": "LiteralAssignment", "out": ["b1"]}]},
+            {"id": "Q2", "exit": {"type": "Jump", "targets": ["M"]},
+             "instructions": [{"in": ["0x22"], "op": "LiteralAssignment", "out": ["b2"]}]},
+            {"id": "M", "exit": {"type": "Terminated", "targets": []}, "entries": ["Q2", "Q1"],  # reversed
+             "instructions": [{"in": ["b2", "b1"], "op": "PhiFunction", "out": ["phi2"]}]},
+        ]
+
+        correspondence, var_maps, _ = _match_scope(baseline, probe)
+
+        assert correspondence["M"] == "M"
+        assert var_maps["M"]["phi"] == "phi2"
+
+    def test_cond_check_uses_the_accumulated_var_map_not_just_local_instructions(self):
+        # v3 is defined in A, merely passed through B (which touches nothing), and used as C's
+        # branch condition -- never locally defined inside C itself. A var_map seeded only from
+        # C's own instructions (there are none) could never verify this; the accumulated
+        # var_map, threaded forward from A through B, can.
+        baseline = [
+            {"id": "A", "exit": {"type": "Jump", "targets": ["B"]},
+             "instructions": [{"in": ["0x0f", "s0"], "op": "lt", "out": ["v3"]}]},
+            {"id": "B", "exit": {"type": "Jump", "targets": ["C"]}, "instructions": []},
+            {"id": "C", "exit": {"type": "ConditionalJump", "cond": "v3", "targets": ["T1", "T2"]},
+             "instructions": []},
+            {"id": "T1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "T2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+        probe = [
+            {"id": "A", "exit": {"type": "Jump", "targets": ["B"]},
+             "instructions": [{"in": ["0x0f", "s0"], "op": "lt", "out": ["w3"]}]},
+            {"id": "B", "exit": {"type": "Jump", "targets": ["C"]}, "instructions": []},
+            {"id": "C", "exit": {"type": "ConditionalJump", "cond": "w3", "targets": ["U1", "U2"]},
+             "instructions": []},
+            {"id": "U1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "U2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+
+        correspondence, _, _ = _match_scope(baseline, probe)
+
+        assert correspondence == {"A": "A", "B": "B", "C": "C", "T1": "U1", "T2": "U2"}
 
 
 class TestProbeSequence:
@@ -234,6 +391,96 @@ class TestMatchBlockInstructions:
         facts, _ = match_block_instructions(baseline, probe)
 
         assert facts == {}
+
+    def test_partial_anchor_alignment_when_counts_differ(self):
+        # An extra anchor (sstore) with no probe counterpart doesn't block the rest of the
+        # block: the second mstore has a distinctive literal (0x99) that only one probe
+        # instruction can match, and committing it narrows the first mstore's candidate range
+        # down to the one remaining option -- per the user's guidance, align whatever's
+        # unambiguously determinable rather than giving up on the whole block
+        baseline = [
+            {"in": ["v9", "v0"], "op": "mstore", "out": []},    # anchor 0: pinned via order once anchor 2 resolves
+            {"in": ["0x22", "v1"], "op": "sstore", "out": []},  # anchor 1: extra -- no probe counterpart
+            {"in": ["0x99", "v0"], "op": "mstore", "out": []},  # anchor 2: distinctive literal resolves first
+        ]
+        probe = [
+            {"in": ["0x11", "v0"], "op": "mstore", "out": []},
+            {"in": ["0x99", "v0"], "op": "mstore", "out": []},
+        ]
+
+        facts, _ = match_block_instructions(baseline, probe)
+
+        assert facts == {0: {"v9": "0x11"}}
+
+    def test_movable_instructions_disambiguated_by_a_downstream_shared_variable(self):
+        # Mirrors a real contract (NFTMarketWrap, occurrence T2, Block11): two structurally-
+        # identical shl/sub pairs (an address-mask construction) are individually ambiguous,
+        # but the second one feeds an "and" alongside an already-known external variable
+        # (v28, live-in, unrenamed) -- that pins it down uniquely, which then resolves the
+        # first pair by elimination. Also demonstrates reordering across an anchor: solc moved
+        # the first shl/sub pair from before the sload to after it, since neither touches
+        # storage -- a fixed "segment strictly between two anchors" model would miss this
+        baseline = [
+            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v1"]},
+            {"in": ["0x01", "v1"], "op": "sub", "out": ["v2"]},
+            {"in": ["0x00"], "op": "sload", "out": ["v3"]},
+            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v4"]},
+            {"in": ["0x01", "v4"], "op": "sub", "out": ["v5"]},
+            {"in": ["v5", "v28"], "op": "and", "out": ["v6"]},
+        ]
+        probe = [
+            {"in": ["0x00"], "op": "sload", "out": ["v10"]},
+            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v11"]},
+            {"in": ["0x01", "v11"], "op": "sub", "out": ["v12"]},
+            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v13"]},
+            {"in": ["0x01", "v13"], "op": "sub", "out": ["v14"]},
+            {"in": ["v14", "v28"], "op": "and", "out": ["v15"]},
+        ]
+
+        _, var_map = match_block_instructions(baseline, probe)
+
+        assert var_map["v5"] == "v14"  # the pinned pair
+        assert var_map["v2"] == "v12"  # resolved afterward, by elimination
+        assert var_map["v1"] == "v11"
+        assert var_map["v4"] == "v13"
+
+    def test_commutative_operand_order_swap(self):
+        # solc is free to reorder a commutative op's operands; the natural (positional) order
+        # here hard-fails (two different literals at the literal-vs-literal position), so the
+        # swap is unambiguously the only viable interpretation, not just a preference
+        baseline = [{"in": ["0x05", "v9"], "op": "add", "out": ["v1"]}]
+        probe = [{"in": ["0x2a", "0x05"], "op": "add", "out": ["v1"]}]
+
+        facts, _ = match_block_instructions(baseline, probe)
+
+        assert facts == {0: {"v9": "0x2a"}}
+
+    def test_associative_reassociation_is_declined_without_producing_a_wrong_fact(self):
+        # Mirrors a real contract (UniversalRouter, occurrence s#1, a 127-instruction calldata-
+        # decoding block): solc regrouped a 3-term add chain ((0x20+v9)+v10 -> 0x20+(v10+v9)).
+        # The intermediate baseline value (v2) has no counterpart instruction in probe at all,
+        # so no per-instruction check can match it structurally -- confirmed this doesn't
+        # produce a wrong fact (the real case cost nothing, since the reassociated region had
+        # no constant to find either way); a genuinely unrelated fact elsewhere in the same
+        # block is still found cleanly
+        baseline = [
+            {"in": ["0x20", "v9"], "op": "add", "out": ["v2"]},
+            {"in": ["v10", "v2"], "op": "add", "out": ["v3"]},
+            {"in": ["v3", "v0"], "op": "mstore", "out": []},
+            {"in": ["v20", "0x07"], "op": "add", "out": ["v21"]},  # unrelated -- v20 becomes a literal in probe
+            {"in": ["v21", "v1"], "op": "mstore", "out": []},
+        ]
+        probe = [
+            {"in": ["v10", "v9"], "op": "add", "out": ["v2b"]},   # reassociated: (v10+v9) computed first
+            {"in": ["0x20", "v2b"], "op": "add", "out": ["v3b"]},  # same final value, different grouping
+            {"in": ["v3b", "v0"], "op": "mstore", "out": []},
+            {"in": ["0x99", "0x07"], "op": "add", "out": ["v21b"]},
+            {"in": ["v21b", "v1"], "op": "mstore", "out": []},
+        ]
+
+        facts, _ = match_block_instructions(baseline, probe)
+
+        assert facts == {3: {"v20": "0x99"}}
 
 
 class TestExtractSeedFactsForInstructions:
