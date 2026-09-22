@@ -713,6 +713,45 @@ class TestExtractSeedFactsForContractNormalization:
 
         assert not any("no unique structural correspondence" in record.message for record in caplog.records)
 
+    def test_a_literal_carried_across_a_block_boundary_produces_no_warning(self, caplog):
+        # Mirrors the real c4/c7 case end to end: baseline inlines a literal directly in B's
+        # branch condition; probe carries the same literal in via a LiteralAssignment in an
+        # ancestor block (A) instead. Without _resolve_scope_literal, B's own condition-defining
+        # "slt" instruction would fail to unify (probe's v1 is invisible to B's own block-local
+        # literal table), leaving B (and hence C/D) unresolved.
+        baseline = {
+            "type": "Object",
+            "Main": {
+                "blocks": [
+                    {"id": "A", "exit": {"type": "Jump", "targets": ["B"]}, "instructions": []},
+                    {"id": "B", "exit": {"type": "ConditionalJump", "cond": "v3", "targets": ["C", "D"]},
+                     "instructions": [{"in": ["0x00", "v2"], "op": "slt", "out": ["v3"]}]},
+                    {"id": "C", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                    {"id": "D", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                ],
+                "functions": {}, "subObjects": {},
+            },
+        }
+        probe = {
+            "type": "Object",
+            "Main": {
+                "blocks": [
+                    {"id": "A", "exit": {"type": "Jump", "targets": ["B"]},
+                     "instructions": [{"in": ["0x00"], "op": "LiteralAssignment", "out": ["v1"]}]},
+                    {"id": "B", "exit": {"type": "ConditionalJump", "cond": "v4", "targets": ["C", "D"]},
+                     "instructions": [{"in": ["v1", "v2"], "op": "slt", "out": ["v4"]}]},
+                    {"id": "C", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                    {"id": "D", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                ],
+                "functions": {}, "subObjects": {},
+            },
+        }
+
+        with caplog.at_level(logging.WARNING):
+            extract_seed_facts_for_contract(baseline, probe)
+
+        assert not any("no unique structural correspondence" in record.message for record in caplog.records)
+
 
 class TestProbeSequence:
     def test_isolates_a_colon_less_base_before_appending_steps(self):
@@ -1084,6 +1123,41 @@ class TestMatchBlockInstructions:
         ]
 
         facts, var_map = match_block_instructions(baseline, probe)
+
+        assert facts == {}
+        assert "v2" not in var_map
+
+    def test_probe_materializes_a_literal_carried_in_from_an_ancestor_block(self):
+        # Mirrors a real contract (0x24fcfc...93584, occurrences c4/c7): baseline inlines a
+        # literal directly; probe references a variable whose LiteralAssignment lives in a
+        # *different* block (an ancestor) than the one being matched here -- invisible to
+        # probe_literal_table's block-local scan (_direct_literal_table only sees this block's
+        # own instructions), so probe_defs (_scope_defining_instructions, scope-wide) is needed
+        # to still recognize it via _resolve_scope_literal.
+        baseline = [{"in": ["0x00", "v2"], "op": "slt", "out": ["v3"]}]
+        probe = [{"in": ["v1", "v4"], "op": "slt", "out": ["v3b"]}]
+        probe_defs = _scope_defining_instructions([
+            {"instructions": [{"in": ["0x00"], "op": "LiteralAssignment", "out": ["v1"]}]},  # ancestor block
+            {"instructions": probe},
+        ])
+
+        facts, var_map = match_block_instructions(baseline, probe, probe_defs=probe_defs)
+
+        assert facts == {}
+        assert var_map["v2"] == "v4"
+
+    def test_a_probe_variable_defined_by_a_non_literal_instruction_is_not_resolved(self):
+        # _resolve_scope_literal must not misfire for a variable that merely happens to be
+        # findable in probe_defs but isn't a LiteralAssignment (e.g. it's a runtime SLOAD) --
+        # the instruction should still fail to unify, same as with no probe_defs at all.
+        baseline = [{"in": ["0x00", "v2"], "op": "slt", "out": ["v3"]}]
+        probe = [{"in": ["v1", "v4"], "op": "slt", "out": ["v3b"]}]
+        probe_defs = _scope_defining_instructions([
+            {"instructions": [{"in": ["0x03"], "op": "sload", "out": ["v1"]}]},
+            {"instructions": probe},
+        ])
+
+        facts, var_map = match_block_instructions(baseline, probe, probe_defs=probe_defs)
 
         assert facts == {}
         assert "v2" not in var_map

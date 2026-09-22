@@ -213,6 +213,26 @@ def _scope_defining_instructions(blocks: List[Dict[str, Any]]) -> Dict[var_id_T,
     return defs
 
 
+def _resolve_scope_literal(var: var_id_T, defs: Dict[var_id_T, Dict[str, Any]]) -> Optional[constant_T]:
+    """
+    The literal value var is directly assigned (LiteralAssignment), tracing through defs
+    (_scope_defining_instructions, scope-wide) rather than _direct_literal_table's block-local
+    scan -- so a LiteralAssignment carried in from an ancestor block (confirmed on a real
+    contract: baseline inlines a literal directly, probe references a variable whose
+    LiteralAssignment lives in a different block than the one where it's actually used) is still
+    recognized. Deliberately just LiteralAssignment, matching _direct_literal_table's own stated
+    scope -- not a general constant-folding engine, that's _literal_value_table's separate
+    concern (used only for block-exit folding).
+    """
+    instr = defs.get(var)
+    if instr is None or instr.get("op") != "LiteralAssignment":
+        return None
+    out, in_ = instr.get("out", []), instr.get("in", [])
+    if len(out) == 1 and len(in_) == 1 and is_literal(in_[0]):
+        return in_[0]
+    return None
+
+
 def _values_provably_equal(var_x: var_id_T, var_y: var_id_T,
                            defs: Dict[var_id_T, Dict[str, Any]], _depth: int = 0) -> bool:
     """
@@ -269,10 +289,13 @@ def _try_unify_instructions(baseline_instr: Dict[str, Any], probe_instr: Dict[st
     before and after a value-substituting step), given the variable correspondences already
     confirmed in var_map. Every argument position must be explained by one of: the same
     literal value on both sides -- a probe argument that isn't itself a literal string is also
-    resolved through probe_literal_table first, so a literal baseline inlines directly still
-    matches a probe variable that's provably the same literal (see _direct_literal_table: e.g.
-    CSE hoists what used to be several per-call-site literal copies into one shared, named
-    variable); an already-confirmed (or newly proposed) baseline->probe variable correspondence;
+    resolved through probe_literal_table first (see _direct_literal_table: e.g. CSE hoists what
+    used to be several per-call-site literal copies into one shared, named variable), then, if
+    that misses, through probe_defs scope-wide (_resolve_scope_literal: a LiteralAssignment
+    carried in from an ancestor block, invisible to probe_literal_table's block-local scan) --
+    so a literal baseline inlines directly still matches a probe variable that's provably the
+    same literal however far away it was actually assigned; an already-confirmed (or newly
+    proposed) baseline->probe variable correspondence;
     or a baseline variable that became a literal in the probe (the actual substitution this
     whole analysis looks for). Any other kind of difference -- two different symbolic names, two
     different literal values, or a literal turning symbolic -- means these are not really the
@@ -314,7 +337,8 @@ def _try_unify_instructions(baseline_instr: Dict[str, Any], probe_instr: Dict[st
     facts: Dict[var_id_T, constant_T] = {}
     for baseline_arg, probe_arg in zip(baseline_in, probe_in):
         baseline_literal = is_literal(baseline_arg)
-        probe_resolved = probe_arg if is_literal(probe_arg) else probe_literal_table.get(probe_arg)
+        probe_resolved = probe_arg if is_literal(probe_arg) else \
+            (probe_literal_table.get(probe_arg) or _resolve_scope_literal(probe_arg, probe_defs or {}))
         probe_literal = probe_resolved is not None
         if baseline_literal and probe_literal:
             if baseline_arg != probe_resolved:
