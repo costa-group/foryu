@@ -109,10 +109,16 @@ def enumerate_occurrences(base_sequence: str = DEFAULT_OPTIMIZER_SEQUENCE,
 
 
 def dump_occurrence(json_input: Dict[str, Any], occurrence: Occurrence, solc_executable: str = "solc",
-                    disable_stack_allocation: bool = False) -> Optional[Dict[str, Dict[str, Yul_CFG_T]]]:
+                    disable_stack_allocation: bool = False) -> Optional[Dict[str, Any]]:
     """
     Compiles occurrence's seq_before/seq_after pair. Returns {"before": {contract: yulCFGJson},
-    "after": {contract: yulCFGJson}}, or None if either compilation fails.
+    "after": {contract: yulCFGJson}, "structure": {filename: [contract_name, ...]}}, or None if
+    either compilation fails. "structure" is the baseline compile's own file/contract nesting
+    (SolidityCompilation.last_contract_structure) -- captured so a caller can re-wrap the
+    flattened "before"/an annotation derived from it back into solc's own standard-json output
+    shape (see full_constancy_trace.py) without recompiling or re-parsing anything. Only the
+    baseline's structure is captured: the probe compiles the same source files/contracts, just
+    with different optimizer steps, so its own structure would be identical.
 
     disable_stack_allocation, when True, forces solc's StackCompressor off for both compiles
     (seed_extraction.with_stack_allocation_disabled) -- a mandatory phase, unrelated to any step
@@ -124,9 +130,10 @@ def dump_occurrence(json_input: Dict[str, Any], occurrence: Occurrence, solc_exe
     """
     prepared_input = with_stack_allocation_disabled(json_input) if disable_stack_allocation else json_input
     try:
-        baseline_cfg = SolidityCompilation.from_json_input(copy.deepcopy(prepared_input),
-                                                           optimizer_steps=occurrence["seq_before"],
-                                                           solc_executable=solc_executable)
+        baseline_compilation = SolidityCompilation(None, solc_executable)
+        baseline_compilation.flags = "--standard-json"
+        baseline_compilation.set_optimizer_steps(occurrence["seq_before"])
+        baseline_cfg = baseline_compilation.compile_json_input(copy.deepcopy(prepared_input))
         probe_cfg = SolidityCompilation.from_json_input(copy.deepcopy(prepared_input),
                                                         optimizer_steps=occurrence["seq_after"],
                                                         solc_executable=solc_executable)
@@ -138,7 +145,7 @@ def dump_occurrence(json_input: Dict[str, Any], occurrence: Occurrence, solc_exe
     if baseline_cfg is None or probe_cfg is None:
         return None
 
-    return {"before": baseline_cfg, "after": probe_cfg}
+    return {"before": baseline_cfg, "after": probe_cfg, "structure": baseline_compilation.last_contract_structure}
 
 
 def dump_all_occurrences(json_input: Dict[str, Any], output_dir: str,
@@ -151,9 +158,10 @@ def dump_all_occurrences(json_input: Dict[str, Any], output_dir: str,
     occurrence that compiled successfully.
 
     Returns a manifest list, one entry per occurrence written, carrying both the occurrence's
-    own fields and the in-memory "before"/"after" per-contract yulCFGJson dicts dump_occurrence
-    produced -- so a caller (e.g. full_constancy_trace.py) can use them directly without having
-    to re-read its own output off disk.
+    own fields and the in-memory "before"/"after" per-contract yulCFGJson dicts and "structure"
+    (baseline file/contract skeleton) dump_occurrence produced -- so a caller (e.g.
+    full_constancy_trace.py) can use them directly without having to re-read its own output off
+    disk.
     """
     os.makedirs(output_dir, exist_ok=True)
     manifest = []
@@ -177,6 +185,7 @@ def dump_all_occurrences(json_input: Dict[str, Any], output_dir: str,
             "after_file": after_file,
             "before": dumped["before"],
             "after": dumped["after"],
+            "structure": dumped["structure"],
         })
 
     return manifest

@@ -1,8 +1,13 @@
 """
 Given a solc standard-json input, dumps every intermediate compilation revealed by DEFAULT_
 OPTIMIZER_SEQUENCE's T/m/c/s occurrences (dump_steps.py) and annotates the constancy each one
-reveals (compare_constancy.py), writing the before/after pair, the annotated result, and a
-manifest per occurrence to --output-dir.
+reveals (compare_constancy.py), writing the annotated result to --output-dir/results/ and the
+before/after pair plus a manifest per occurrence to --output-dir/intermediate/ -- separating the
+actual constancy result (safe to hand someone, or point other tooling at, on its own) from the
+intermediate compilations and bookkeeping kept alongside it for reference. Each on-disk annotated
+file is reshaped back into solc's own standard-json output nesting ({"contracts": {filename:
+{contract_name: {"yulCFGJson": ...}}}}) rather than this project's internal flattened
+{contract_name: yulCFGJson} shape -- see _wrap_in_original_structure.
 
 If input_path is a directory, it's searched recursively for "*_standard_input.json" files, and
 each gets its own subdirectory of --output-dir (mirroring the input directory's own layout) --
@@ -36,21 +41,50 @@ def _count_constancy_facts(annotated: Dict[str, Yul_CFG_T]) -> int:
                for entry in block.get("constancy", []))
 
 
+def _wrap_in_original_structure(yul_cfg_dict: Dict[str, Yul_CFG_T],
+                                structure: Dict[str, List[str]]) -> Dict[str, Any]:
+    """
+    yul_cfg_dict (the flattened {contract_name: yulCFGJson} shape used throughout this project)
+    reshaped back into solc's own standard-json output nesting -- {"contracts": {filename:
+    {contract_name: {"yulCFGJson": yulCFGJson}}}} -- using structure (filename -> [contract
+    names], captured once from the occurrence's baseline compile -- see dump_steps.dump_occurrence
+    -- since the file/contract layout is identical across every occurrence of the same source).
+    A contract present in structure but missing from yul_cfg_dict (e.g. it compiled to a null
+    yulCFGJson) is simply omitted.
+    """
+    contracts: Dict[str, Dict[str, Any]] = {}
+    for filename, contract_names in structure.items():
+        for contract_name in contract_names:
+            if contract_name in yul_cfg_dict:
+                contracts.setdefault(filename, {})[contract_name] = {"yulCFGJson": yul_cfg_dict[contract_name]}
+    return {"contracts": contracts}
+
+
 def process_standard_json(json_input: Dict[str, Any], output_dir: str,
                           base_sequence: str = DEFAULT_OPTIMIZER_SEQUENCE,
                           solc_executable: str = "solc") -> List[Dict[str, Any]]:
     """
     Dumps every occurrence's before/after pair (dump_steps.dump_all_occurrences, isolated via
     disable_stack_allocation=True -- this diagnostic tool's whole purpose is isolated per-step
-    comparison, see seed_extraction.with_stack_allocation_disabled) and annotates constancy for
-    each (compare_constancy.annotate_constancy_between). An occurrence that revealed nothing (no
-    facts, no restructuring warnings) still has its before/after pair on disk, but is left out of
-    the annotated output and the manifest. Writes <output_dir>/manifest.json summarizing every
-    occurrence that did reveal something (metadata and file names only); the *returned* manifest
-    additionally carries each entry's in-memory "annotated" per-contract yulCFGJson dict, so a
-    caller (or a test) can use it directly without a disk round trip.
+    comparison, see seed_extraction.with_stack_allocation_disabled) into <output_dir>/intermediate/
+    and annotates constancy for each (compare_constancy.annotate_constancy_between). An occurrence
+    that revealed nothing (no facts, no restructuring warnings) still has its before/after pair on
+    disk, but is left out of the annotated output and the manifest.
+
+    Writes <output_dir>/intermediate/manifest.json summarizing every occurrence that did reveal
+    something (metadata and file names only), alongside that same directory's before/after files.
+    Writes each occurrence's annotated result to <output_dir>/results/<...>_annotated.json,
+    reshaped into solc's own output nesting (_wrap_in_original_structure) -- kept separate from
+    the intermediate files so the actual constancy results can be handed off or consumed on their
+    own. The *returned* manifest additionally carries each entry's in-memory "annotated"
+    per-contract yulCFGJson dict (still the flattened shape, not the on-disk nesting), so a caller
+    (or a test) can use it directly without a disk round trip.
     """
-    occurrences = dump_steps.dump_all_occurrences(json_input, output_dir, base_sequence=base_sequence,
+    results_dir = os.path.join(output_dir, "results")
+    intermediate_dir = os.path.join(output_dir, "intermediate")
+    os.makedirs(results_dir, exist_ok=True)
+
+    occurrences = dump_steps.dump_all_occurrences(json_input, intermediate_dir, base_sequence=base_sequence,
                                                   solc_executable=solc_executable,
                                                   disable_stack_allocation=True)
     manifest = []
@@ -62,8 +96,8 @@ def process_standard_json(json_input: Dict[str, Any], output_dir: str,
             continue
 
         annotated_file = f"occ_{occurrence['index']:03d}_{occurrence['step']}{occurrence['step_index']}_annotated.json"
-        with open(os.path.join(output_dir, annotated_file), "w") as f:
-            json.dump(annotated, f, indent=2)
+        with open(os.path.join(results_dir, annotated_file), "w") as f:
+            json.dump(_wrap_in_original_structure(annotated, occurrence["structure"]), f, indent=2)
 
         manifest.append({
             "index": occurrence["index"], "step": occurrence["step"], "step_index": occurrence["step_index"],
@@ -73,7 +107,7 @@ def process_standard_json(json_input: Dict[str, Any], output_dir: str,
             "annotated_file": annotated_file, "annotated": annotated,
         })
 
-    with open(os.path.join(output_dir, "manifest.json"), "w") as f:
+    with open(os.path.join(intermediate_dir, "manifest.json"), "w") as f:
         json.dump([{key: value for key, value in entry.items() if key != "annotated"} for entry in manifest],
                   f, indent=2)
 

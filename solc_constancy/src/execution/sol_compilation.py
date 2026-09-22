@@ -287,6 +287,12 @@ class SolidityCompilation:
         # Function to select the information from the contract
         self.process_output_function: Optional[Callable[[str, Optional[str], str], Union[Dict, str]]] = None
 
+        # {filename: [contract_name, ...]} skeleton of the last compile_json_input call's
+        # output_dict["contracts"] nesting (see _process_json_output) -- lets a caller re-wrap a
+        # flattened {contract_name: yulCFGJson} result back into solc's own standard-json output
+        # shape without keeping the raw output_dict around
+        self.last_contract_structure: Dict[str, List[str]] = {}
+
     def set_optimizer_steps(self, steps: Optional[str]) -> None:
         """
         Forces a specific Yul optimizer step sequence for this compilation, regardless of
@@ -403,12 +409,14 @@ class SolidityCompilation:
         # (see https://docs.soliditylang.org/en/v0.8.17/using-the-compiler.html)
         if "errors" in output_dict and any(error_msg["severity"] == "error" for error_msg in output_dict["errors"]):
             logging.error(f"Errors: {output_dict['errors']}")
+            self.last_contract_structure = {}
             return False, dict()
         else:
             if error != "":
                 logging.warning(error)
 
             json_dict = dict()
+            structure: Dict[str, List[str]] = {}
             # Produce a json file for each contract
             for filename in output_dict["contracts"]:
                 current_file = output_dict["contracts"][filename]
@@ -417,6 +425,7 @@ class SolidityCompilation:
 
                     if yul_cfg_current is not None:
                         json_dict[contract_name] = yul_cfg_current
+                        structure.setdefault(filename, []).append(contract_name)
                         # Only store the contract that matches the specification
                         if self._final_file is not None and deployed_contract is not None \
                                 and contract_name == deployed_contract:
@@ -424,6 +433,7 @@ class SolidityCompilation:
                             # Store the output following the asm format
                             with open(self._final_file, 'w') as f:
                                 json.dump(yul_cfg_current, f, indent=4)
+            self.last_contract_structure = structure
         return True, json_dict
 
     def compile_json_input(self, json_input: Dict, deployed_contract: Optional[str] = None,

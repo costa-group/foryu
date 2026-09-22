@@ -1,10 +1,10 @@
 import logging
 
-from constancy.seed_extraction import (_fold_conditional_exit, _literal_value_table, _match_scope,
-                                       _merge_trivial_blocks, _reachable_block_ids, extract_seed_facts_for_contract,
-                                       extract_seed_facts_for_instructions, is_literal, isolate_cleanup_sequence,
-                                       iter_block_scopes, match_block_instructions, probe_sequence,
-                                       with_stack_allocation_disabled)
+from constancy.seed_extraction import (_block_processing_order, _fold_conditional_exit, _literal_value_table,
+                                       _match_scope, _merge_trivial_blocks, _reachable_block_ids, _scope_entry_id,
+                                       extract_seed_facts_for_contract, extract_seed_facts_for_instructions,
+                                       is_literal, isolate_cleanup_sequence, iter_block_scopes,
+                                       match_block_instructions, probe_sequence, with_stack_allocation_disabled)
 
 
 def test_is_literal():
@@ -297,6 +297,52 @@ class TestFoldConditionalExit:
         assert _fold_conditional_exit({"exit": exit_}, {"v3": "0x01"}) is exit_
 
 
+class TestBlockProcessingOrder:
+    def test_a_simple_linear_chain_resolves_in_list_order(self):
+        blocks = [
+            {"id": "B0", "exit": {"targets": ["B1"]}},
+            {"id": "B1", "exit": {"targets": ["B2"]}},
+            {"id": "B2", "exit": {"targets": []}},
+        ]
+        assert _block_processing_order(blocks) == ["B0", "B1", "B2"]
+
+    def test_a_merge_block_is_scheduled_after_at_least_one_real_predecessor(self):
+        # The real regression this fix is for: a diamond where the short branch (1 block) and
+        # the long branch (3 blocks) converge on Merge. A topological sort of the *dominator
+        # tree* (the previous implementation) could freely place Merge right after the common
+        # dominator B0, before either branch's own blocks -- exactly what was confirmed on a
+        # real contract (copy_byte_array_to_storage_from_string_to_string's Block4, permanently
+        # unresolved by _match_scope despite both real predecessors, once available,
+        # unambiguously agreeing). A forward BFS can only discover Merge once at least one of
+        # its real predecessors (here, Short) has actually been visited.
+        blocks = [
+            {"id": "B0", "exit": {"targets": ["Short", "Long1"]}},
+            {"id": "Short", "exit": {"targets": ["Merge"]}},
+            {"id": "Long1", "exit": {"targets": ["Long2"]}},
+            {"id": "Long2", "exit": {"targets": ["Long3"]}},
+            {"id": "Long3", "exit": {"targets": ["Merge"]}},
+            {"id": "Merge", "exit": {"targets": []}},
+        ]
+        order = _block_processing_order(blocks)
+        assert order.index("Merge") > order.index("Short")
+
+    def test_a_block_reachable_only_via_a_back_edge_is_appended_at_the_end(self):
+        blocks = [
+            {"id": "B0", "exit": {"targets": ["B1"]}},
+            {"id": "B1", "exit": {"targets": ["B0"]}},  # B0's only other route in is this back edge
+        ]
+        assert _block_processing_order(blocks) == ["B0", "B1"]
+
+    def test_an_explicit_entry_id_is_honored_over_position_zero(self):
+        blocks = [
+            {"id": "NotTheEntry", "exit": {"targets": []}},
+            {"id": "RealEntry", "exit": {"targets": ["Successor"]}},
+            {"id": "Successor", "exit": {"targets": []}},
+        ]
+        assert _block_processing_order(blocks, entry_id="RealEntry") == \
+            ["RealEntry", "Successor", "NotTheEntry"]
+
+
 class TestLiteralValueTable:
     def test_tracks_a_direct_literal_assignment(self):
         blocks = [
@@ -571,6 +617,35 @@ class TestExtractSeedFactsForContractNormalization:
                          "instructions": []},
                         {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
                         {"id": "B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                    ],
+                    "functions": {}, "subObjects": {},
+                },
+            }
+
+        with caplog.at_level(logging.WARNING):
+            extract_seed_facts_for_contract(make(), make())
+
+        assert not any("no unique structural correspondence" in record.message for record in caplog.records)
+
+    def test_a_diamond_merge_with_an_unbalanced_branch_length_produces_no_warning(self, caplog):
+        # The real bug this fix is for, reproduced end to end: no folding is involved anywhere
+        # (no literal condition, nothing for _merge_trivial_blocks to touch) -- baseline and
+        # probe are byte-identical. Merge is reached from a 1-block branch (Short) and a 3-block
+        # branch (Long1/Long2/Long3); its immediate dominator is A, not either branch, so the
+        # previous dominator-tree-based order could schedule Merge before *either* branch was
+        # processed, permanently failing to resolve it even though both real predecessors agree.
+        def make():
+            return {
+                "type": "Object",
+                "Main": {
+                    "blocks": [
+                        {"id": "A", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["Short", "Long1"]},
+                         "instructions": [{"in": ["x"], "op": "iszero", "out": ["c"]}]},
+                        {"id": "Short", "exit": {"type": "Jump", "targets": ["Merge"]}, "instructions": []},
+                        {"id": "Long1", "exit": {"type": "Jump", "targets": ["Long2"]}, "instructions": []},
+                        {"id": "Long2", "exit": {"type": "Jump", "targets": ["Long3"]}, "instructions": []},
+                        {"id": "Long3", "exit": {"type": "Jump", "targets": ["Merge"]}, "instructions": []},
+                        {"id": "Merge", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
                     ],
                     "functions": {}, "subObjects": {},
                 },
@@ -902,6 +977,39 @@ class TestIterBlockScopes:
 
         assert set(scopes.keys()) == {("Main",), ("Main", "fun_f"), ("Main", "Main_deployed")}
         assert scopes[("Main",)] == [{"id": "Block0"}]
+
+
+class TestScopeEntryId:
+    def _yul_cfg_json(self):
+        return {
+            "type": "Object",
+            "Main": {
+                "blocks": [{"id": "B0"}, {"id": "B1"}],
+                "functions": {"fun_f": {"entry": "Block2", "blocks": [{"id": "Block2"}, {"id": "Block5"}]}},
+                "subObjects": {
+                    "type": "subObject",
+                    "Main_deployed": {"blocks": [{"id": "D0"}], "functions": {}, "subObjects": {}},
+                },
+            },
+        }
+
+    def test_resolves_a_function_scope_from_its_own_entry_field(self):
+        yul_cfg_json = self._yul_cfg_json()
+        blocks = yul_cfg_json["Main"]["functions"]["fun_f"]["blocks"]
+
+        assert _scope_entry_id(yul_cfg_json, ("Main", "fun_f"), blocks) == "Block2"
+
+    def test_falls_back_to_the_first_block_for_an_object_scope_with_no_entry_field(self):
+        yul_cfg_json = self._yul_cfg_json()
+        blocks = yul_cfg_json["Main"]["blocks"]
+
+        assert _scope_entry_id(yul_cfg_json, ("Main",), blocks) == "B0"
+
+    def test_falls_back_to_the_first_block_for_a_subobject_scope_with_no_entry_field(self):
+        yul_cfg_json = self._yul_cfg_json()
+        blocks = yul_cfg_json["Main"]["subObjects"]["Main_deployed"]["blocks"]
+
+        assert _scope_entry_id(yul_cfg_json, ("Main", "Main_deployed"), blocks) == "D0"
 
 
 class TestExtractSeedFactsForContract:

@@ -1,9 +1,11 @@
+import json
+import os
 import shutil
 
 import pytest
 
 from constancy.seed_extraction import iter_block_scopes
-from full_constancy_trace import process_standard_json
+from full_constancy_trace import _wrap_in_original_structure, process_standard_json
 
 _requires_solc = pytest.mark.skipif(shutil.which("solc") is None, reason="solc is not available on PATH")
 
@@ -102,3 +104,70 @@ def test_annotated_output_targets_match_block_ids_in_the_same_scope(tmp_path, he
                         assert target in block_ids, (
                             f"target {target!r} does not match any block id in its own scope "
                             f"({sorted(block_ids)}) -- the scope-name prefix leaked into targets")
+
+
+class TestWrapInOriginalStructure:
+    def test_reshapes_the_flattened_dict_into_solc_own_contracts_nesting(self):
+        yul_cfg_dict = {"A": {"type": "Object", "marker": "a"}, "B": {"type": "Object", "marker": "b"}}
+        structure = {"a.sol": ["A"], "b.sol": ["B"]}
+
+        wrapped = _wrap_in_original_structure(yul_cfg_dict, structure)
+
+        assert wrapped == {
+            "contracts": {
+                "a.sol": {"A": {"yulCFGJson": {"type": "Object", "marker": "a"}}},
+                "b.sol": {"B": {"yulCFGJson": {"type": "Object", "marker": "b"}}},
+            },
+        }
+
+    def test_omits_a_structure_entry_with_no_matching_yul_cfg_dict_key(self):
+        # e.g. a contract that compiled to a null yulCFGJson -- excluded from the flattened dict
+        # already (see sol_compilation._process_json_output), so it's simply skipped here too
+        wrapped = _wrap_in_original_structure({}, {"a.sol": ["Interface"]})
+
+        assert wrapped == {"contracts": {}}
+
+
+@_requires_solc
+def test_output_directory_splits_results_from_intermediate_files(tmp_path, heavy_inlining_contract_input):
+    manifest = process_standard_json(heavy_inlining_contract_input, str(tmp_path), solc_executable="solc")
+    assert manifest
+
+    results_dir = tmp_path / "results"
+    intermediate_dir = tmp_path / "intermediate"
+
+    results_files = {p.name for p in results_dir.iterdir()}
+    intermediate_files = {p.name for p in intermediate_dir.iterdir()}
+
+    assert results_files, "no annotated files were written"
+    assert all(name.endswith("_annotated.json") for name in results_files)
+    assert "manifest.json" in intermediate_files
+    assert any(name.endswith("_before.json") for name in intermediate_files)
+    assert any(name.endswith("_after.json") for name in intermediate_files)
+    assert not any(name.endswith("_annotated.json") for name in intermediate_files)
+
+    with open(intermediate_dir / "manifest.json") as f:
+        disk_manifest = json.load(f)
+    for entry in disk_manifest:
+        assert os.path.isfile(results_dir / entry["annotated_file"])
+        assert os.path.isfile(intermediate_dir / entry["before_file"])
+        assert os.path.isfile(intermediate_dir / entry["after_file"])
+
+
+@_requires_solc
+def test_annotated_file_on_disk_has_the_original_solc_output_nesting(tmp_path, heavy_inlining_contract_input):
+    manifest = process_standard_json(heavy_inlining_contract_input, str(tmp_path), solc_executable="solc")
+    assert manifest
+
+    entry = manifest[0]
+    with open(tmp_path / "results" / entry["annotated_file"]) as f:
+        on_disk = json.load(f)
+
+    assert set(on_disk.keys()) == {"contracts"}
+    for contract_name, in_memory_yul_cfg in entry["annotated"].items():
+        found = None
+        for contracts_in_file in on_disk["contracts"].values():
+            if contract_name in contracts_in_file:
+                found = contracts_in_file[contract_name]["yulCFGJson"]
+        assert found is not None, f"{contract_name} missing from the on-disk contracts nesting"
+        assert found == in_memory_yul_cfg

@@ -53,22 +53,28 @@ itself computing a purely runtime (calldata-dependent) value with no constant to
 and the design correctly declines to force a match there rather than guessing one. Full algebraic-
 equivalence checking (flattening associative chains, comparing as multisets) is out of scope.
 
-`extract_seed_facts_for_contract` runs this per scope in dominance-order (mirroring
-`parser.cfg_block_list.CFGBlockList.dominant_tree`, built directly off the raw yulCFGJson
-block list via the same `graphs.algorithms.compute_dominance_tree`), seeding each block's
-matcher with the variable correspondences its already-processed predecessors confirmed. This
-is not just extra coverage: if a block's own local match ever produced a correspondence that
-contradicts what a dominating predecessor already confirmed for the same variable, the seed
-makes that a hard conflict (rejected, not silently trusted) instead of two independently-lucky
-per-block answers going unchecked against each other -- exactly the gap that let the
-'T'-occurrence contradiction above slip through undetected before this fix.
+`extract_seed_facts_for_contract` runs this per scope in a forward BFS order from the scope's
+entry block (`_block_processing_order`, mirroring `propagation.py`'s own traversal of the same
+name -- ported rather than imported, since the two operate on different block representations),
+seeding each block's matcher with the variable correspondences its already-processed predecessors
+confirmed. This is not just extra coverage: if a block's own local match ever produced a
+correspondence that contradicts what an already-processed predecessor already confirmed for the
+same variable, the seed makes that a hard conflict (rejected, not silently trusted) instead of two
+independently-lucky per-block answers going unchecked against each other -- exactly the gap that
+let the 'T'-occurrence contradiction above slip through undetected before this fix. (A topological
+sort of the *dominator tree* was tried first and seemed like a natural fit, but only guarantees a
+block's dominator is processed before it, not its actual CFG predecessors -- for an ordinary
+if/else merge whose dominator isn't itself a direct predecessor, that let the merge block be
+visited before either branch, permanently failing to resolve it despite both predecessors, once
+available, unambiguously agreeing; confirmed on a real contract and fixed by switching to a plain
+BFS, see PROGRESS.md.)
 
 Matching blocks themselves is not safe by raw id alone either, for the same underlying reason:
 `extract_seed_facts_for_contract` establishes a baseline<->probe block correspondence from the
 scope's shared entry block, propagated via matching CFG-edge shape (exit type + successor
 count, and -- for a ConditionalJump -- the condition variable's own defining instruction, not
 just the branch arity) rather than assuming equal ids name the same block. Block-correspondence
-resolution and instruction matching are interleaved into one dominance-order walk per scope
+resolution and instruction matching are interleaved into one forward-BFS walk per scope
 (`_match_scope`), not two separate passes: a block's own confirmed `var_map` needs to be ready
 *before* its successors' branch conditions are checked against it, and before any `PhiFunction`
 in a successor can be aligned by predecessor identity (`_reorder_phi_args`, using the raw
@@ -97,8 +103,8 @@ in probe at all -- traced directly on a real contract (`NFTMarketWrap`, occurren
 eliminated block's other route in is typically a loop back-edge, unavailable in this single-
 forward-pass design either way), so `extract_seed_facts_for_contract` normalizes a *copy* of each
 scope's blocks before matching (`_merge_trivial_blocks`): fold a `ConditionalJump` whose condition
-resolves to a known literal (`_literal_value_table`, a forward dominance-order walk tracking
-direct `LiteralAssignment`s only -- deliberately not a general constant-folding engine) into an
+resolves to a known literal (`_literal_value_table`, a forward BFS walk tracking direct
+`LiteralAssignment`s only -- deliberately not a general constant-folding engine) into an
 unconditional `Jump`, then repeatedly absorb a block into its sole remaining effective predecessor
 wherever that's now a trivial 1-in/1-out edge -- never a block that still carries a `PhiFunction`,
 even if one of its *other* raw incoming edges happens to fold away elsewhere, since that would
@@ -122,12 +128,9 @@ import logging
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import networkx as nx
-
 from constancy.evm_arithmetic import evaluate as _evaluate_arithmetic
 from execution.sol_compilation import get_yul_details
 from global_params.types import block_id_T, component_name_T, constant_T, var_id_T, Yul_CFG_T
-from graphs.algorithms import compute_dominance_tree
 
 # Steps that propagate a variable's constant value (see libyul/optimiser/Suite.cpp)
 CONSTANT_PROPAGATING_STEPS = ["T", "m"]
@@ -175,7 +178,7 @@ def is_literal(value: str) -> bool:
 def _direct_literal_table(instructions: List[Dict[str, Any]]) -> Dict[var_id_T, constant_T]:
     """
     {var: literal} for every variable directly assigned a literal (LiteralAssignment) within
-    this one instruction list -- a flat scan, no dominance-order/cross-block threading needed
+    this one instruction list -- a flat scan, no block-processing-order/cross-block threading needed
     (unlike _literal_value_table, which exists for a different concern, cross-block CFG
     normalization; _try_unify_instructions and everything that calls it only ever need to know
     about one block's own instructions). Computed for the *probe* side only and used to resolve
@@ -518,31 +521,80 @@ def _successors(block: Dict[str, Any]) -> List[block_id_T]:
     return list(block.get("exit", {}).get("targets", []) or [])
 
 
-def _block_dominance_order(blocks: List[Dict[str, Any]]) -> List[block_id_T]:
+def _scope_entry_id(yul_cfg_json: Yul_CFG_T, scope_path: scope_path_T,
+                    blocks: List[Dict[str, Any]]) -> Optional[block_id_T]:
     """
-    Orders a scope's blocks so that (in the common, loop-free case) a block's dominator is
-    processed before it -- built directly off the raw yulCFGJson block list, mirroring
-    parser.cfg_block_list.CFGBlockList.dominant_tree and reusing the same
-    graphs.algorithms.compute_dominance_tree it's built on, rather than a parsed CFG. The
-    first block in the list is assumed to be the scope's entry point, matching that same
-    class's own stated convention. A block reachable only through a loop back edge may not
-    have a computable dominator relative to blocks processed after it; such blocks are simply
-    appended at the end, in list order -- callers must treat an unprocessed predecessor as
-    unknown, exactly as propagation.py's own block processing already does.
+    The block id that's actually this scope's entry point -- resolved from the raw yulCFGJson's
+    own "entry" field on scope_path's own component dict (walking scope_path[1:] through
+    "functions"/"subObjects", mirroring _iter_block_scopes's own path-building) when present, or
+    blocks[0]["id"] otherwise.
+
+    "entry" is confirmed (checked against example_json.json) present only at the *function*
+    level (parser.parser.parse_function's function_json.get("entry", "")); an object/subObject-
+    level scope has no such field at all, so the positional fallback is the only option there --
+    and it isn't a fresh assumption either: it's the only rule parser.parser.parser_block_list's
+    CFGBlockList.add_block ever actually applies for determining start_block in this codebase's
+    real parse path (every block added in raw JSON order, no caller ever passes
+    is_start_block=True), just made explicit and centralized here instead of re-derived
+    positionally wherever a "the entry block" concept is needed.
+    """
+    if not scope_path:
+        return blocks[0]["id"] if blocks else None
+
+    component = yul_cfg_json[scope_path[0]]
+    for name in scope_path[1:]:
+        component = component.get("functions", {}).get(name) or component.get("subObjects", {})[name]
+
+    entry = component.get("entry")
+    return entry if entry else (blocks[0]["id"] if blocks else None)
+
+
+def _block_processing_order(blocks: List[Dict[str, Any]],
+                            entry_id: Optional[block_id_T] = None) -> List[block_id_T]:
+    """
+    A forward BFS order from entry_id (defaulting to blocks[0]["id"] when not given -- every
+    caller within this module that doesn't have a real one on hand yet, including every test),
+    so that (in the common, loop-free case) at least one of a block's real predecessors is
+    processed before it -- ported from (not imported from) propagation.py's own
+    _block_processing_order, which does the equivalent BFS over a parsed CFGBlockList; this one
+    works directly off the raw yulCFGJson block list, via this file's own _successors.
+
+    Replaces an earlier version that ordered blocks via a topological sort of the *dominator
+    tree* (networkx's compute_dominance_tree) instead. That only guarantees a block's dominator
+    is processed before it, not its actual CFG predecessors -- for an ordinary if/else merge
+    whose dominator isn't itself a direct predecessor (the common case whenever either branch has
+    more than one block), the merge block could be scheduled before the branch blocks that
+    actually feed it. Confirmed directly on a real contract (0x24fcfc492c1393274b6bcd568ac9e
+    225bec93584's copy_byte_array_to_storage_from_string_to_string: a FunctionReturn block merging
+    two branches sat at dominance-order position 5, while its own two real predecessors sat at
+    positions 8 and 13 -- so it was always permanently unresolved by _match_scope's single forward
+    pass, despite both predecessors, once available, unambiguously agreeing on the correspondence)
+    and quantified across the whole contract's trace: switching to this BFS dropped unresolved-
+    block warnings from 2594 to 435 (an 83% reduction). See PROGRESS.md.
+
+    A block reachable only through a loop back edge may still be unprocessed when a successor
+    first needs it -- such blocks are simply appended at the end, in list order; callers must
+    treat an unprocessed predecessor as unknown, exactly as propagation.py's own block processing
+    already does.
     """
     if not blocks:
         return []
+    entry_id = entry_id if entry_id is not None else blocks[0]["id"]
 
-    graph = nx.DiGraph()
-    graph.add_nodes_from(block["id"] for block in blocks)
-    for block in blocks:
-        for successor in _successors(block):
-            graph.add_edge(block["id"], successor)
+    by_id = {block["id"]: block for block in blocks}
+    order: List[block_id_T] = []
+    visited: Set[block_id_T] = set()
+    queue = [entry_id]
 
-    order = list(nx.topological_sort(compute_dominance_tree(graph, blocks[0]["id"])))
+    while queue:
+        node = queue.pop(0)
+        if node in visited or node not in by_id:
+            continue
+        visited.add(node)
+        order.append(node)
+        queue.extend(succ for succ in _successors(by_id[node]) if succ in by_id and succ not in visited)
 
-    ordered = set(order)
-    order.extend(block["id"] for block in blocks if block["id"] not in ordered)
+    order.extend(block["id"] for block in blocks if block["id"] not in visited)
     return order
 
 
@@ -773,10 +825,11 @@ def _resolve_phi_value(block: Dict[str, Any], instr: Dict[str, Any],
     return values.pop() if len(values) == 1 else None
 
 
-def _literal_value_table(blocks: List[Dict[str, Any]]) -> Dict[block_id_T, Dict[var_id_T, constant_T]]:
+def _literal_value_table(blocks: List[Dict[str, Any]],
+                         entry_id: Optional[block_id_T] = None) -> Dict[block_id_T, Dict[var_id_T, constant_T]]:
     """
     Per block, which variables are provably a compile-time literal at that point -- a forward
-    dominance-order walk (mirroring the var_map seeding _match_scope already does), seeded from
+    BFS walk from entry_id (mirroring the var_map seeding _match_scope already does), seeded from
     predecessors (a disagreement between predecessors drops that variable, same "unknown, not a
     guess" rule used everywhere else in this module), then extended, instruction by instruction,
     by: a direct LiteralAssignment; any op evm_arithmetic.evaluate can fold once every one of its
@@ -789,7 +842,7 @@ def _literal_value_table(blocks: List[Dict[str, Any]]) -> Dict[block_id_T, Dict[
     predecessors = _predecessors(blocks)
     table: Dict[block_id_T, Dict[var_id_T, constant_T]] = {}
 
-    for block_id in _block_dominance_order(blocks):
+    for block_id in _block_processing_order(blocks, entry_id):
         block = by_id[block_id]
         seed: Dict[var_id_T, constant_T] = {}
         conflicting: set = set()
@@ -848,10 +901,10 @@ def _fold_conditional_exit(block: Dict[str, Any],
     return {"type": "Jump", "targets": [target]}
 
 
-def _reachable_block_ids(blocks: List[Dict[str, Any]]) -> Set[block_id_T]:
+def _reachable_block_ids(blocks: List[Dict[str, Any]], entry_id: Optional[block_id_T] = None) -> Set[block_id_T]:
     """
-    Every block id reachable from the scope's entry (blocks[0]) using each block's *folded*
-    exit (_fold_conditional_exit, via _literal_value_table) rather than its raw one -- a block
+    Every block id reachable from the scope's entry using each block's *folded* exit
+    (_fold_conditional_exit, via _literal_value_table) rather than its raw one -- a block
     whose only route in was a branch since proven dead (e.g. a revert-only error path behind a
     condition that's now provably always false) is unreachable here even though it's still
     physically present in the raw block list, exactly like it would be at runtime. Used to tell
@@ -860,9 +913,9 @@ def _reachable_block_ids(blocks: List[Dict[str, Any]]) -> Set[block_id_T]:
     """
     if not blocks:
         return set()
-    literal_table = _literal_value_table(blocks)
+    entry_id = entry_id if entry_id is not None else blocks[0]["id"]
+    literal_table = _literal_value_table(blocks, entry_id)
     by_id = {block["id"]: block for block in blocks}
-    entry_id = blocks[0]["id"]
 
     reachable = {entry_id}
     frontier = [entry_id]
@@ -876,7 +929,8 @@ def _reachable_block_ids(blocks: List[Dict[str, Any]]) -> Set[block_id_T]:
     return reachable
 
 
-def _merge_trivial_blocks(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _merge_trivial_blocks(blocks: List[Dict[str, Any]],
+                          entry_id: Optional[block_id_T] = None) -> List[Dict[str, Any]]:
     """
     A working copy of blocks for matching purposes only (see the module docstring): folds every
     provably-constant ConditionalJump (_fold_conditional_exit) and then repeatedly absorbs a
@@ -922,10 +976,10 @@ def _merge_trivial_blocks(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not blocks:
         return []
 
-    literal_table = _literal_value_table(blocks)
+    entry_id = entry_id if entry_id is not None else blocks[0]["id"]
+    literal_table = _literal_value_table(blocks, entry_id)
     by_id = {block["id"]: block for block in blocks}
     order = [block["id"] for block in blocks]
-    entry_id = blocks[0]["id"]
 
     work: Dict[block_id_T, Dict[str, Any]] = {}
     for block in blocks:
@@ -968,7 +1022,7 @@ def _merge_trivial_blocks(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             progress = True
             break
 
-    reachable = _reachable_block_ids(blocks)
+    reachable = _reachable_block_ids(blocks, entry_id)
     working_blocks = []
     for block_id in order:
         if block_id not in work or block_id not in reachable:
@@ -985,14 +1039,16 @@ def _merge_trivial_blocks(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return working_blocks
 
 
-def _match_scope(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[Dict[str, Any]]) -> \
+def _match_scope(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[Dict[str, Any]],
+                 baseline_entry_id: Optional[block_id_T] = None, probe_entry_id: Optional[block_id_T] = None) -> \
         Tuple[Dict[block_id_T, block_id_T], Dict[block_id_T, var_map_T], Dict[block_id_T, Dict[int, Dict[var_id_T, constant_T]]]]:
     """
-    One dominance-order walk over a scope's blocks that resolves block correspondence and
+    One forward-BFS walk over a scope's blocks that resolves block correspondence and
     instruction-level facts together (see the module docstring for why these can't be two
-    separate passes any more): the scope's shared entry block (position 0 in both lists, the
-    same convention _block_dominance_order relies on) anchors the walk; each further block's
-    correspondence is proposed by its already-resolved predecessors via
+    separate passes any more): the scope's shared entry block (baseline_entry_id/probe_entry_id,
+    defaulting to position 0 in each list -- the same convention _block_processing_order relies
+    on -- when not given) anchors the walk; each further block's correspondence is proposed by
+    its already-resolved predecessors via
     _propose_successor_mapping, using each predecessor's own confirmed var_map (for the branch-
     condition check) -- a block is left unresolved if none of its predecessors are resolved yet
     (e.g. reachable only via a loop back edge, or via a predecessor that itself never resolved),
@@ -1014,15 +1070,18 @@ def _match_scope(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[Dict[
     if not baseline_blocks or not probe_blocks:
         return {}, {}, {}
 
+    baseline_entry_id = baseline_entry_id if baseline_entry_id is not None else baseline_blocks[0]["id"]
+    probe_entry_id = probe_entry_id if probe_entry_id is not None else probe_blocks[0]["id"]
+
     baseline_by_id = {block["id"]: block for block in baseline_blocks}
     probe_by_id = {block["id"]: block for block in probe_blocks}
     predecessors = _predecessors(baseline_blocks)
 
-    block_correspondence: Dict[block_id_T, block_id_T] = {baseline_blocks[0]["id"]: probe_blocks[0]["id"]}
+    block_correspondence: Dict[block_id_T, block_id_T] = {baseline_entry_id: probe_entry_id}
     var_maps_by_block: Dict[block_id_T, var_map_T] = {}
     facts_by_block: Dict[block_id_T, Dict[int, Dict[var_id_T, constant_T]]] = {}
 
-    for block_id in _block_dominance_order(baseline_blocks):
+    for block_id in _block_processing_order(baseline_blocks, baseline_entry_id):
         baseline_block = baseline_by_id[block_id]
 
         if block_id not in block_correspondence:
@@ -1079,6 +1138,9 @@ def extract_seed_facts_for_contract(baseline_yul_cfg: Yul_CFG_T, probe_yul_cfg: 
     before being returned: this function's contract -- and everything downstream, propagation.py
     and annotate.py -- is completely unaffected by the normalization; only what gets discovered
     changes, never the addressing it's reported against or the CFG that gets annotated.
+
+    Resolves each scope's real entry block (_scope_entry_id) once here and threads it through
+    every call that needs one, rather than letting each of them re-derive/assume it positionally.
     """
     facts: seed_facts_T = {}
 
@@ -1091,11 +1153,15 @@ def extract_seed_facts_for_contract(baseline_yul_cfg: Yul_CFG_T, probe_yul_cfg: 
             logging.warning(f"Scope {scope_path} is missing from the probe compilation; skipping")
             continue
 
-        working_baseline = _merge_trivial_blocks(baseline_blocks)
-        working_probe = _merge_trivial_blocks(probe_blocks)
+        baseline_entry_id = _scope_entry_id(baseline_yul_cfg, scope_path, baseline_blocks)
+        probe_entry_id = _scope_entry_id(probe_yul_cfg, scope_path, probe_blocks)
+
+        working_baseline = _merge_trivial_blocks(baseline_blocks, baseline_entry_id)
+        working_probe = _merge_trivial_blocks(probe_blocks, probe_entry_id)
         working_baseline_by_id = {block["id"]: block for block in working_baseline}
 
-        block_correspondence, _, facts_by_block = _match_scope(working_baseline, working_probe)
+        block_correspondence, _, facts_by_block = _match_scope(
+            working_baseline, working_probe, baseline_entry_id, probe_entry_id)
 
         resolved_original_ids: set = set()
         for working_id in block_correspondence:
