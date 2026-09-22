@@ -8,8 +8,6 @@ import logging
 import networkx
 from global_params.types import block_id_T
 from parser.cfg_block import CFGBlock, include_function_call_tags
-from graphs.cfg import compute_loop_nesting_forest_graph
-from graphs.algorithms import compute_dominance_tree
 
 
 class CFGBlockList:
@@ -162,18 +160,6 @@ class CFGBlockList:
                         graph.add_edge(block_id, successor)
             self.graph = graph
         return self.graph
-
-    @property
-    def dominant_tree(self):
-        if self._dominant_tree is None:
-            self._dominant_tree = compute_dominance_tree(self.to_graph(), self.start_block)
-        return self._dominant_tree
-
-    @property
-    def loop_nesting_forest(self):
-        if self._loop_nesting_forest is None:
-            self._loop_nesting_forest = compute_loop_nesting_forest_graph(self.to_graph())
-        return self._loop_nesting_forest
 
     def to_graph_info(self) -> networkx.DiGraph:
         """
