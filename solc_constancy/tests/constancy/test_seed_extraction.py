@@ -1,7 +1,8 @@
 import logging
 
 from constancy.seed_extraction import (_block_processing_order, _fold_conditional_exit, _literal_value_table,
-                                       _match_scope, _merge_trivial_blocks, _reachable_block_ids, _scope_entry_id,
+                                       _match_scope, _merge_trivial_blocks, _reachable_block_ids,
+                                       _scope_defining_instructions, _scope_entry_id, _values_provably_equal,
                                        extract_seed_facts_for_contract, extract_seed_facts_for_instructions,
                                        is_literal, isolate_cleanup_sequence, iter_block_scopes,
                                        match_block_instructions, probe_sequence, with_stack_allocation_disabled)
@@ -656,6 +657,62 @@ class TestExtractSeedFactsForContractNormalization:
 
         assert not any("no unique structural correspondence" in record.message for record in caplog.records)
 
+    def test_a_rematerialized_movable_op_chain_across_a_block_boundary_produces_no_warning(self, caplog):
+        # Mirrors the real T1 case end to end: baseline computes a pure compile-time-constant
+        # subexpression once in an ancestor block (A) and reuses it directly in a descendant's
+        # (B's) branch condition; probe recomputes the same chain fresh, under new variable
+        # names, right at the use site in B instead of carrying it across the block boundary.
+        # Without _values_provably_equal, B's own condition-defining "gt" instruction would fail
+        # to unify (its second-to-last argument, the carried v6/v8, conflicts with probe's
+        # locally-recomputed v11), leaving B (and hence C/D) unresolved.
+        baseline = {
+            "type": "Object",
+            "Main": {
+                "blocks": [
+                    {"id": "A", "exit": {"type": "Jump", "targets": ["B"]},
+                     "instructions": [
+                         {"in": ["0x01", "0x40"], "op": "shl", "out": ["v5"]},
+                         {"in": ["0x01", "v5"], "op": "sub", "out": ["v6"]},
+                     ]},
+                    {"id": "B", "exit": {"type": "ConditionalJump", "cond": "v8", "targets": ["C", "D"]},
+                     "instructions": [
+                         {"in": ["0x00"], "op": "mload", "out": ["v7"]},
+                         {"in": ["v6", "v7"], "op": "gt", "out": ["v8"]},
+                     ]},
+                    {"id": "C", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                    {"id": "D", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                ],
+                "functions": {}, "subObjects": {},
+            },
+        }
+        probe = {
+            "type": "Object",
+            "Main": {
+                "blocks": [
+                    {"id": "A", "exit": {"type": "Jump", "targets": ["B"]},
+                     "instructions": [
+                         {"in": ["0x01", "0x40"], "op": "shl", "out": ["v5"]},
+                         {"in": ["0x01", "v5"], "op": "sub", "out": ["v6"]},
+                     ]},
+                    {"id": "B", "exit": {"type": "ConditionalJump", "cond": "v12", "targets": ["C", "D"]},
+                     "instructions": [
+                         {"in": ["0x00"], "op": "mload", "out": ["v9"]},
+                         {"in": ["0x01", "0x40"], "op": "shl", "out": ["v10"]},
+                         {"in": ["0x01", "v10"], "op": "sub", "out": ["v11"]},
+                         {"in": ["v11", "v9"], "op": "gt", "out": ["v12"]},
+                     ]},
+                    {"id": "C", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                    {"id": "D", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                ],
+                "functions": {}, "subObjects": {},
+            },
+        }
+
+        with caplog.at_level(logging.WARNING):
+            extract_seed_facts_for_contract(baseline, probe)
+
+        assert not any("no unique structural correspondence" in record.message for record in caplog.records)
+
 
 class TestProbeSequence:
     def test_isolates_a_colon_less_base_before_appending_steps(self):
@@ -668,6 +725,60 @@ class TestProbeSequence:
         # A base that already has a real, deliberate colon (e.g. DEFAULT_OPTIMIZER_SEQUENCE)
         # is untouched -- the extra steps just extend its existing cleanup, as before
         assert probe_sequence("dfDv:fDnTOcmu", ["T"]) == "dfDv:fDnTOcmuT"
+
+
+class TestScopeDefiningInstructions:
+    def test_builds_a_flat_map_across_multiple_blocks(self):
+        blocks = [
+            {"id": "B0", "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v1"]}]},
+            {"id": "B1", "instructions": [{"in": ["v1", "0x02"], "op": "add", "out": ["v2", "v3"]}]},
+        ]
+        defs = _scope_defining_instructions(blocks)
+
+        assert defs["v1"] == {"in": ["0x01"], "op": "LiteralAssignment", "out": ["v1"]}
+        assert defs["v2"] is defs["v3"] is blocks[1]["instructions"][0]
+
+
+class TestValuesProvablyEqual:
+    def test_the_same_name_is_trivially_equal(self):
+        assert _values_provably_equal("v1", "v1", {})
+
+    def test_two_literals_that_differ_are_not_equal(self):
+        assert not _values_provably_equal("0x01", "0x02", {})
+
+    def test_same_movable_op_same_literal_args_is_equal(self):
+        # The T1 pattern: a pure compile-time constant, recomputed under a different name
+        defs = {
+            "v8": {"op": "sub", "in": ["0x01", "v7"]}, "v7": {"op": "shl", "in": ["0x01", "0x40"]},
+            "v15": {"op": "sub", "in": ["0x01", "v14"]}, "v14": {"op": "shl", "in": ["0x01", "0x40"]},
+        }
+        assert _values_provably_equal("v15", "v8", defs)
+
+    def test_same_movable_op_one_arg_recursively_equal_the_other_already_confirmed(self):
+        # The c3 pattern: and(0x01, v15) recomputed, where v15 is already the same name on both
+        # sides (an already-confirmed identity, not itself needing further resolution)
+        defs = {"v18": {"op": "and", "in": ["0x01", "v15"]}, "v23": {"op": "and", "in": ["0x01", "v15"]}}
+        assert _values_provably_equal("v23", "v18", defs)
+
+    def test_same_movable_op_but_a_genuinely_different_argument_is_not_equal(self):
+        defs = {"v18": {"op": "and", "in": ["0x01", "v15"]}, "v23": {"op": "and", "in": ["0x01", "v16"]}}
+        assert not _values_provably_equal("v23", "v18", defs)
+
+    def test_a_non_movable_op_requires_exact_name_match_and_does_not_recurse(self):
+        defs = {"v15": {"op": "sload", "in": ["0x03"]}, "v16": {"op": "sload", "in": ["0x03"]}}
+        assert not _values_provably_equal("v16", "v15", defs)
+
+    def test_a_commutative_op_resolves_equal_with_swapped_arguments(self):
+        defs = {"v1": {"op": "add", "in": ["v9", "v10"]}, "v2": {"op": "add", "in": ["v10", "v9"]}}
+        assert _values_provably_equal("v2", "v1", defs)
+
+    def test_different_ops_are_not_equal(self):
+        defs = {"v1": {"op": "add", "in": ["v9", "v10"]}, "v2": {"op": "sub", "in": ["v9", "v10"]}}
+        assert not _values_provably_equal("v2", "v1", defs)
+
+    def test_mismatched_argument_counts_are_not_equal(self):
+        defs = {"v1": {"op": "and", "in": ["v9", "v10"]}, "v2": {"op": "and", "in": ["v9", "v10", "v11"]}}
+        assert not _values_provably_equal("v2", "v1", defs)
 
 
 class TestMatchBlockInstructions:
@@ -886,6 +997,53 @@ class TestMatchBlockInstructions:
         facts, _ = match_block_instructions(baseline, probe)
 
         assert facts == {3: {"v20": "0x99"}}
+
+    def test_reassociation_is_still_declined_even_with_probe_defs_supplied(self):
+        # Regression lock: probe_defs (_values_provably_equal) must not reopen the reassociation
+        # gap above. It doesn't apply here regardless -- its precondition is a baseline argument
+        # *already confirmed* in var_map conflicting with a probe argument, and none of the
+        # reassociated-region variables are pre-seeded in var_map in this fixture -- but this
+        # locks that in directly rather than relying on that reasoning alone.
+        baseline = [
+            {"in": ["0x20", "v9"], "op": "add", "out": ["v2"]},
+            {"in": ["v10", "v2"], "op": "add", "out": ["v3"]},
+            {"in": ["v3", "v0"], "op": "mstore", "out": []},
+            {"in": ["v20", "0x07"], "op": "add", "out": ["v21"]},
+            {"in": ["v21", "v1"], "op": "mstore", "out": []},
+        ]
+        probe = [
+            {"in": ["v10", "v9"], "op": "add", "out": ["v2b"]},
+            {"in": ["0x20", "v2b"], "op": "add", "out": ["v3b"]},
+            {"in": ["v3b", "v0"], "op": "mstore", "out": []},
+            {"in": ["0x99", "0x07"], "op": "add", "out": ["v21b"]},
+            {"in": ["v21b", "v1"], "op": "mstore", "out": []},
+        ]
+        probe_defs = _scope_defining_instructions([{"instructions": probe}])
+
+        facts, _ = match_block_instructions(baseline, probe, probe_defs=probe_defs)
+
+        assert facts == {3: {"v20": "0x99"}}
+
+    def test_a_rematerialized_movable_op_chain_is_recognized_as_the_same_value(self):
+        # Mirrors the real c3 case: baseline reuses v18 (carried in via seed_var_map, standing in
+        # for a value an ancestor block already computed once) directly; probe recomputes
+        # and(0x01, v15) fresh at the use site instead of reusing its own v18. Without probe_defs
+        # this positional conflict (var_map already says v18 -> v18, but probe's actual argument
+        # here is v23) would reject the whole instruction outright.
+        baseline = [{"in": ["v21", "v18"], "op": "eq", "out": ["v22"]}]
+        probe = [
+            {"in": ["0x01", "v15"], "op": "and", "out": ["v23"]},
+            {"in": ["v21", "v23"], "op": "eq", "out": ["v24"]},
+        ]
+        probe_defs = _scope_defining_instructions([
+            {"instructions": [{"in": ["0x01", "v15"], "op": "and", "out": ["v18"]}]},  # ancestor block
+            {"instructions": probe},
+        ])
+        seed_var_map = {"v18": "v18", "v21": "v21"}
+
+        facts, var_map = match_block_instructions(baseline, probe, seed_var_map=seed_var_map, probe_defs=probe_defs)
+
+        assert var_map["v22"] == "v24"
 
     def test_probe_materializes_a_literal_baseline_inlines_directly(self):
         # Mirrors a real contract (TUPProxy, external_fun_cancelFreeze): CSE hoists what used to

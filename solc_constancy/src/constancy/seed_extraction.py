@@ -198,8 +198,71 @@ def _direct_literal_table(instructions: List[Dict[str, Any]]) -> Dict[var_id_T, 
     return table
 
 
+def _scope_defining_instructions(blocks: List[Dict[str, Any]]) -> Dict[var_id_T, Dict[str, Any]]:
+    """
+    {var: instr} for every variable's defining instruction across *all* of a scope's blocks --
+    unlike _defining_instruction (one block only), this covers a variable defined in an ancestor
+    block and carried live into a descendant one. Feeds _values_provably_equal, which needs to
+    trace a variable back to its definition regardless of which block originally computed it.
+    """
+    defs: Dict[var_id_T, Dict[str, Any]] = {}
+    for block in blocks:
+        for instr in block.get("instructions", []):
+            for var in instr.get("out", []):
+                defs[var] = instr
+    return defs
+
+
+def _values_provably_equal(var_x: var_id_T, var_y: var_id_T,
+                           defs: Dict[var_id_T, Dict[str, Any]], _depth: int = 0) -> bool:
+    """
+    Whether var_x and var_y -- two variables from the *same* compilation (both baseline, or both
+    probe; this is never a cross-compilation check) -- are provably the same value, tracing each
+    back through defs (_scope_defining_instructions) when they're not literally the same name.
+
+    Exists to see through rematerialization: solc's optimizer can recompute an already-known,
+    cheap-to-recompute value fresh at its use site instead of carrying it live across a block
+    boundary (confirmed on a real contract: a value carried live across a block boundary and
+    reused directly in baseline gets recomputed via a fresh chain of movable ops in probe,
+    referencing an already-correctly-matched variable -- e.g. baseline's v18 = and(0x01, v15)
+    computed once and reused, vs. probe recomputing and(0x01, v15) again with a new output
+    variable at the point of use). Every op along the way must be in _MOVABLE_OPS -- the same
+    allowlist this module already trusts as pure/deterministic/side-effect-free to justify
+    freely reordering movable instructions within a block, so recursing through a chain of them
+    is sound for the same reason. Recursion bottoms out only at direct string equality (the same
+    literal, or literally the same variable name) or -- implicitly, via the caller -- an already
+    independently confirmed var_map entry; it never invents a new kind of equivalence.
+
+    _depth is a purely defensive recursion guard (SSA form already precludes a real cycle; every
+    chain observed on real contracts so far is 1-2 levels deep).
+    """
+    if var_x == var_y:
+        return True
+    if is_literal(var_x) or is_literal(var_y) or _depth > 50:
+        return False
+
+    instr_x, instr_y = defs.get(var_x), defs.get(var_y)
+    if instr_x is None or instr_y is None:
+        return False
+
+    op = instr_x.get("op")
+    if op != instr_y.get("op") or op not in _MOVABLE_OPS:
+        return False
+
+    args_x, args_y = instr_x.get("in", []), instr_y.get("in", [])
+    if len(args_x) != len(args_y):
+        return False
+
+    def matches(xs: List[var_id_T], ys: List[var_id_T]) -> bool:
+        return all(_values_provably_equal(x, y, defs, _depth + 1) for x, y in zip(xs, ys))
+
+    return matches(args_x, args_y) or (op in _COMMUTATIVE_OPS and len(args_x) == 2
+                                       and matches(args_x, list(reversed(args_y))))
+
+
 def _try_unify_instructions(baseline_instr: Dict[str, Any], probe_instr: Dict[str, Any], var_map: var_map_T,
-                            probe_literal_table: Dict[var_id_T, constant_T]) -> \
+                            probe_literal_table: Dict[var_id_T, constant_T],
+                            probe_defs: Optional[Dict[var_id_T, Dict[str, Any]]] = None) -> \
         Optional[Tuple[List[Tuple[var_id_T, var_id_T]], Dict[var_id_T, constant_T]]]:
     """
     Checks whether baseline_instr and probe_instr can be the "same" instruction (the same one,
@@ -224,6 +287,12 @@ def _try_unify_instructions(baseline_instr: Dict[str, Any], probe_instr: Dict[st
     it (confirmed by a regression this caused during development: resolving both sides made
     every already-known-literal baseline variable "trivially consistent" with its own probe
     counterpart instead of reporting the substitution).
+
+    A symbolic argument that conflicts with an already-confirmed var_map entry isn't rejected
+    outright either: if probe_arg is provably the same value as var_map[baseline_arg] via a chain
+    of movable ops (_values_provably_equal, using probe_defs), that's recognized as
+    rematerialization -- solc recomputing an already-known value fresh at its use site instead of
+    carrying it live across a block boundary -- rather than a genuine mismatch.
 
     Returns (new_unifications, substitution_facts) if consistent, None otherwise. Does not
     mutate var_map -- the caller commits new_unifications only once the whole match is accepted.
@@ -256,14 +325,20 @@ def _try_unify_instructions(baseline_instr: Dict[str, Any], probe_instr: Dict[st
             facts[baseline_arg] = probe_resolved
         else:
             if baseline_arg in var_map and var_map[baseline_arg] != probe_arg:
-                return None
+                if not _values_provably_equal(probe_arg, var_map[baseline_arg], probe_defs or {}):
+                    return None
+                # probe_arg is a rematerialized recomputation of the same already-confirmed
+                # value -- explained, but baseline_arg's own correspondence stays as already
+                # confirmed, so nothing new is proposed for it here
+                continue
             pending.append((baseline_arg, probe_arg))
 
     return pending, facts
 
 
 def _instruction_correspondences(baseline_instr: Dict[str, Any], probe_instr: Dict[str, Any], var_map: var_map_T,
-                                 probe_literal_table: Dict[var_id_T, constant_T]) -> \
+                                 probe_literal_table: Dict[var_id_T, constant_T],
+                                 probe_defs: Optional[Dict[var_id_T, Dict[str, Any]]] = None) -> \
         List[Tuple[List[Tuple[var_id_T, var_id_T]], Dict[var_id_T, constant_T]]]:
     """
     The way baseline_instr could correspond to probe_instr given var_map, as a 0- or 1-element
@@ -283,7 +358,7 @@ def _instruction_correspondences(baseline_instr: Dict[str, Any], probe_instr: Di
     for the *other* argument instead of correctly rejecting the whole instruction (confirmed
     against a real collision case -- see the module docstring's periodic-block example).
     """
-    result = _try_unify_instructions(baseline_instr, probe_instr, var_map, probe_literal_table)
+    result = _try_unify_instructions(baseline_instr, probe_instr, var_map, probe_literal_table, probe_defs)
     if result is not None:
         return [result]
 
@@ -293,7 +368,7 @@ def _instruction_correspondences(baseline_instr: Dict[str, Any], probe_instr: Di
     if not already_known and probe_instr.get("op") in _COMMUTATIVE_OPS and len(probe_in) == 2 \
             and probe_in[0] != probe_in[1]:
         swapped = {**probe_instr, "in": [probe_in[1], probe_in[0]]}
-        result = _try_unify_instructions(baseline_instr, swapped, var_map, probe_literal_table)
+        result = _try_unify_instructions(baseline_instr, swapped, var_map, probe_literal_table, probe_defs)
         if result is not None:
             return [result]
 
@@ -306,7 +381,8 @@ def _is_movable(instr: Dict[str, Any]) -> bool:
 
 
 def _match_item_set(baseline_items: List[Tuple[int, Dict[str, Any]]], probe_items: List[Tuple[int, Dict[str, Any]]],
-                    var_map: var_map_T, probe_literal_table: Dict[var_id_T, constant_T]) -> \
+                    var_map: var_map_T, probe_literal_table: Dict[var_id_T, constant_T],
+                    probe_defs: Optional[Dict[var_id_T, Dict[str, Any]]] = None) -> \
         Tuple[Dict[int, Dict[var_id_T, constant_T]], var_map_T, Dict[int, int]]:
     """
     Structurally matches baseline_items against probe_items (each a list of
@@ -334,7 +410,7 @@ def _match_item_set(baseline_items: List[Tuple[int, Dict[str, Any]]], probe_item
             matches = [(p_idx, pending, step_facts)
                       for p_idx, p_instr in remaining_probe.items()
                       for pending, step_facts in _instruction_correspondences(
-                          b_instr, p_instr, var_map, probe_literal_table)]
+                          b_instr, p_instr, var_map, probe_literal_table, probe_defs)]
             if len(matches) == 1:
                 p_idx, pending, step_facts = matches[0]
                 proposals[p_idx].append((b_idx, pending, step_facts))
@@ -356,7 +432,8 @@ def _match_item_set(baseline_items: List[Tuple[int, Dict[str, Any]]], probe_item
 
 
 def _match_anchors(baseline_anchors: List[Tuple[int, Dict[str, Any]]], probe_anchors: List[Tuple[int, Dict[str, Any]]],
-                   var_map: var_map_T, probe_literal_table: Dict[var_id_T, constant_T]) -> \
+                   var_map: var_map_T, probe_literal_table: Dict[var_id_T, constant_T],
+                   probe_defs: Optional[Dict[var_id_T, Dict[str, Any]]] = None) -> \
         Tuple[Dict[int, Dict[var_id_T, constant_T]], var_map_T]:
     """
     Matches a block's anchors (non-movable instructions -- see _is_movable) against the probe's.
@@ -398,7 +475,7 @@ def _match_anchors(baseline_anchors: List[Tuple[int, Dict[str, Any]]], probe_anc
             for p_pos in range(lo[b_pos], hi[b_pos] + 1):
                 p_instr = probe_by_idx[probe_order[p_pos]]
                 for pending, step_facts in _instruction_correspondences(
-                        b_instr, p_instr, var_map, probe_literal_table):
+                        b_instr, p_instr, var_map, probe_literal_table, probe_defs):
                     matches.append((p_pos, pending, step_facts))
             if len(matches) == 1:
                 p_pos, pending, step_facts = matches[0]
@@ -427,14 +504,18 @@ def _match_anchors(baseline_anchors: List[Tuple[int, Dict[str, Any]]], probe_anc
 
 
 def match_block_instructions(baseline_instrs: List[Dict[str, Any]], probe_instrs: List[Dict[str, Any]],
-                             seed_var_map: Optional[var_map_T] = None) -> \
+                             seed_var_map: Optional[var_map_T] = None,
+                             probe_defs: Optional[Dict[var_id_T, Dict[str, Any]]] = None) -> \
         Tuple[Dict[int, Dict[var_id_T, constant_T]], var_map_T]:
     """
     Matches a block's baseline instructions against its probe instructions (see the module
     docstring for the movable/anchor design), returning ({baseline_instruction_index:
     {var: literal}}, confirmed_var_map). seed_var_map primes the correspondence with facts
     already confirmed elsewhere (e.g. by a dominating predecessor block), feeding the
-    constraint propagation from the start.
+    constraint propagation from the start. probe_defs (_scope_defining_instructions, scope-wide
+    -- not just this block's own probe_instrs) lets a conflicting argument still unify when it's
+    a rematerialized recomputation of an already-confirmed value (_values_provably_equal, used by
+    _try_unify_instructions).
 
     Two passes: anchors first (_match_anchors, order-preserving, since their relative order
     can't have changed), then every movable instruction in the block as one global pool
@@ -455,8 +536,9 @@ def match_block_instructions(baseline_instrs: List[Dict[str, Any]], probe_instrs
     for idx, instr in enumerate(probe_instrs):
         (probe_movable if _is_movable(instr) else probe_anchors).append((idx, instr))
 
-    anchor_facts, var_map = _match_anchors(baseline_anchors, probe_anchors, var_map, probe_literal_table)
-    movable_facts, var_map, _ = _match_item_set(baseline_movable, probe_movable, var_map, probe_literal_table)
+    anchor_facts, var_map = _match_anchors(baseline_anchors, probe_anchors, var_map, probe_literal_table, probe_defs)
+    movable_facts, var_map, _ = _match_item_set(baseline_movable, probe_movable, var_map, probe_literal_table,
+                                                probe_defs)
 
     facts: Dict[int, Dict[var_id_T, constant_T]] = defaultdict(dict)
     for idx, var_facts in anchor_facts.items():
@@ -469,7 +551,9 @@ def match_block_instructions(baseline_instrs: List[Dict[str, Any]], probe_instrs
 
 def extract_seed_facts_for_instructions(baseline_instrs: List[Dict[str, Any]],
                                         probe_instrs: List[Dict[str, Any]],
-                                        seed_var_map: Optional[var_map_T] = None) -> Dict[int, Dict[var_id_T, constant_T]]:
+                                        seed_var_map: Optional[var_map_T] = None,
+                                        probe_defs: Optional[Dict[var_id_T, Dict[str, Any]]] = None) -> \
+        Dict[int, Dict[var_id_T, constant_T]]:
     """
     Compares a single block's instructions between the baseline and the probe compilation,
     returning, for each baseline instruction index, the {var: literal} substitutions
@@ -482,7 +566,7 @@ def extract_seed_facts_for_instructions(baseline_instrs: List[Dict[str, Any]],
     that consumes these facts (src/constancy/propagation.py) handles that case syntactically,
     with no need for a fact about it.
     """
-    facts, _ = match_block_instructions(baseline_instrs, probe_instrs, seed_var_map)
+    facts, _ = match_block_instructions(baseline_instrs, probe_instrs, seed_var_map, probe_defs)
     return facts
 
 
@@ -633,7 +717,8 @@ def _zero_comparison_target(instr: Dict[str, Any]) -> Optional[var_id_T]:
 
 
 def _cond_correspondence(baseline_block: Dict[str, Any], probe_block: Dict[str, Any], baseline_cond: var_id_T,
-                         probe_cond: var_id_T, var_map: var_map_T) -> Optional[bool]:
+                         probe_cond: var_id_T, var_map: var_map_T,
+                         probe_defs: Optional[Dict[var_id_T, Dict[str, Any]]] = None) -> Optional[bool]:
     """
     Whether probe_cond is the same branch condition as baseline_cond (True), a negation of it
     (False -- solc wrapped/unwrapped an `iszero` and swapped the two branch targets
@@ -642,8 +727,10 @@ def _cond_correspondence(baseline_block: Dict[str, Any], probe_block: Dict[str, 
 
     Checks var_map first: if baseline_cond is already known (e.g. confirmed several blocks
     back, not locally re-derivable via _defining_instruction in this block at all), that's
-    reused directly rather than re-deriving the correspondence from local instructions alone.
-    Only falls back to a local structural check (both sides' own defining instruction, via
+    reused directly rather than re-deriving the correspondence from local instructions alone --
+    including when probe_cond is a rematerialized recomputation of that already-known value
+    rather than the literal same variable (_values_provably_equal, using probe_defs). Only falls
+    back to a local structural check (both sides' own defining instruction, via
     _try_unify_instructions -- now against the real var_map, not a throwaway empty one) when
     baseline_cond isn't yet known.
 
@@ -654,6 +741,8 @@ def _cond_correspondence(baseline_block: Dict[str, Any], probe_block: Dict[str, 
     """
     if baseline_cond in var_map:
         if var_map[baseline_cond] == probe_cond:
+            return True
+        if _values_provably_equal(probe_cond, var_map[baseline_cond], probe_defs or {}):
             return True
         probe_cond_instr = _defining_instruction(probe_block, probe_cond)
         if probe_cond_instr is not None and probe_cond_instr.get("op") == "iszero" \
@@ -666,7 +755,7 @@ def _cond_correspondence(baseline_block: Dict[str, Any], probe_block: Dict[str, 
     if baseline_cond_instr is None or probe_cond_instr is None:
         return None
 
-    if _try_unify_instructions(baseline_cond_instr, probe_cond_instr, var_map, {}) is not None:
+    if _try_unify_instructions(baseline_cond_instr, probe_cond_instr, var_map, {}, probe_defs) is not None:
         return True
 
     if baseline_cond_instr.get("op") == "iszero" and len(baseline_cond_instr.get("in", [])) == 1:
@@ -674,7 +763,7 @@ def _cond_correspondence(baseline_block: Dict[str, Any], probe_block: Dict[str, 
         if not is_literal(inner):
             inner_defining = _defining_instruction(baseline_block, inner)
             if inner_defining is not None and \
-                    _try_unify_instructions(inner_defining, probe_cond_instr, var_map, {}) is not None:
+                    _try_unify_instructions(inner_defining, probe_cond_instr, var_map, {}, probe_defs) is not None:
                 return False
 
     if probe_cond_instr.get("op") == "iszero" and len(probe_cond_instr.get("in", [])) == 1:
@@ -682,7 +771,7 @@ def _cond_correspondence(baseline_block: Dict[str, Any], probe_block: Dict[str, 
         if not is_literal(inner):
             inner_defining = _defining_instruction(probe_block, inner)
             if inner_defining is not None and \
-                    _try_unify_instructions(baseline_cond_instr, inner_defining, var_map, {}) is not None:
+                    _try_unify_instructions(baseline_cond_instr, inner_defining, var_map, {}, probe_defs) is not None:
                 return False
 
     baseline_zero_target = _zero_comparison_target(baseline_cond_instr)
@@ -695,14 +784,16 @@ def _cond_correspondence(baseline_block: Dict[str, Any], probe_block: Dict[str, 
             baseline_inner_defining = _defining_instruction(baseline_block, baseline_zero_target)
             probe_inner_defining = _defining_instruction(probe_block, probe_zero_target)
             if baseline_inner_defining is not None and probe_inner_defining is not None and \
-                    _try_unify_instructions(baseline_inner_defining, probe_inner_defining, var_map, {}) is not None:
+                    _try_unify_instructions(baseline_inner_defining, probe_inner_defining, var_map, {},
+                                            probe_defs) is not None:
                 return True
 
     return None
 
 
 def _propose_successor_mapping(baseline_block: Dict[str, Any], probe_block: Optional[Dict[str, Any]],
-                               var_map: var_map_T) -> Dict[block_id_T, block_id_T]:
+                               var_map: var_map_T,
+                               probe_defs: Optional[Dict[var_id_T, Dict[str, Any]]] = None) -> Dict[block_id_T, block_id_T]:
     """
     Proposes a baseline->probe successor-block correspondence from one already-confirmed block
     pairing: valid only if both blocks' exit shape agrees (same exit type, same number of
@@ -731,7 +822,8 @@ def _propose_successor_mapping(baseline_block: Dict[str, Any], probe_block: Opti
             if baseline_cond != probe_cond:
                 return {}
         else:
-            correspondence = _cond_correspondence(baseline_block, probe_block, baseline_cond, probe_cond, var_map)
+            correspondence = _cond_correspondence(baseline_block, probe_block, baseline_cond, probe_cond, var_map,
+                                                  probe_defs)
             if correspondence is None:
                 return {}
             negated = not correspondence
@@ -1040,7 +1132,8 @@ def _merge_trivial_blocks(blocks: List[Dict[str, Any]],
 
 
 def _match_scope(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[Dict[str, Any]],
-                 baseline_entry_id: Optional[block_id_T] = None, probe_entry_id: Optional[block_id_T] = None) -> \
+                 baseline_entry_id: Optional[block_id_T] = None, probe_entry_id: Optional[block_id_T] = None,
+                 probe_defs: Optional[Dict[var_id_T, Dict[str, Any]]] = None) -> \
         Tuple[Dict[block_id_T, block_id_T], Dict[block_id_T, var_map_T], Dict[block_id_T, Dict[int, Dict[var_id_T, constant_T]]]]:
     """
     One forward-BFS walk over a scope's blocks that resolves block correspondence and
@@ -1058,6 +1151,11 @@ def _match_scope(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[Dict[
     instructions matched (match_block_instructions), seeded with every resolved non-backward
     predecessor's var_map merged together (a predecessor disagreement about a shared variable
     drops that variable from the seed rather than guessing).
+
+    probe_defs (_scope_defining_instructions over probe_blocks) is threaded through to both
+    _propose_successor_mapping and match_block_instructions, so a conflicting argument that's a
+    rematerialized recomputation of an already-confirmed value is still recognized
+    (_values_provably_equal) rather than leaving the block unresolved.
 
     Returns (block_correspondence, var_maps_by_block, facts_by_block) -- facts_by_block only
     contains entries for blocks that actually produced at least one fact.
@@ -1092,7 +1190,8 @@ def _match_scope(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[Dict[
                 if predecessor_var_map is None or predecessor_probe_id is None:
                     continue  # not yet processed -- e.g. reachable only via a loop back edge
                 proposed = _propose_successor_mapping(
-                    baseline_by_id[predecessor_id], probe_by_id.get(predecessor_probe_id), predecessor_var_map)
+                    baseline_by_id[predecessor_id], probe_by_id.get(predecessor_probe_id), predecessor_var_map,
+                    probe_defs)
                 if block_id in proposed:
                     candidates.add(proposed[block_id])
             if len(candidates) == 1:
@@ -1120,7 +1219,8 @@ def _match_scope(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[Dict[
 
         probe_instructions = _reorder_phi_args(baseline_block, probe_block, block_correspondence)
         block_facts, block_var_map = match_block_instructions(
-            baseline_block.get("instructions", []), probe_instructions, seed_var_map=seed_var_map)
+            baseline_block.get("instructions", []), probe_instructions, seed_var_map=seed_var_map,
+            probe_defs=probe_defs)
         var_maps_by_block[block_id] = block_var_map
         if block_facts:
             facts_by_block[block_id] = block_facts
@@ -1141,6 +1241,10 @@ def extract_seed_facts_for_contract(baseline_yul_cfg: Yul_CFG_T, probe_yul_cfg: 
 
     Resolves each scope's real entry block (_scope_entry_id) once here and threads it through
     every call that needs one, rather than letting each of them re-derive/assume it positionally.
+    Also computes probe_defs (_scope_defining_instructions over the working probe blocks) once
+    per scope and threads it into _match_scope, so a probe argument that's a rematerialized
+    recomputation of an already-confirmed value is recognized rather than leaving a block
+    unresolved (_values_provably_equal).
     """
     facts: seed_facts_T = {}
 
@@ -1159,15 +1263,16 @@ def extract_seed_facts_for_contract(baseline_yul_cfg: Yul_CFG_T, probe_yul_cfg: 
         working_baseline = _merge_trivial_blocks(baseline_blocks, baseline_entry_id)
         working_probe = _merge_trivial_blocks(probe_blocks, probe_entry_id)
         working_baseline_by_id = {block["id"]: block for block in working_baseline}
+        probe_defs = _scope_defining_instructions(working_probe)
 
         block_correspondence, _, facts_by_block = _match_scope(
-            working_baseline, working_probe, baseline_entry_id, probe_entry_id)
+            working_baseline, working_probe, baseline_entry_id, probe_entry_id, probe_defs)
 
         resolved_original_ids: set = set()
         for working_id in block_correspondence:
             resolved_original_ids |= working_baseline_by_id[working_id]["_members"]
 
-        reachable_baseline_ids = _reachable_block_ids(baseline_blocks)
+        reachable_baseline_ids = _reachable_block_ids(baseline_blocks, baseline_entry_id)
         for block in baseline_blocks:
             if block["id"] not in resolved_original_ids and block["id"] in reachable_baseline_ids:
                 logging.warning(f"Block {block['id']} in scope {scope_path} has no unique structural "
