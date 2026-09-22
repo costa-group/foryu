@@ -3,7 +3,6 @@ import logging
 
 from global_params.types import instr_id_T, dependencies_T, var_id_T, block_id_T, function_name_T, SMS_T
 from parser.cfg_instruction import CFGInstruction, build_push_spec, build_pushtag_spec
-from greedy.greedy_info import GreedyInfo
 import json
 from parser.constants import split_block
 from enum import Enum, auto
@@ -98,10 +97,6 @@ class CFGBlock:
         self._entries: List[block_id_T] = []
 
         self._spec: SMS_T = None
-        self._greedy_ids: List[instr_id_T] = None
-
-        # Greedy Information that needs to be passed
-        self._greedy_info: GreedyInfo = None
 
         # Set of variables that are computed in the current block
         self._id2var = None
