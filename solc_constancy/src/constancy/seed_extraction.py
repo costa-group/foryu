@@ -175,6 +175,23 @@ def is_literal(value: str) -> bool:
     return value.startswith("0x")
 
 
+def count_leading_phis(instructions: List[Dict[str, Any]]) -> int:
+    """
+    How many of a block's instructions are a leading run of PhiFunctions -- always a prefix in
+    this project's yulCFGJson (already assumed elsewhere, e.g. liveness.in unconditionally lists
+    every phi output as live-in regardless of position). The constancy array
+    (propagation.compute_block_constancy) has one fewer entry per one of these: they execute in
+    parallel with each other and with nothing else, before any real instruction runs, so they
+    never get their own separate slot the way an ordinary sequential instruction does.
+    """
+    count = 0
+    for instr in instructions:
+        if instr.get("op") != "PhiFunction":
+            break
+        count += 1
+    return count
+
+
 def _direct_literal_table(instructions: List[Dict[str, Any]]) -> Dict[var_id_T, constant_T]:
     """
     {var: literal} for every variable directly assigned a literal (LiteralAssignment) within

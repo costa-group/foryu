@@ -17,7 +17,7 @@ from typing import Dict, Tuple
 
 from constancy.annotate import annotate_constancy
 from constancy.propagation import compute_constancy_for_cfg
-from constancy.seed_extraction import extract_seed_facts_for_contract, iter_block_scopes
+from constancy.seed_extraction import count_leading_phis, extract_seed_facts_for_contract, iter_block_scopes
 from global_params.types import Yul_CFG_T
 from parser.parser import parse_CFG_from_json_dict
 
@@ -44,16 +44,21 @@ def _hash_cfg(yul_cfg_json: Yul_CFG_T) -> str:
 
 def _annotate_with_no_facts(yul_cfg_json: Yul_CFG_T) -> None:
     """
-    Injects an all-empty "constancy" field (one {} per instruction) directly from the raw JSON's
-    own instruction counts, without parsing or running the propagation pass: with zero seed
-    facts there is nothing to propagate (compute_constancy_for_cfg would derive exactly this
-    same all-empty result, just at the cost of a full parse), so a contract whose baseline and
-    probe compiled byte-identical can skip straight to it. Every block still gets the field --
-    CLAUDE.md's documented shape -- just never a non-empty entry.
+    Injects an all-empty "constancy" field directly from the raw JSON's own instruction counts,
+    without parsing or running the propagation pass: with zero seed facts there is nothing to
+    propagate (compute_constancy_for_cfg would derive exactly this same all-empty result, just at
+    the cost of a full parse), so a contract whose baseline and probe compiled byte-identical can
+    skip straight to it. Every block still gets the field -- CLAUDE.md's documented shape -- just
+    never a non-empty entry.
+
+    Length must match what the full pipeline would produce (count_leading_phis,
+    propagation.compute_block_constancy): len(instructions) - leading_phi_count + 1, not
+    unconditionally + 1 -- this is a cheap shortcut for the same contract, not a different one.
     """
     for _, blocks in iter_block_scopes(yul_cfg_json):
         for block in blocks:
-            block["constancy"] = [{} for _ in block.get("instructions", [])]
+            instructions = block.get("instructions", [])
+            block["constancy"] = [{} for _ in range(len(instructions) - count_leading_phis(instructions) + 1)]
 
 
 def annotate_constancy_between(baseline_cfg: Dict[str, Yul_CFG_T],

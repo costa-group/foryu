@@ -26,9 +26,10 @@ class TestStraightLineLiteral:
 
         constancy, exit_constants = compute_block_constancy(block, {})
 
-        assert constancy[0] == {"v0": "0x20"}
-        assert constancy[1] == {"v0": "0x20"}  # last use is instruction 1
-        assert constancy[2] == {}  # dead: no further use, not live-out
+        assert constancy[0] == {}  # v0 not yet defined: live-in slot
+        assert constancy[1] == {"v0": "0x20"}  # after instruction 0 (the LiteralAssignment)
+        assert constancy[2] == {"v0": "0x20"}  # after instruction 1, its last use
+        assert constancy[3] == {}  # dead: no further use, not live-out
         assert exit_constants == {}
 
     def test_result_is_also_stored_on_the_block(self):
@@ -48,7 +49,10 @@ class TestSeedFacts:
 
         constancy, _ = compute_block_constancy(block, {0: {"v9": "0x2a"}})
 
+        # v9 is live-in and not defined in-block, so it's already known from the leading
+        # live-in slot, through its last use at instruction 0
         assert constancy[0] == {"v9": "0x2a"}
+        assert constancy[1] == {"v9": "0x2a"}
 
     def test_live_in_constant_confirmed_anywhere_is_known_from_block_entry(self):
         # SSA guarantees v9 never changes value, so once confirmed (here, only at
@@ -62,6 +66,7 @@ class TestSeedFacts:
 
         assert constancy[0] == {"v9": "0x2a"}
         assert constancy[1] == {"v9": "0x2a"}
+        assert constancy[2] == {"v9": "0x2a"}  # last use is instruction 1
 
     def test_variable_with_no_use_and_not_live_out_never_appears(self):
         block = make_block("B6", [
@@ -71,7 +76,7 @@ class TestSeedFacts:
 
         constancy, exit_constants = compute_block_constancy(block, {})
 
-        assert constancy == [{}, {}]
+        assert constancy == [{}, {}, {}]
         assert exit_constants == {}
 
 
@@ -92,10 +97,11 @@ class TestInternalSeedFactConflict:
 
         constancy, _ = compute_block_constancy(block, {0: {"v0": "0xff"}, 1: {"v9": "0x2a"}})
 
-        assert constancy[0] == {"v0": "0x20"}  # unaffected: read directly off the LiteralAssignment
-        assert constancy[1] == {"v0": "0x20"}  # still alive, still correct
+        assert constancy[0] == {}  # v0 not yet defined: live-in slot
+        assert constancy[1] == {"v0": "0x20"}  # unaffected: read directly off the LiteralAssignment
         assert "v9" not in constancy[1]  # discarded, even though nothing of its own conflicted
-        assert constancy[2] == {"v0": "0x20"}
+        assert constancy[2] == {"v0": "0x20"}  # still alive, still correct
+        assert constancy[3] == {"v0": "0x20"}  # last use is instruction 2
 
     def test_two_disagreeing_seed_facts_for_the_same_variable_are_also_caught(self):
         block = make_block("B2", [
@@ -120,6 +126,9 @@ class TestPhiFunction:
         predecessor_constants = {"PredA": {"v10": "0x2a"}, "PredB": {"v20": "0x2a"}}
         constancy, _ = compute_block_constancy(block, {}, predecessor_constants)
 
+        # phi1 resolves in parallel with the block's other phis (here, just itself), so it's
+        # already known at the live-in slot, not staggered to start only after its own position.
+        # The phi doesn't get its own array slot either -- length is 2 (live-in + mstore), not 3.
         assert constancy[0] == {"phi1": "0x2a"}
         assert constancy[1] == {"phi1": "0x2a"}
 
@@ -136,7 +145,9 @@ class TestPhiFunction:
         assert constancy[1] == {}
 
     def test_unresolved_predecessor_infers_nothing(self):
-        # PredB hasn't been processed yet (e.g. reachable only through a loop back edge)
+        # PredB hasn't been processed yet (e.g. reachable only through a loop back edge). The
+        # block is just the one phi and no real instructions, so constancy is length 1 (just the
+        # live-in slot).
         block = make_block("B2", [make_instr("PhiFunction", ["v10", "v20"], ["phi1"])],
                            entries=["PredA", "PredB"])
 
@@ -152,6 +163,7 @@ class TestPhiFunction:
 
         constancy, _ = compute_block_constancy(block, {}, {"PredB": {"v20": "0x2a"}})
 
+        # already known at the live-in slot, same reasoning as above -- length 2, not 3
         assert constancy[0] == {"phi1": "0x2a"}
         assert constancy[1] == {"phi1": "0x2a"}
 
@@ -163,8 +175,34 @@ class TestPhiFunction:
 
         constancy, _ = compute_block_constancy(block, {0: {"phi1": "0x05"}})
 
+        # already known at the live-in slot, same reasoning as above -- length 2, not 3
         assert constancy[0] == {"phi1": "0x05"}
         assert constancy[1] == {"phi1": "0x05"}
+
+    def test_multiple_leading_phis_resolve_in_parallel_and_share_the_live_in_slot(self):
+        # Mirrors a real contract (abi_encode_array_uint256's Block1): three leading
+        # PhiFunctions followed by one real instruction ("lt"). Every phi resolves at the same
+        # program point (the block's live-in state, based purely on which predecessor edge was
+        # taken) -- none of them, individually or together, get their own array slot -- so the
+        # whole block is exactly two entries: the live-in state (all three phis resolved) and
+        # the state after lt runs (that same state plus lt's own new fact, v6).
+        block = make_block("B2", [
+            make_instr("PhiFunction", ["v10", "v20"], ["phi1"]),
+            make_instr("PhiFunction", ["v11", "v21"], ["phi2"]),
+            make_instr("PhiFunction", ["v12", "v22"], ["phi3"]),
+            make_instr("lt", ["v0", "phi1"], ["v6"]),
+        ], entries=["PredA", "PredB"], liveness_out=["phi1", "phi2", "phi3", "v6"])
+
+        predecessor_constants = {
+            "PredA": {"v10": "0x2a", "v11": "0x05", "v12": "0x07"},
+            "PredB": {"v20": "0x2a", "v21": "0x05", "v22": "0x07"},
+        }
+        constancy, _ = compute_block_constancy(block, {3: {"v6": "0x99"}}, predecessor_constants)
+
+        resolved_phis = {"phi1": "0x2a", "phi2": "0x05", "phi3": "0x07"}
+        assert len(constancy) == 2
+        assert constancy[0] == resolved_phis
+        assert constancy[1] == {**resolved_phis, "v6": "0x99"}
 
 
 class TestLiveOut:
@@ -176,8 +214,9 @@ class TestLiveOut:
 
         constancy, exit_constants = compute_block_constancy(block, {})
 
-        assert constancy[0] == {"v5": "0x07"}
+        assert constancy[0] == {}  # v5 not yet defined: live-in slot
         assert constancy[1] == {"v5": "0x07"}
+        assert constancy[2] == {"v5": "0x07"}
         assert exit_constants == {"v5": "0x07"}
 
 
@@ -186,8 +225,8 @@ class TestFunctionReturnExit:
         # Mirrors what CFGBlock._process_instructions_from_function_return appends for a
         # FunctionReturn exit: a synthetic "functionReturn" instruction that never appears in
         # the raw yulCFGJson block's "instructions" array. The reported constancy list must
-        # stay the same length as that raw array (one entry per real instruction), not grow
-        # by one for this synthetic instruction.
+        # stay one entry longer than that raw array (one live-in slot, plus one entry per real
+        # instruction), not grow by a second one for this synthetic instruction.
         block = make_block("B7", [
             make_instr("LiteralAssignment", ["0x2a"], ["v0"]),
             make_instr("functionReturn", ["v0"], []),
@@ -195,7 +234,7 @@ class TestFunctionReturnExit:
 
         constancy, exit_constants = compute_block_constancy(block, {})
 
-        assert constancy == [{"v0": "0x2a"}]
+        assert constancy == [{}, {"v0": "0x2a"}]
         assert exit_constants == {"v0": "0x2a"}
 
     def test_empty_block_with_only_a_function_return_reports_no_instructions(self):
@@ -203,7 +242,7 @@ class TestFunctionReturnExit:
 
         constancy, _ = compute_block_constancy(block, {})
 
-        assert constancy == []
+        assert constancy == [{}]  # just the leading live-in slot, no instructions
 
 
 class TestBlockListIntegration:
@@ -237,7 +276,9 @@ class TestBlockListIntegration:
 
         constancy_per_block, _ = compute_constancy_for_block_list(block_list, {})
 
+        # already known at the live-in slot, same reasoning as TestPhiFunction's cases above
         assert constancy_per_block["Merge"][0] == {"phi_merge": "0x2a"}
+        assert constancy_per_block["Merge"][1] == {"phi_merge": "0x2a"}
 
     def test_phi_across_a_diamond_with_different_literals_infers_nothing(self):
         start = make_block("Start", [])

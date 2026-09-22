@@ -4,7 +4,7 @@ import shutil
 
 import pytest
 
-from constancy.seed_extraction import iter_block_scopes
+from constancy.seed_extraction import count_leading_phis, iter_block_scopes
 from full_constancy_trace import _wrap_in_original_structure, process_standard_json
 
 _requires_solc = pytest.mark.skipif(shutil.which("solc") is None, reason="solc is not available on PATH")
@@ -57,7 +57,10 @@ def test_trace_runs_cleanly_and_produces_well_formed_entries(request, fixture_na
                     # annotation entirely -- only blocks that were actually annotated are
                     # required to have the field, and correctly shaped where they do
                     if "constancy" in block:
-                        assert len(block["constancy"]) == len(block["instructions"])
+                        # one entry per real (non-leading-phi) instruction, plus the leading
+                        # live-in slot that also absorbs every leading PhiFunction
+                        instructions = block["instructions"]
+                        assert len(block["constancy"]) == len(instructions) - count_leading_phis(instructions) + 1
 
 
 @_requires_solc

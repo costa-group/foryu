@@ -96,18 +96,25 @@ def compute_block_constancy(block: CFGBlock, seed_facts_for_block: block_seed_fa
                             predecessor_constants: Optional[Dict[block_id_T, exit_constants_T]] = None) -> \
         Tuple[List[instruction_constancy_T], exit_constants_T]:
     """
-    Computes the per-instruction constancy list for a single block (length == the number of
-    instructions in the raw yulCFGJson block, i.e. excluding the synthetic "functionReturn"
-    CFGBlock._process_instructions_from_function_return appends for a FunctionReturn exit --
-    that instruction never appears in the raw JSON's "instructions" array, and its returned
-    variables are always already part of block.liveness["out"] by construction, so dropping it
-    loses no information), plus the subset of known constants that are still live at the
-    block's exit (for the caller to pass on as predecessor_constants to successors).
+    Computes the per-instruction constancy list for a single block (excluding the synthetic
+    "functionReturn" CFGBlock._process_instructions_from_function_return appends for a
+    FunctionReturn exit -- that instruction never appears in the raw JSON's "instructions" array,
+    and its returned variables are always already part of block.liveness["out"] by construction,
+    so dropping it loses no information), plus the subset of known constants that are still live
+    at the block's exit (for the caller to pass on as predecessor_constants to successors).
 
     seed_facts_for_block gives, per instruction index, the {var: literal} facts discovered
     for that instruction by the seed extraction pass; predecessor_constants gives, per
     already-processed predecessor block id, the constants known at *its* exit (used only to
     resolve PhiFunction inputs).
+
+    Length is len(instructions) - leading_phi_count + 1, not unconditionally + 1
+    (seed_extraction.count_leading_phis): every PhiFunction in a block resolves in parallel with
+    the others based on which predecessor edge was actually taken, before any real instruction
+    runs, and -- since a block's PhiFunctions are always a leading prefix -- they never get their
+    own separate slot the way an ordinary sequential instruction does; they're absorbed entirely
+    into the leading live-in slot (index 0). Entry i (i >= 1) is the state immediately after the
+    i-th *real* (non-phi) instruction runs.
     """
     predecessor_constants = predecessor_constants or {}
     instructions = [instr for instr in block.get_instructions() if instr.get_op_name() != "functionReturn"]
@@ -117,6 +124,20 @@ def compute_block_constancy(block: CFGBlock, seed_facts_for_block: block_seed_fa
         logging.warning(f"Seed facts for block {block.get_block_id()} disagree with each other or with a "
                         f"direct LiteralAssignment; discarding all of them for this block")
         seed_facts_for_block = {}
+
+    # Mirrors seed_extraction.count_leading_phis, but over parsed CFGInstruction objects rather
+    # than raw yulCFGJson dicts -- the two representations don't share an interface, so this
+    # can't just call that helper directly.
+    leading_phi_count = 0
+    for instr in instructions:
+        if instr.get_op_name() != "PhiFunction":
+            break
+        leading_phi_count += 1
+
+    def result_index(raw_idx: int) -> int:
+        # -1 (live-in) and any leading-phi position both collapse to the live-in slot (0) --
+        # nothing meaningfully happens until the first real instruction runs
+        return max(raw_idx - leading_phi_count + 1, 0)
 
     known: Dict[var_id_T, constant_T] = {}
     definition_idx: Dict[var_id_T, int] = {}
@@ -147,7 +168,13 @@ def compute_block_constancy(block: CFGBlock, seed_facts_for_block: block_seed_fa
 
         elif op == "PhiFunction":
             out_var = out_args[0]
-            definition_idx[out_var] = idx
+            # Deliberately not recorded in definition_idx (unlike every other kind of
+            # instruction): every PhiFunction in a block resolves in parallel with the others,
+            # selecting a value based on whichever predecessor edge was actually taken, before
+            # any real instruction in the block runs -- matching liveness.in, which already
+            # lists every phi output as live-in rather than as an in-block-only definition.
+            # Leaving it unset makes definition_idx.get(var, -1) default to -1 below, i.e.
+            # "already known from the live-in slot", exactly like any other live-in variable.
 
             fact = seed_facts_for_block.get(idx, {}).get(out_var)
             if fact is not None:
@@ -167,17 +194,26 @@ def compute_block_constancy(block: CFGBlock, seed_facts_for_block: block_seed_fa
                 _record(var, value)
 
     # A known-constant variable is reported at every program point where it is both known
-    # and (per a simple in-block last-use scan, or block-exit liveness) still live
-    result: List[instruction_constancy_T] = [{} for _ in instructions]
+    # and (per a simple in-block last-use scan, or block-exit liveness) still live. result[0]
+    # is the leading live-in slot (state before any real instruction runs, absorbing every
+    # leading PhiFunction); result[i] for i >= 1 is the state immediately after the i-th real
+    # instruction runs -- see result_index above for the raw-instruction-index -> array-index
+    # mapping that accounts for the leading phis not getting their own slot.
+    result: List[instruction_constancy_T] = [{} for _ in range(len(instructions) - leading_phi_count + 1)]
 
     for var, value in known.items():
-        start = definition_idx.get(var, 0)  # 0 for live-in variables, already constant on entry
+        start = result_index(definition_idx.get(var, -1))  # -1 for live-in variables, already constant on entry
         if var in out_live:
-            end = len(instructions) - 1
+            end_raw = len(instructions) - 1
         else:
-            end = last_use_idx.get(var)
-        if end is None or end < start:
+            end_raw = last_use_idx.get(var)
+        if end_raw is None:
             continue  # defined but never used in-block and not live-out: never appears
+
+        end = result_index(end_raw)
+        if end < start:
+            continue
+
         for i in range(start, end + 1):
             result[i][var] = value
 

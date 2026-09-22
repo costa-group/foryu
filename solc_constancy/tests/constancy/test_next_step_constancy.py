@@ -2,7 +2,7 @@ import shutil
 
 import pytest
 
-from constancy.seed_extraction import iter_block_scopes
+from constancy.seed_extraction import count_leading_phis, iter_block_scopes
 from execution.sol_compilation import DEFAULT_OPTIMIZER_SEQUENCE
 from next_step_constancy import compute_constancy_for_next_step
 
@@ -23,7 +23,10 @@ def test_constancy_field_present_and_correctly_shaped_on_every_block(constant_lo
     for yul_cfg_json in annotated.values():
         for block in _all_blocks(yul_cfg_json):
             assert "constancy" in block
-            assert len(block["constancy"]) == len(block["instructions"])
+            # one entry per real (non-leading-phi) instruction, plus the leading live-in slot
+            # that also absorbs every leading PhiFunction
+            instructions = block["instructions"]
+            assert len(block["constancy"]) == len(instructions) - count_leading_phis(instructions) + 1
 
 
 def test_more_aggressive_baseline_recovers_the_local_constant(constant_local_contract_input):
