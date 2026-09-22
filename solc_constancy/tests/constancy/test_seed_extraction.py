@@ -1,4 +1,5 @@
-from constancy.seed_extraction import (_match_scope, extract_seed_facts_for_contract,
+from constancy.seed_extraction import (_fold_conditional_exit, _literal_value_table, _match_scope,
+                                       _merge_trivial_blocks, extract_seed_facts_for_contract,
                                        extract_seed_facts_for_instructions, is_literal, isolate_cleanup_sequence,
                                        iter_block_scopes, match_block_instructions, probe_sequence,
                                        with_stack_allocation_disabled)
@@ -250,6 +251,177 @@ class TestMatchScope:
         correspondence, _, _ = _match_scope(baseline, probe)
 
         assert correspondence == {"A": "A", "B": "B", "C": "C", "T1": "U1", "T2": "U2"}
+
+
+class TestFoldConditionalExit:
+    def test_folds_a_provably_true_condition_to_the_jump_to_target(self):
+        block = {"exit": {"type": "ConditionalJump", "cond": "v3", "targets": ["B4", "B2"]}}
+        assert _fold_conditional_exit(block, {"v3": "0x01"}) == {"type": "Jump", "targets": ["B2"]}
+
+    def test_folds_a_provably_false_condition_to_the_falls_to_target(self):
+        block = {"exit": {"type": "ConditionalJump", "cond": "v3", "targets": ["B4", "B2"]}}
+        assert _fold_conditional_exit(block, {"v3": "0x00"}) == {"type": "Jump", "targets": ["B4"]}
+
+    def test_leaves_an_unresolvable_condition_unchanged(self):
+        exit_ = {"type": "ConditionalJump", "cond": "v3", "targets": ["B4", "B2"]}
+        assert _fold_conditional_exit({"exit": exit_}, {}) is exit_
+
+    def test_leaves_a_non_conditional_exit_unchanged(self):
+        exit_ = {"type": "Jump", "targets": ["B1"]}
+        assert _fold_conditional_exit({"exit": exit_}, {"v3": "0x01"}) is exit_
+
+
+class TestLiteralValueTable:
+    def test_tracks_a_direct_literal_assignment(self):
+        blocks = [
+            {"id": "B0", "exit": {"type": "Terminated", "targets": []},
+             "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
+        ]
+        assert _literal_value_table(blocks)["B0"] == {"v3": "0x01"}
+
+    def test_threads_a_literal_forward_through_a_block_with_no_own_literal(self):
+        blocks = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
+             "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
+            {"id": "B1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+        assert _literal_value_table(blocks)["B1"] == {"v3": "0x01"}
+
+    def test_drops_a_variable_when_predecessors_disagree(self):
+        blocks = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B1", "B2"]},
+             "instructions": [{"in": ["v0"], "op": "iszero", "out": ["c"]}]},
+            {"id": "B1", "exit": {"type": "Jump", "targets": ["B3"]},
+             "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
+            {"id": "B2", "exit": {"type": "Jump", "targets": ["B3"]},
+             "instructions": [{"in": ["0x02"], "op": "LiteralAssignment", "out": ["v3"]}]},
+            {"id": "B3", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+        assert "v3" not in _literal_value_table(blocks)["B3"]
+
+
+class TestMergeTrivialBlocks:
+    def test_absorbs_a_block_left_behind_by_folding_a_provably_true_condition(self):
+        # Mirrors the real abi_encode_array_address shape: B1's branch on v3 (always 0x01,
+        # defined in B0) folds to unconditional, and since B2 (the real loop-check content) then
+        # has B1 as its sole effective predecessor, B2 gets absorbed into B1. B4 (the dead
+        # branch's target) is simply left behind, unreachable but still present -- nothing
+        # merges into or out of it, since nothing else points to it any more and its own exit
+        # has no successor to fold.
+        blocks = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
+             "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
+            {"id": "B1", "exit": {"type": "ConditionalJump", "cond": "v3", "targets": ["B4", "B2"]},
+             "instructions": []},
+            {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "B2", "exit": {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]},
+             "instructions": [{"in": ["0x0f", "x"], "op": "lt", "out": ["c2"]}]},
+            {"id": "B6", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "B5", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+
+        working = _merge_trivial_blocks(blocks)
+
+        assert [b["id"] for b in working] == ["B0", "B1", "B4", "B6", "B5"]
+        b1 = next(b for b in working if b["id"] == "B1")
+        assert b1["exit"] == {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]}
+        assert b1["_members"] == {"B1", "B2"}
+        assert b1["_provenance"] == [("B2", 0)]
+
+    def test_never_absorbs_a_block_with_a_phi_function_even_if_effectively_single_predecessor(self):
+        blocks = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
+             "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
+            {"id": "B1", "exit": {"type": "ConditionalJump", "cond": "v3", "targets": ["B4", "B2"]},
+             "instructions": []},
+            {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "B2", "entries": ["B1"], "exit": {"type": "Terminated", "targets": []},
+             "instructions": [{"in": ["v9", "v9"], "op": "PhiFunction", "out": ["phi"]}]},
+        ]
+
+        working = _merge_trivial_blocks(blocks)
+
+        assert [b["id"] for b in working] == ["B0", "B1", "B4", "B2"]
+
+    def test_never_merges_a_plain_unconditional_chain_folding_never_touched(self):
+        # No ConditionalJump anywhere -- nothing to fold -- so B0/B1 stay separate, preserving
+        # the block-by-block var_map seeding _match_scope relies on to disambiguate an
+        # otherwise-ambiguous instruction (see the module docstring)
+        blocks = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
+             "instructions": [{"in": ["v9", "v0"], "op": "sub", "out": ["v10"]}]},
+            {"id": "B1", "exit": {"type": "Terminated", "targets": []},
+             "instructions": [{"in": ["v9", "v100"], "op": "sub", "out": ["v60"]}]},
+        ]
+
+        working = _merge_trivial_blocks(blocks)
+
+        assert [b["id"] for b in working] == ["B0", "B1"]
+
+    def test_members_include_an_absorbed_block_with_zero_instructions(self):
+        blocks = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
+             "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
+            {"id": "B1", "exit": {"type": "ConditionalJump", "cond": "v3", "targets": ["B4", "B2"]},
+             "instructions": []},
+            {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},  # no instructions
+        ]
+
+        working = _merge_trivial_blocks(blocks)
+
+        b1 = next(b for b in working if b["id"] == "B1")
+        assert b1["_members"] == {"B1", "B2"}
+        assert b1["_provenance"] == []
+
+
+class TestExtractSeedFactsForContractNormalization:
+    def test_recovers_a_fact_behind_a_block_eliminated_by_folding_a_provably_true_condition(self):
+        # Same shape as TestMatchScope.
+        # test_a_block_whose_sole_route_in_is_a_loop_back_edge_stays_unresolved's baseline, but
+        # probe's literal now agrees with baseline's (both 0x01) -- so, unlike that test, the
+        # branch really is the same provable constant on both sides, and solc eliminating the
+        # precheck block entirely in probe is something extract_seed_facts_for_contract's
+        # normalization can now see through, recovering the downstream fact (v3, used again in
+        # B2's `add`, is known to be 0x01) that a block-level mismatch would otherwise hide.
+        baseline = {
+            "type": "Object",
+            "Main": {
+                "blocks": [
+                    {"id": "A", "exit": {"type": "Jump", "targets": ["B1"]},
+                     "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
+                    {"id": "B1", "exit": {"type": "ConditionalJump", "cond": "v3", "targets": ["B4", "B2"]},
+                     "instructions": []},
+                    {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                    {"id": "B2", "exit": {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]},
+                     "instructions": [{"in": ["0x0f", "x"], "op": "lt", "out": ["c2"]},
+                                       {"in": ["v3", "x"], "op": "add", "out": ["v13"]}]},
+                    {"id": "B6", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                    {"id": "B5", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                ],
+                "functions": {}, "subObjects": {},
+            },
+        }
+        probe = {
+            "type": "Object",
+            "Main": {
+                "blocks": [
+                    {"id": "A", "exit": {"type": "Jump", "targets": ["B2"]},
+                     "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v2"]}]},
+                    {"id": "B2", "exit": {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]},
+                     "instructions": [{"in": ["0x0f", "x"], "op": "lt", "out": ["c2"]},
+                                       {"in": ["0x01", "x"], "op": "add", "out": ["v13"]}]},
+                    {"id": "B6", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                    {"id": "B5", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                    {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                ],
+                "functions": {}, "subObjects": {},
+            },
+        }
+
+        facts = extract_seed_facts_for_contract(baseline, probe)
+
+        assert facts == {(("Main",), "B2", 1, "v3"): "0x01"}
 
 
 class TestProbeSequence:

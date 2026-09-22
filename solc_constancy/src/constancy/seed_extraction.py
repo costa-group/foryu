@@ -77,27 +77,44 @@ position, naming the predecessor block that produced it -- rather than trusting 
 branch-condition check itself also recognizes a negated condition (solc wrapping/unwrapping an
 `iszero` and swapping the two branch targets accordingly), not just a literal match.
 
-This catches genuinely ambiguous cases, but it cannot catch every one. Two distinct, accepted
-gaps:
-- A real, previously-investigated case (see PROGRESS.md) turned out to be caused by solc's
-  `StackCompressor` -- a mandatory phase, unrelated to any step this module is asked to probe,
-  that can duplicate or restructure large amounts of code to resolve "stack too deep"
-  situations, sensitive to stack-pressure differences one extra step can introduce. Since the
-  resulting block-count shift can happen inside an otherwise-uniform, single-predecessor chain,
-  it produces no observable ambiguity for any purely local block matcher (id-based or
-  structural) to catch -- `with_stack_allocation_disabled` (below) is the actual fix for that
-  class, used by isolated probing callers (`occurrence_trace.py`, `annotate_single_step.py` via
-  `extract_seed_facts`'s `disable_stack_allocation` parameter).
-- A block whose only non-backward predecessor is itself unresolved stays unresolved too, even
-  when that's a real, principled dead end rather than a matching weakness: traced directly
-  against a real contract (`NFTMarketWrap`, occurrence `T3`, scope `abi_encode_array_address`)
-  a block whose `ConditionalJump` branches on a variable that's provably a compile-time literal
-  (a `LiteralAssignment` from several blocks up) gets eliminated outright by solc's block-joiner
-  once an extra constant-propagating step makes that provable -- there is no counterpart block
-  in probe at all, and the block's other route in is a loop back-edge, unavailable in this
-  single-forward-pass design. No amount of predecessor-fact merging recovers a block that
-  genuinely no longer exists; this is left unresolved on purpose (see
-  `TestMatchScope.test_a_block_whose_sole_route_in_is_a_loop_back_edge_stays_unresolved`).
+This catches genuinely ambiguous cases, but it cannot catch every one -- a real, previously-
+investigated case (see PROGRESS.md) turned out to be caused by solc's `StackCompressor` -- a
+mandatory phase, unrelated to any step this module is asked to probe, that can duplicate or
+restructure large amounts of code to resolve "stack too deep" situations, sensitive to stack-
+pressure differences one extra step can introduce. Since the resulting block-count shift can
+happen inside an otherwise-uniform, single-predecessor chain, it produces no observable ambiguity
+for any purely local block matcher (id-based or structural) to catch --
+`with_stack_allocation_disabled` (below) is the actual fix for that class, used by isolated
+probing callers (`occurrence_trace.py`, `annotate_single_step.py` via `extract_seed_facts`'s
+`disable_stack_allocation` parameter).
+
+A block whose `ConditionalJump` branches on a variable that's provably a compile-time literal
+(a `LiteralAssignment`, possibly several blocks up) can get eliminated outright by solc's block-
+joiner once an extra constant-propagating step makes that provable, leaving no counterpart block
+in probe at all -- traced directly on a real contract (`NFTMarketWrap`, occurrence `T3`, scope
+`abi_encode_array_address`). Block-correspondence resolution alone can't see through this (the
+eliminated block's other route in is typically a loop back-edge, unavailable in this single-
+forward-pass design either way), so `extract_seed_facts_for_contract` normalizes a *copy* of each
+scope's blocks before matching (`_merge_trivial_blocks`): fold a `ConditionalJump` whose condition
+resolves to a known literal (`_literal_value_table`, a forward dominance-order walk tracking
+direct `LiteralAssignment`s only -- deliberately not a general constant-folding engine) into an
+unconditional `Jump`, then repeatedly absorb a block into its sole remaining effective predecessor
+wherever that's now a trivial 1-in/1-out edge -- never a block that still carries a `PhiFunction`,
+even if one of its *other* raw incoming edges happens to fold away elsewhere, since that would
+leave a stale, still-ambiguous phi inside a block now pretending to have only one route in. Each
+working block tracks which original block/instruction each of its own instructions came from, so
+every fact `_match_scope` finds is translated back to the real, unmerged baseline's addressing
+before being returned -- the annotated CFG itself is never touched, only how facts are discovered
+about it (mirrors `with_stack_allocation_disabled`'s own baseline/discovery split, just at the
+block-matching layer instead of the compile layer). This only folds a *directly*-literal
+condition; it does not, and isn't meant to, catch a branch that becomes dead for a genuinely
+different reason -- e.g. comparing two structurally-identical subexpressions
+(`eq(calldataload(x), calldataload(x))`, always true regardless of `x`'s actual runtime value) is
+CommonSubexpressionEliminator/ExpressionSimplifier's own value-numbering judgment, not a constant
+one, and replicating it here would mean re-deriving a piece of solc's own optimizer logic rather
+than comparing its output -- confirmed as the dominant cause of `ExpressionSimplifier`'s much
+larger, *unaddressed* block-count collapses (one real function goes from 39 blocks to 1: 18 of 19
+branches are exactly this shape, only 1 is a foldable literal comparison).
 """
 import copy
 import logging
@@ -641,6 +658,167 @@ def _reorder_phi_args(baseline_block: Dict[str, Any], probe_block: Dict[str, Any
     return reordered
 
 
+def _literal_value_table(blocks: List[Dict[str, Any]]) -> Dict[block_id_T, Dict[var_id_T, constant_T]]:
+    """
+    Per block, which variables are provably a compile-time literal at that point -- a forward
+    dominance-order walk (mirroring the var_map seeding _match_scope already does), seeded from
+    predecessors (a disagreement between predecessors drops that variable, same "unknown, not a
+    guess" rule used everywhere else in this module) and extended by any block-local
+    LiteralAssignment. Deliberately simple: direct LiteralAssignment only, no folding through
+    arithmetic (see the module docstring for what this is, and isn't, used for).
+    """
+    by_id = {block["id"]: block for block in blocks}
+    predecessors = _predecessors(blocks)
+    table: Dict[block_id_T, Dict[var_id_T, constant_T]] = {}
+
+    for block_id in _block_dominance_order(blocks):
+        block = by_id[block_id]
+        seed: Dict[var_id_T, constant_T] = {}
+        conflicting: set = set()
+        for predecessor_id in predecessors.get(block_id, []):
+            predecessor_table = table.get(predecessor_id)
+            if predecessor_table is None:
+                continue  # not yet processed -- e.g. reachable only via a loop back edge
+            for var, value in predecessor_table.items():
+                if var in seed and seed[var] != value:
+                    conflicting.add(var)
+                else:
+                    seed[var] = value
+        for var in conflicting:
+            del seed[var]  # predecessors disagree -- unknown, not a guess
+
+        local = dict(seed)
+        for instr in block.get("instructions", []):
+            if instr.get("op") == "LiteralAssignment":
+                out, in_ = instr.get("out", []), instr.get("in", [])
+                if len(out) == 1 and len(in_) == 1 and is_literal(in_[0]):
+                    local[out[0]] = in_[0]
+        table[block_id] = local
+
+    return table
+
+
+def _fold_conditional_exit(block: Dict[str, Any],
+                           literal_table_for_block: Dict[var_id_T, constant_T]) -> Dict[str, Any]:
+    """
+    block's exit unchanged, unless it's a ConditionalJump whose condition is a literal or
+    resolves via literal_table_for_block, in which case an unconditional Jump to the
+    corresponding target (targets[0] for "0x00", targets[1] otherwise -- see
+    parser.cfg_block.CFGBlock.set_jump_info): solc can prove a branch always goes one way once
+    the condition is a known compile-time constant, and eliminate the block that only existed to
+    hold that check.
+    """
+    exit_ = block.get("exit", {})
+    if exit_.get("type") != "ConditionalJump":
+        return exit_
+    cond = exit_.get("cond")
+    value = cond if is_literal(cond) else literal_table_for_block.get(cond)
+    if value is None:
+        return exit_
+    target = exit_["targets"][0 if value == "0x00" else 1]
+    return {"type": "Jump", "targets": [target]}
+
+
+def _merge_trivial_blocks(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    A working copy of blocks for matching purposes only (see the module docstring): folds every
+    provably-constant ConditionalJump (_fold_conditional_exit) and then repeatedly absorbs a
+    block into its sole remaining effective predecessor wherever that's now a trivial 1-in/1-out
+    edge -- recomputing effective in-degree from folded exits each round, to a fixpoint, so a
+    whole chain of trivial blocks collapses in one call.
+
+    Only ever absorbs a block *into* a predecessor whose own branch was actually folded (directly,
+    or transitively -- a predecessor that itself already absorbed a folded block counts too): a
+    plain, always-unconditional chain that folding never touched is left alone, matched block by
+    block exactly as before. This matters, not just for minimality -- confirmed directly against a
+    hand-built regression case (two blocks joined by a completely ordinary Jump, no folding
+    involved anywhere) that merging *every* trivial edge, not just ones downstream of a fold,
+    silently destroys the block-by-block var_map seeding `_match_scope` otherwise relies on to
+    disambiguate an otherwise-ambiguous instruction: pooling two blocks' movable instructions
+    together before either is individually resolved can turn a previously-unique match into a
+    multi-way tie. Re-validated on the real contract that this restriction changes nothing else --
+    every merge outside a fold-triggered chain turned out to be unnecessary anyway, since
+    `_match_scope`'s own normal predecessor-by-predecessor resolution already handles a block
+    whose *only* structural issue was a now-dead sibling edge, once that edge is gone from its
+    predecessor's folded exit.
+
+    Also never absorbs a block that carries a PhiFunction (`entries` truthy), even if one of its
+    *other* raw incoming edges happens to fold away elsewhere -- that would leave a stale, still-
+    ambiguous phi inside a block now pretending to have only one route in (verified this
+    restriction costs nothing on a real contract while closing a real gap).
+
+    Each returned working block carries `_provenance` (one (original_block_id,
+    original_instruction_index) pair per instruction, in order -- used to translate a fact found
+    against the working copy back to where it really belongs) and `_members` (every original
+    block id folded into it, tracked explicitly rather than derived from `_provenance`: an
+    absorbed block with zero instructions, e.g. a bare FunctionReturn stub, would otherwise leave
+    no trace at all and wrongly look unresolved to a caller checking coverage).
+    """
+    if not blocks:
+        return []
+
+    literal_table = _literal_value_table(blocks)
+    by_id = {block["id"]: block for block in blocks}
+    order = [block["id"] for block in blocks]
+    entry_id = blocks[0]["id"]
+
+    work: Dict[block_id_T, Dict[str, Any]] = {}
+    for block in blocks:
+        folded_exit = _fold_conditional_exit(block, literal_table.get(block["id"], {}))
+        work[block["id"]] = {
+            "instrs": [(block["id"], idx, instr) for idx, instr in enumerate(block.get("instructions", []))],
+            "exit": folded_exit,
+            "members": {block["id"]},
+            "was_folded": folded_exit is not block.get("exit", {}),
+        }
+
+    def effective_successors(block_id: block_id_T) -> List[block_id_T]:
+        return list(work[block_id]["exit"].get("targets", []) or [])
+
+    progress = True
+    while progress:
+        progress = False
+        effective_predecessors: Dict[block_id_T, List[block_id_T]] = defaultdict(list)
+        for block_id in work:
+            for successor in effective_successors(block_id):
+                if successor in work:
+                    effective_predecessors[successor].append(block_id)
+
+        for block_id in list(work):
+            if block_id == entry_id or by_id[block_id].get("entries"):
+                continue
+            predecessors = effective_predecessors.get(block_id, [])
+            if len(predecessors) != 1:
+                continue
+            predecessor_id = predecessors[0]
+            if predecessor_id == block_id or effective_successors(predecessor_id) != [block_id]:
+                continue
+            if not work[predecessor_id]["was_folded"]:
+                continue  # only chase away blocks left behind by folding a literal branch
+            work[predecessor_id]["instrs"] += work[block_id]["instrs"]
+            work[predecessor_id]["exit"] = work[block_id]["exit"]
+            work[predecessor_id]["members"] |= work[block_id]["members"]
+            work[predecessor_id]["was_folded"] = work[predecessor_id]["was_folded"] or work[block_id]["was_folded"]
+            del work[block_id]
+            progress = True
+            break
+
+    working_blocks = []
+    for block_id in order:
+        if block_id not in work:
+            continue
+        entry = work[block_id]
+        working_blocks.append({
+            "id": block_id,
+            "entries": by_id[block_id].get("entries"),
+            "exit": entry["exit"],
+            "instructions": [instr for (_, _, instr) in entry["instrs"]],
+            "_provenance": [(origin_id, origin_idx) for (origin_id, origin_idx, _) in entry["instrs"]],
+            "_members": entry["members"],
+        })
+    return working_blocks
+
+
 def _match_scope(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[Dict[str, Any]]) -> \
         Tuple[Dict[block_id_T, block_id_T], Dict[block_id_T, var_map_T], Dict[block_id_T, Dict[int, Dict[var_id_T, constant_T]]]]:
     """
@@ -728,7 +906,13 @@ def _match_scope(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[Dict[
 def extract_seed_facts_for_contract(baseline_yul_cfg: Yul_CFG_T, probe_yul_cfg: Yul_CFG_T) -> seed_facts_T:
     """
     Walks every block scope shared between the baseline and probe yulCFGJson of the same
-    contract and extracts all seed facts via _match_scope (see the module docstring).
+    contract and extracts all seed facts via _match_scope, matched against a normalized working
+    copy of each scope's blocks (_merge_trivial_blocks -- see the module docstring) rather than
+    the raw blocks directly. Every fact found (and the "no unique structural correspondence"
+    check) is translated back to the real, unmerged baseline's block ids/instruction indices
+    before being returned: this function's contract -- and everything downstream, propagation.py
+    and annotate.py -- is completely unaffected by the normalization; only what gets discovered
+    changes, never the addressing it's reported against or the CFG that gets annotated.
     """
     facts: seed_facts_T = {}
 
@@ -741,18 +925,27 @@ def extract_seed_facts_for_contract(baseline_yul_cfg: Yul_CFG_T, probe_yul_cfg: 
             logging.warning(f"Scope {scope_path} is missing from the probe compilation; skipping")
             continue
 
-        block_correspondence, _, facts_by_block = _match_scope(baseline_blocks, probe_blocks)
+        working_baseline = _merge_trivial_blocks(baseline_blocks)
+        working_probe = _merge_trivial_blocks(probe_blocks)
+        working_baseline_by_id = {block["id"]: block for block in working_baseline}
+
+        block_correspondence, _, facts_by_block = _match_scope(working_baseline, working_probe)
+
+        resolved_original_ids: set = set()
+        for working_id in block_correspondence:
+            resolved_original_ids |= working_baseline_by_id[working_id]["_members"]
 
         for block in baseline_blocks:
-            block_id = block["id"]
-            if block_id not in block_correspondence:
-                logging.warning(f"Block {block_id} in scope {scope_path} has no unique structural "
+            if block["id"] not in resolved_original_ids:
+                logging.warning(f"Block {block['id']} in scope {scope_path} has no unique structural "
                                 f"correspondence in the probe compilation; skipping")
 
-        for block_id, block_facts in facts_by_block.items():
-            for instr_idx, var_facts in block_facts.items():
+        for working_id, block_facts in facts_by_block.items():
+            provenance = working_baseline_by_id[working_id]["_provenance"]
+            for working_instr_idx, var_facts in block_facts.items():
+                origin_block_id, origin_instr_idx = provenance[working_instr_idx]
                 for var, value in var_facts.items():
-                    facts[(scope_path, block_id, instr_idx, var)] = value
+                    facts[(scope_path, origin_block_id, origin_instr_idx, var)] = value
 
     return facts
 
