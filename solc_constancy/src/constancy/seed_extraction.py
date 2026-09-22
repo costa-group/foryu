@@ -120,10 +120,11 @@ branches are exactly this shape, only 1 is a foldable literal comparison).
 import copy
 import logging
 from collections import defaultdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import networkx as nx
 
+from constancy.evm_arithmetic import evaluate as _evaluate_arithmetic
 from execution.sol_compilation import get_yul_details
 from global_params.types import block_id_T, component_name_T, constant_T, var_id_T, Yul_CFG_T
 from graphs.algorithms import compute_dominance_tree
@@ -171,17 +172,55 @@ def is_literal(value: str) -> bool:
     return value.startswith("0x")
 
 
-def _try_unify_instructions(baseline_instr: Dict[str, Any], probe_instr: Dict[str, Any],
-                            var_map: var_map_T) -> Optional[Tuple[List[Tuple[var_id_T, var_id_T]], Dict[var_id_T, constant_T]]]:
+def _direct_literal_table(instructions: List[Dict[str, Any]]) -> Dict[var_id_T, constant_T]:
+    """
+    {var: literal} for every variable directly assigned a literal (LiteralAssignment) within
+    this one instruction list -- a flat scan, no dominance-order/cross-block threading needed
+    (unlike _literal_value_table, which exists for a different concern, cross-block CFG
+    normalization; _try_unify_instructions and everything that calls it only ever need to know
+    about one block's own instructions). Computed for the *probe* side only and used to resolve
+    a probe argument that isn't itself a literal string but is provably one anyway -- e.g. CSE
+    hoists what used to be several per-call-site literal copies into one shared, named variable
+    -- so structural matching doesn't spuriously reject an argument position where baseline
+    inlines a literal directly and probe materializes the identical value through an extra
+    variable. Deliberately never computed/used for the baseline side -- see
+    _try_unify_instructions for why.
+    """
+    table: Dict[var_id_T, constant_T] = {}
+    for instr in instructions:
+        if instr.get("op") == "LiteralAssignment":
+            out, in_ = instr.get("out", []), instr.get("in", [])
+            if len(out) == 1 and len(in_) == 1 and is_literal(in_[0]):
+                table[out[0]] = in_[0]
+    return table
+
+
+def _try_unify_instructions(baseline_instr: Dict[str, Any], probe_instr: Dict[str, Any], var_map: var_map_T,
+                            probe_literal_table: Dict[var_id_T, constant_T]) -> \
+        Optional[Tuple[List[Tuple[var_id_T, var_id_T]], Dict[var_id_T, constant_T]]]:
     """
     Checks whether baseline_instr and probe_instr can be the "same" instruction (the same one,
     before and after a value-substituting step), given the variable correspondences already
     confirmed in var_map. Every argument position must be explained by one of: the same
-    literal on both sides; an already-confirmed (or newly proposed) baseline->probe variable
-    correspondence; or a baseline variable that became a literal in the probe (the actual
-    substitution this whole analysis looks for). Any other kind of difference -- two different
-    symbolic names, two different literals, or a literal turning symbolic -- means these are
-    not really the same instruction, just two that happen to look alike after a shift.
+    literal value on both sides -- a probe argument that isn't itself a literal string is also
+    resolved through probe_literal_table first, so a literal baseline inlines directly still
+    matches a probe variable that's provably the same literal (see _direct_literal_table: e.g.
+    CSE hoists what used to be several per-call-site literal copies into one shared, named
+    variable); an already-confirmed (or newly proposed) baseline->probe variable correspondence;
+    or a baseline variable that became a literal in the probe (the actual substitution this
+    whole analysis looks for). Any other kind of difference -- two different symbolic names, two
+    different literal values, or a literal turning symbolic -- means these are not really the
+    same instruction, just two that happen to look alike after a shift.
+
+    Deliberately one-directional (only probe_arg is resolved through a literal table, never
+    baseline_arg): resolving baseline_arg the same way would silently break the "a baseline
+    variable's own LiteralAssignment vanishes once inlined, and the fact is recorded at its use
+    site instead" mechanism (extract_seed_facts_for_instructions's docstring) -- baseline_arg
+    has to stay symbolic here even when baseline's own table could resolve it, precisely so a
+    probe-side literal at this same position can still be recognized as new information about
+    it (confirmed by a regression this caused during development: resolving both sides made
+    every already-known-literal baseline variable "trivially consistent" with its own probe
+    counterpart instead of reporting the substitution).
 
     Returns (new_unifications, substitution_facts) if consistent, None otherwise. Does not
     mutate var_map -- the caller commits new_unifications only once the whole match is accepted.
@@ -202,14 +241,16 @@ def _try_unify_instructions(baseline_instr: Dict[str, Any], probe_instr: Dict[st
 
     facts: Dict[var_id_T, constant_T] = {}
     for baseline_arg, probe_arg in zip(baseline_in, probe_in):
-        baseline_literal, probe_literal = is_literal(baseline_arg), is_literal(probe_arg)
+        baseline_literal = is_literal(baseline_arg)
+        probe_resolved = probe_arg if is_literal(probe_arg) else probe_literal_table.get(probe_arg)
+        probe_literal = probe_resolved is not None
         if baseline_literal and probe_literal:
-            if baseline_arg != probe_arg:
+            if baseline_arg != probe_resolved:
                 return None
         elif baseline_literal and not probe_literal:
             return None
         elif not baseline_literal and probe_literal:
-            facts[baseline_arg] = probe_arg
+            facts[baseline_arg] = probe_resolved
         else:
             if baseline_arg in var_map and var_map[baseline_arg] != probe_arg:
                 return None
@@ -218,7 +259,8 @@ def _try_unify_instructions(baseline_instr: Dict[str, Any], probe_instr: Dict[st
     return pending, facts
 
 
-def _instruction_correspondences(baseline_instr: Dict[str, Any], probe_instr: Dict[str, Any], var_map: var_map_T) -> \
+def _instruction_correspondences(baseline_instr: Dict[str, Any], probe_instr: Dict[str, Any], var_map: var_map_T,
+                                 probe_literal_table: Dict[var_id_T, constant_T]) -> \
         List[Tuple[List[Tuple[var_id_T, var_id_T]], Dict[var_id_T, constant_T]]]:
     """
     The way baseline_instr could correspond to probe_instr given var_map, as a 0- or 1-element
@@ -238,7 +280,7 @@ def _instruction_correspondences(baseline_instr: Dict[str, Any], probe_instr: Di
     for the *other* argument instead of correctly rejecting the whole instruction (confirmed
     against a real collision case -- see the module docstring's periodic-block example).
     """
-    result = _try_unify_instructions(baseline_instr, probe_instr, var_map)
+    result = _try_unify_instructions(baseline_instr, probe_instr, var_map, probe_literal_table)
     if result is not None:
         return [result]
 
@@ -248,7 +290,7 @@ def _instruction_correspondences(baseline_instr: Dict[str, Any], probe_instr: Di
     if not already_known and probe_instr.get("op") in _COMMUTATIVE_OPS and len(probe_in) == 2 \
             and probe_in[0] != probe_in[1]:
         swapped = {**probe_instr, "in": [probe_in[1], probe_in[0]]}
-        result = _try_unify_instructions(baseline_instr, swapped, var_map)
+        result = _try_unify_instructions(baseline_instr, swapped, var_map, probe_literal_table)
         if result is not None:
             return [result]
 
@@ -261,7 +303,8 @@ def _is_movable(instr: Dict[str, Any]) -> bool:
 
 
 def _match_item_set(baseline_items: List[Tuple[int, Dict[str, Any]]], probe_items: List[Tuple[int, Dict[str, Any]]],
-                    var_map: var_map_T) -> Tuple[Dict[int, Dict[var_id_T, constant_T]], var_map_T, Dict[int, int]]:
+                    var_map: var_map_T, probe_literal_table: Dict[var_id_T, constant_T]) -> \
+        Tuple[Dict[int, Dict[var_id_T, constant_T]], var_map_T, Dict[int, int]]:
     """
     Structurally matches baseline_items against probe_items (each a list of
     (original_instruction_index, instruction) pairs) independent of position, via iterative
@@ -287,7 +330,8 @@ def _match_item_set(baseline_items: List[Tuple[int, Dict[str, Any]]], probe_item
         for b_idx, b_instr in remaining_baseline.items():
             matches = [(p_idx, pending, step_facts)
                       for p_idx, p_instr in remaining_probe.items()
-                      for pending, step_facts in _instruction_correspondences(b_instr, p_instr, var_map)]
+                      for pending, step_facts in _instruction_correspondences(
+                          b_instr, p_instr, var_map, probe_literal_table)]
             if len(matches) == 1:
                 p_idx, pending, step_facts = matches[0]
                 proposals[p_idx].append((b_idx, pending, step_facts))
@@ -309,7 +353,8 @@ def _match_item_set(baseline_items: List[Tuple[int, Dict[str, Any]]], probe_item
 
 
 def _match_anchors(baseline_anchors: List[Tuple[int, Dict[str, Any]]], probe_anchors: List[Tuple[int, Dict[str, Any]]],
-                   var_map: var_map_T) -> Tuple[Dict[int, Dict[var_id_T, constant_T]], var_map_T]:
+                   var_map: var_map_T, probe_literal_table: Dict[var_id_T, constant_T]) -> \
+        Tuple[Dict[int, Dict[var_id_T, constant_T]], var_map_T]:
     """
     Matches a block's anchors (non-movable instructions -- see _is_movable) against the probe's.
     Anchors additionally can't have been reordered relative to each other (that is what makes
@@ -349,7 +394,8 @@ def _match_anchors(baseline_anchors: List[Tuple[int, Dict[str, Any]]], probe_anc
             matches = []
             for p_pos in range(lo[b_pos], hi[b_pos] + 1):
                 p_instr = probe_by_idx[probe_order[p_pos]]
-                for pending, step_facts in _instruction_correspondences(b_instr, p_instr, var_map):
+                for pending, step_facts in _instruction_correspondences(
+                        b_instr, p_instr, var_map, probe_literal_table):
                     matches.append((p_pos, pending, step_facts))
             if len(matches) == 1:
                 p_pos, pending, step_facts = matches[0]
@@ -394,6 +440,7 @@ def match_block_instructions(baseline_instrs: List[Dict[str, Any]], probe_instrs
     and seed_var_map already confirmed.
     """
     var_map: var_map_T = dict(seed_var_map or {})
+    probe_literal_table = _direct_literal_table(probe_instrs)
 
     baseline_anchors: List[Tuple[int, Dict[str, Any]]] = []
     baseline_movable: List[Tuple[int, Dict[str, Any]]] = []
@@ -405,8 +452,8 @@ def match_block_instructions(baseline_instrs: List[Dict[str, Any]], probe_instrs
     for idx, instr in enumerate(probe_instrs):
         (probe_movable if _is_movable(instr) else probe_anchors).append((idx, instr))
 
-    anchor_facts, var_map = _match_anchors(baseline_anchors, probe_anchors, var_map)
-    movable_facts, var_map, _ = _match_item_set(baseline_movable, probe_movable, var_map)
+    anchor_facts, var_map = _match_anchors(baseline_anchors, probe_anchors, var_map, probe_literal_table)
+    movable_facts, var_map, _ = _match_item_set(baseline_movable, probe_movable, var_map, probe_literal_table)
 
     facts: Dict[int, Dict[var_id_T, constant_T]] = defaultdict(dict)
     for idx, var_facts in anchor_facts.items():
@@ -514,6 +561,25 @@ def _defining_instruction(block: Dict[str, Any], var: var_id_T) -> Optional[Dict
     return None
 
 
+def _zero_comparison_target(instr: Dict[str, Any]) -> Optional[var_id_T]:
+    """
+    The operand X if instr computes "X == 0" -- either iszero(X) directly, or eq(0x00, X) /
+    eq(X, 0x00) (eq being commutative, both orderings are checked) -- else None. eq(0, X) and
+    iszero(X) compute the identical boolean; ExpressionSimplifier is free to canonicalize
+    between them, which a plain op-name comparison can't see through on its own.
+    """
+    op, in_ = instr.get("op"), instr.get("in", [])
+    if op == "iszero" and len(in_) == 1:
+        return in_[0]
+    if op == "eq" and len(in_) == 2:
+        a, b = in_
+        if is_literal(a) and a == "0x00" and not is_literal(b):
+            return b
+        if is_literal(b) and b == "0x00" and not is_literal(a):
+            return a
+    return None
+
+
 def _cond_correspondence(baseline_block: Dict[str, Any], probe_block: Dict[str, Any], baseline_cond: var_id_T,
                          probe_cond: var_id_T, var_map: var_map_T) -> Optional[bool]:
     """
@@ -528,6 +594,11 @@ def _cond_correspondence(baseline_block: Dict[str, Any], probe_block: Dict[str, 
     Only falls back to a local structural check (both sides' own defining instruction, via
     _try_unify_instructions -- now against the real var_map, not a throwaway empty one) when
     baseline_cond isn't yet known.
+
+    Also recognizes eq(0x00, X)/eq(X, 0x00) as equivalent to iszero(X) (_zero_comparison_target)
+    -- a real ExpressionSimplifier canonicalization, confirmed on a real contract -- as a
+    *direct* match (not a negation: both compute the identical boolean), independent of the
+    iszero-wrapping checks above.
     """
     if baseline_cond in var_map:
         if var_map[baseline_cond] == probe_cond:
@@ -543,7 +614,7 @@ def _cond_correspondence(baseline_block: Dict[str, Any], probe_block: Dict[str, 
     if baseline_cond_instr is None or probe_cond_instr is None:
         return None
 
-    if _try_unify_instructions(baseline_cond_instr, probe_cond_instr, var_map) is not None:
+    if _try_unify_instructions(baseline_cond_instr, probe_cond_instr, var_map, {}) is not None:
         return True
 
     if baseline_cond_instr.get("op") == "iszero" and len(baseline_cond_instr.get("in", [])) == 1:
@@ -551,7 +622,7 @@ def _cond_correspondence(baseline_block: Dict[str, Any], probe_block: Dict[str, 
         if not is_literal(inner):
             inner_defining = _defining_instruction(baseline_block, inner)
             if inner_defining is not None and \
-                    _try_unify_instructions(inner_defining, probe_cond_instr, var_map) is not None:
+                    _try_unify_instructions(inner_defining, probe_cond_instr, var_map, {}) is not None:
                 return False
 
     if probe_cond_instr.get("op") == "iszero" and len(probe_cond_instr.get("in", [])) == 1:
@@ -559,8 +630,21 @@ def _cond_correspondence(baseline_block: Dict[str, Any], probe_block: Dict[str, 
         if not is_literal(inner):
             inner_defining = _defining_instruction(probe_block, inner)
             if inner_defining is not None and \
-                    _try_unify_instructions(baseline_cond_instr, inner_defining, var_map) is not None:
+                    _try_unify_instructions(baseline_cond_instr, inner_defining, var_map, {}) is not None:
                 return False
+
+    baseline_zero_target = _zero_comparison_target(baseline_cond_instr)
+    probe_zero_target = _zero_comparison_target(probe_cond_instr)
+    if baseline_zero_target is not None and probe_zero_target is not None:
+        if baseline_zero_target in var_map:
+            if var_map[baseline_zero_target] == probe_zero_target:
+                return True
+        elif not is_literal(baseline_zero_target) and not is_literal(probe_zero_target):
+            baseline_inner_defining = _defining_instruction(baseline_block, baseline_zero_target)
+            probe_inner_defining = _defining_instruction(probe_block, probe_zero_target)
+            if baseline_inner_defining is not None and probe_inner_defining is not None and \
+                    _try_unify_instructions(baseline_inner_defining, probe_inner_defining, var_map, {}) is not None:
+                return True
 
     return None
 
@@ -659,14 +743,47 @@ def _reorder_phi_args(baseline_block: Dict[str, Any], probe_block: Dict[str, Any
     return reordered
 
 
+def _resolve_phi_value(block: Dict[str, Any], instr: Dict[str, Any],
+                       table: Dict[block_id_T, Dict[var_id_T, constant_T]]) -> Optional[constant_T]:
+    """
+    The literal value instr's PhiFunction output is provably equal to, or None if it isn't
+    provably one -- using the block's own "entries" list (one predecessor per phi input
+    position, the same convention _reorder_phi_args already relies on) to resolve each input
+    against *its own originating predecessor's* table (not the block's merged seed, which has
+    no notion of "which predecessor" a phi input came from). A predecessor not yet processed
+    (e.g. only reachable via a loop back edge) is simply skipped, exactly like the predecessor-
+    merge below -- matching CLAUDE.md's documented phi rule (no information unless every visible
+    branch agrees on the same constant), just applied edge by edge instead of only stated.
+    """
+    entries = block.get("entries") or []
+    in_ = instr.get("in", [])
+    if len(entries) != len(in_):
+        return None
+
+    values = set()
+    for predecessor_id, phi_input in zip(entries, in_):
+        predecessor_table = table.get(predecessor_id)
+        if predecessor_table is None:
+            continue  # not yet processed -- e.g. reachable only via a loop back edge
+        resolved = phi_input if is_literal(phi_input) else predecessor_table.get(phi_input)
+        if resolved is None:
+            return None  # this predecessor's contribution isn't constant -- neither is the phi
+        values.add(resolved)
+
+    return values.pop() if len(values) == 1 else None
+
+
 def _literal_value_table(blocks: List[Dict[str, Any]]) -> Dict[block_id_T, Dict[var_id_T, constant_T]]:
     """
     Per block, which variables are provably a compile-time literal at that point -- a forward
     dominance-order walk (mirroring the var_map seeding _match_scope already does), seeded from
     predecessors (a disagreement between predecessors drops that variable, same "unknown, not a
-    guess" rule used everywhere else in this module) and extended by any block-local
-    LiteralAssignment. Deliberately simple: direct LiteralAssignment only, no folding through
-    arithmetic (see the module docstring for what this is, and isn't, used for).
+    guess" rule used everywhere else in this module), then extended, instruction by instruction,
+    by: a direct LiteralAssignment; any op evm_arithmetic.evaluate can fold once every one of its
+    arguments is already known (via this same, incrementally-built table, so a later instruction
+    can use an earlier one's folded result within the same block -- e.g. a whole `shl`/`sub`/`gt`
+    chain over literals, not just one direct assignment); or a PhiFunction whose every resolvable
+    predecessor agrees (_resolve_phi_value).
     """
     by_id = {block["id"]: block for block in blocks}
     predecessors = _predecessors(blocks)
@@ -690,10 +807,21 @@ def _literal_value_table(blocks: List[Dict[str, Any]]) -> Dict[block_id_T, Dict[
 
         local = dict(seed)
         for instr in block.get("instructions", []):
-            if instr.get("op") == "LiteralAssignment":
-                out, in_ = instr.get("out", []), instr.get("in", [])
+            op, out, in_ = instr.get("op"), instr.get("out", []), instr.get("in", [])
+            if op == "LiteralAssignment":
                 if len(out) == 1 and len(in_) == 1 and is_literal(in_[0]):
                     local[out[0]] = in_[0]
+            elif op == "PhiFunction":
+                if len(out) == 1:
+                    resolved = _resolve_phi_value(block, instr, table)
+                    if resolved is not None:
+                        local[out[0]] = resolved
+            elif len(out) == 1:
+                operands = [arg if is_literal(arg) else local.get(arg) for arg in in_]
+                if all(operand is not None for operand in operands):
+                    resolved = _evaluate_arithmetic(op, operands)
+                    if resolved is not None:
+                        local[out[0]] = resolved
         table[block_id] = local
 
     return table
@@ -718,6 +846,34 @@ def _fold_conditional_exit(block: Dict[str, Any],
         return exit_
     target = exit_["targets"][0 if value == "0x00" else 1]
     return {"type": "Jump", "targets": [target]}
+
+
+def _reachable_block_ids(blocks: List[Dict[str, Any]]) -> Set[block_id_T]:
+    """
+    Every block id reachable from the scope's entry (blocks[0]) using each block's *folded*
+    exit (_fold_conditional_exit, via _literal_value_table) rather than its raw one -- a block
+    whose only route in was a branch since proven dead (e.g. a revert-only error path behind a
+    condition that's now provably always false) is unreachable here even though it's still
+    physically present in the raw block list, exactly like it would be at runtime. Used to tell
+    genuinely-excluded dead code apart from a real matching failure -- see _merge_trivial_blocks
+    and extract_seed_facts_for_contract.
+    """
+    if not blocks:
+        return set()
+    literal_table = _literal_value_table(blocks)
+    by_id = {block["id"]: block for block in blocks}
+    entry_id = blocks[0]["id"]
+
+    reachable = {entry_id}
+    frontier = [entry_id]
+    while frontier:
+        current = frontier.pop()
+        folded_exit = _fold_conditional_exit(by_id[current], literal_table.get(current, {}))
+        for successor in folded_exit.get("targets", []) or []:
+            if successor in by_id and successor not in reachable:
+                reachable.add(successor)
+                frontier.append(successor)
+    return reachable
 
 
 def _merge_trivial_blocks(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -754,6 +910,14 @@ def _merge_trivial_blocks(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     block id folded into it, tracked explicitly rather than derived from `_provenance`: an
     absorbed block with zero instructions, e.g. a bare FunctionReturn stub, would otherwise leave
     no trace at all and wrongly look unresolved to a caller checking coverage).
+
+    A working block that's become unreachable from the entry (_reachable_block_ids) -- a dead
+    branch target whose only route in was just folded away, e.g. a revert-only error path behind
+    a condition proven always-false -- is dropped from the result entirely, on both sides
+    independently, rather than kept around as an orphan `_match_scope` could never have a
+    predecessor propose a correspondence for regardless of whether it happens to still look
+    identical on both sides: dead code can never contribute a live fact either way, so there is
+    nothing to gain by attempting to match it and no reason to warn about failing to.
     """
     if not blocks:
         return []
@@ -804,9 +968,10 @@ def _merge_trivial_blocks(blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             progress = True
             break
 
+    reachable = _reachable_block_ids(blocks)
     working_blocks = []
     for block_id in order:
-        if block_id not in work:
+        if block_id not in work or block_id not in reachable:
             continue
         entry = work[block_id]
         working_blocks.append({
@@ -936,8 +1101,9 @@ def extract_seed_facts_for_contract(baseline_yul_cfg: Yul_CFG_T, probe_yul_cfg: 
         for working_id in block_correspondence:
             resolved_original_ids |= working_baseline_by_id[working_id]["_members"]
 
+        reachable_baseline_ids = _reachable_block_ids(baseline_blocks)
         for block in baseline_blocks:
-            if block["id"] not in resolved_original_ids:
+            if block["id"] not in resolved_original_ids and block["id"] in reachable_baseline_ids:
                 logging.warning(f"Block {block['id']} in scope {scope_path} has no unique structural "
                                 f"correspondence in the probe compilation; skipping")
 

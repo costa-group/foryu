@@ -1,5 +1,7 @@
+import logging
+
 from constancy.seed_extraction import (_fold_conditional_exit, _literal_value_table, _match_scope,
-                                       _merge_trivial_blocks, extract_seed_facts_for_contract,
+                                       _merge_trivial_blocks, _reachable_block_ids, extract_seed_facts_for_contract,
                                        extract_seed_facts_for_instructions, is_literal, isolate_cleanup_sequence,
                                        iter_block_scopes, match_block_instructions, probe_sequence,
                                        with_stack_allocation_disabled)
@@ -143,6 +145,30 @@ class TestMatchScope:
         probe = [
             {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "x", "targets": ["P_B2", "P_B1"]},
              "instructions": [{"in": ["0x0f", "s0"], "op": "lt", "out": ["x"]}]},
+            {"id": "P_B1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "P_B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+
+        correspondence, _, _ = _match_scope(baseline, probe)
+
+        assert correspondence == {"B0": "B0", "B1": "P_B1", "B2": "P_B2"}
+
+    def test_an_eq_zero_condition_matches_an_iszero_condition_without_swapping_targets(self):
+        # eq(0x00, X) and iszero(X) compute the identical boolean -- a real ExpressionSimplifier
+        # canonicalization (confirmed directly on a real contract: TUPProxy's
+        # fun_verifyCallResultFromTarget), not a negation, so -- unlike the swapped-targets case
+        # above -- target order stays untouched.
+        baseline = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B1", "B2"]},
+             "instructions": [{"in": ["0x0f", "s0"], "op": "lt", "out": ["v0"]},
+                               {"in": ["0x00", "v0"], "op": "eq", "out": ["c"]}]},
+            {"id": "B1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+        probe = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "x", "targets": ["P_B1", "P_B2"]},
+             "instructions": [{"in": ["0x0f", "s0"], "op": "lt", "out": ["y"]},
+                               {"in": ["y"], "op": "iszero", "out": ["x"]}]},
             {"id": "P_B1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
             {"id": "P_B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
         ]
@@ -299,15 +325,72 @@ class TestLiteralValueTable:
         ]
         assert "v3" not in _literal_value_table(blocks)["B3"]
 
+    def test_folds_a_multi_instruction_arithmetic_chain_over_literals(self):
+        # Mirrors the real array_allocation_size_bytes_2988 shape: no direct LiteralAssignment
+        # for the branch condition itself -- it's a whole shl/sub/gt chain, each instruction's
+        # result only known via the table entries the earlier instructions in the same block just
+        # built.
+        blocks = [
+            {"id": "B0", "exit": {"type": "Terminated", "targets": []},
+             "instructions": [
+                 {"in": ["0x01", "0x40"], "op": "shl", "out": ["v0"]},
+                 {"in": ["0x01", "v0"], "op": "sub", "out": ["v1"]},
+                 {"in": ["v1", "0x27"], "op": "gt", "out": ["v2"]},
+             ]},
+        ]
+        assert _literal_value_table(blocks)["B0"] == {
+            "v0": "0x010000000000000000", "v1": "0xffffffffffffffff", "v2": "0x00",
+        }
+
+    def test_resolves_a_phi_function_when_every_predecessor_agrees(self):
+        blocks = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B1", "B2"]},
+             "instructions": [{"in": ["v0"], "op": "iszero", "out": ["c"]}]},
+            {"id": "B1", "exit": {"type": "Jump", "targets": ["B3"]},
+             "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
+            {"id": "B2", "exit": {"type": "Jump", "targets": ["B3"]},
+             "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v4"]}]},
+            {"id": "B3", "entries": ["B1", "B2"], "exit": {"type": "Terminated", "targets": []},
+             "instructions": [{"in": ["v3", "v4"], "op": "PhiFunction", "out": ["phi"]}]},
+        ]
+        assert _literal_value_table(blocks)["B3"]["phi"] == "0x01"
+
+    def test_does_not_resolve_a_phi_function_when_predecessors_disagree(self):
+        blocks = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B1", "B2"]},
+             "instructions": [{"in": ["v0"], "op": "iszero", "out": ["c"]}]},
+            {"id": "B1", "exit": {"type": "Jump", "targets": ["B3"]},
+             "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
+            {"id": "B2", "exit": {"type": "Jump", "targets": ["B3"]},
+             "instructions": [{"in": ["0x02"], "op": "LiteralAssignment", "out": ["v4"]}]},
+            {"id": "B3", "entries": ["B1", "B2"], "exit": {"type": "Terminated", "targets": []},
+             "instructions": [{"in": ["v3", "v4"], "op": "PhiFunction", "out": ["phi"]}]},
+        ]
+        assert "phi" not in _literal_value_table(blocks)["B3"]
+
+    def test_resolves_a_phi_function_from_the_resolved_predecessors_when_one_is_a_loop_back_edge(self):
+        # B3's second entry, B4, is only reachable via B3 itself (a loop back edge) -- not yet
+        # processed when B3's own table is being built (single forward pass, no fixpoint) -- so
+        # it's simply skipped, matching the existing predecessor-merge's "not yet processed" rule.
+        blocks = [
+            {"id": "B1", "exit": {"type": "Jump", "targets": ["B3"]},
+             "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
+            {"id": "B3", "entries": ["B1", "B4"], "exit": {"type": "Jump", "targets": ["B4"]},
+             "instructions": [{"in": ["v3", "v5"], "op": "PhiFunction", "out": ["phi"]}]},
+            {"id": "B4", "exit": {"type": "Jump", "targets": ["B3"]},
+             "instructions": [{"in": ["phi"], "op": "iszero", "out": ["v5"]}]},
+        ]
+        assert _literal_value_table(blocks)["B3"]["phi"] == "0x01"
+
 
 class TestMergeTrivialBlocks:
     def test_absorbs_a_block_left_behind_by_folding_a_provably_true_condition(self):
         # Mirrors the real abi_encode_array_address shape: B1's branch on v3 (always 0x01,
         # defined in B0) folds to unconditional, and since B2 (the real loop-check content) then
         # has B1 as its sole effective predecessor, B2 gets absorbed into B1. B4 (the dead
-        # branch's target) is simply left behind, unreachable but still present -- nothing
-        # merges into or out of it, since nothing else points to it any more and its own exit
-        # has no successor to fold.
+        # branch's target) becomes unreachable once that edge folds away, and is dropped
+        # entirely (_reachable_block_ids) rather than kept around as an orphan nothing could
+        # ever propose a correspondence for anyway.
         blocks = [
             {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
              "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
@@ -322,11 +405,36 @@ class TestMergeTrivialBlocks:
 
         working = _merge_trivial_blocks(blocks)
 
-        assert [b["id"] for b in working] == ["B0", "B1", "B4", "B6", "B5"]
+        assert [b["id"] for b in working] == ["B0", "B1", "B6", "B5"]
         b1 = next(b for b in working if b["id"] == "B1")
         assert b1["exit"] == {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]}
         assert b1["_members"] == {"B1", "B2"}
         assert b1["_provenance"] == [("B2", 0)]
+
+    def test_absorbs_a_block_behind_a_multi_instruction_arithmetic_condition(self):
+        # Same shape as test_absorbs_a_block_left_behind_by_folding_a_provably_true_condition,
+        # but B0's condition is a two-instruction arithmetic chain (sub then iszero) rather than
+        # a direct LiteralAssignment -- the real array_allocation_size_bytes_2988 case this
+        # feature was built for has no direct LiteralAssignment for the condition at all.
+        blocks = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "v2", "targets": ["B4", "B2"]},
+             "instructions": [
+                 {"in": ["0x05", "0x05"], "op": "sub", "out": ["v0"]},
+                 {"in": ["v0"], "op": "iszero", "out": ["v2"]},
+             ]},
+            {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "B2", "exit": {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]},
+             "instructions": [{"in": ["0x0f", "x"], "op": "lt", "out": ["c2"]}]},
+            {"id": "B6", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "B5", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+
+        working = _merge_trivial_blocks(blocks)
+
+        assert [b["id"] for b in working] == ["B0", "B6", "B5"]
+        b0 = next(b for b in working if b["id"] == "B0")
+        assert b0["exit"] == {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]}
+        assert b0["_members"] == {"B0", "B2"}
 
     def test_never_absorbs_a_block_with_a_phi_function_even_if_effectively_single_predecessor(self):
         blocks = [
@@ -341,7 +449,7 @@ class TestMergeTrivialBlocks:
 
         working = _merge_trivial_blocks(blocks)
 
-        assert [b["id"] for b in working] == ["B0", "B1", "B4", "B2"]
+        assert [b["id"] for b in working] == ["B0", "B1", "B2"]
 
     def test_never_merges_a_plain_unconditional_chain_folding_never_touched(self):
         # No ConditionalJump anywhere -- nothing to fold -- so B0/B1 stay separate, preserving
@@ -373,6 +481,26 @@ class TestMergeTrivialBlocks:
         b1 = next(b for b in working if b["id"] == "B1")
         assert b1["_members"] == {"B1", "B2"}
         assert b1["_provenance"] == []
+
+
+class TestReachableBlockIds:
+    def test_drops_a_block_only_reachable_through_a_provably_dead_branch(self):
+        blocks = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "v3", "targets": ["B4", "B2"]},
+             "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
+            {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+        assert _reachable_block_ids(blocks) == {"B0", "B2"}
+
+    def test_keeps_both_branches_when_the_condition_is_not_provably_constant(self):
+        blocks = [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B4", "B2"]},
+             "instructions": []},
+            {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+            {"id": "B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+        ]
+        assert _reachable_block_ids(blocks) == {"B0", "B4", "B2"}
 
 
 class TestExtractSeedFactsForContractNormalization:
@@ -422,6 +550,36 @@ class TestExtractSeedFactsForContractNormalization:
         facts = extract_seed_facts_for_contract(baseline, probe)
 
         assert facts == {(("Main",), "B2", 1, "v3"): "0x01"}
+
+    def test_a_symmetric_unreachable_dead_block_produces_no_warning(self, caplog):
+        # Mirrors the real TUPProxy c4/c5/T2 pattern _reachable_block_ids was added for:
+        # baseline and probe both fold the same branch to provably-true, leaving an identical
+        # dead-revert block (B4) with zero effective predecessors on *both* sides -- a shape
+        # _match_scope's predecessor-propagation can never resolve regardless of content (only
+        # the position-0 entry gets a free anchor). Before the fix this produced a spurious "no
+        # unique structural correspondence" warning purely from that structural gap, even though
+        # the two sides are byte-identical dead code; now B4 is recognized as unreachable and
+        # excluded from the check entirely.
+        def make():
+            return {
+                "type": "Object",
+                "Main": {
+                    "blocks": [
+                        {"id": "A", "exit": {"type": "Jump", "targets": ["B1"]},
+                         "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v3"]}]},
+                        {"id": "B1", "exit": {"type": "ConditionalJump", "cond": "v3", "targets": ["B4", "B2"]},
+                         "instructions": []},
+                        {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                        {"id": "B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
+                    ],
+                    "functions": {}, "subObjects": {},
+                },
+            }
+
+        with caplog.at_level(logging.WARNING):
+            extract_seed_facts_for_contract(make(), make())
+
+        assert not any("no unique structural correspondence" in record.message for record in caplog.records)
 
 
 class TestProbeSequence:
@@ -653,6 +811,49 @@ class TestMatchBlockInstructions:
         facts, _ = match_block_instructions(baseline, probe)
 
         assert facts == {3: {"v20": "0x99"}}
+
+    def test_probe_materializes_a_literal_baseline_inlines_directly(self):
+        # Mirrors a real contract (TUPProxy, external_fun_cancelFreeze): CSE hoists what used to
+        # be several per-call-site literal copies into one shared, named variable -- so baseline
+        # can inline a literal directly (slt(0x00, ...)) while probe references an earlier
+        # same-block LiteralAssignment with the identical value at that same argument position.
+        baseline = [{"in": ["0x00", "v2"], "op": "slt", "out": ["v3"]}]
+        probe = [
+            {"in": ["0x00"], "op": "LiteralAssignment", "out": ["v1"]},
+            {"in": ["v1", "v4"], "op": "slt", "out": ["v3b"]},
+        ]
+
+        facts, var_map = match_block_instructions(baseline, probe)
+
+        assert facts == {}
+        assert var_map["v2"] == "v4"
+
+    def test_baseline_materializes_a_literal_probe_inlines_directly(self):
+        # The symmetric direction -- already handled by the pre-existing mechanism (a baseline
+        # variable whose own LiteralAssignment vanishes once probe inlines its value directly is
+        # exactly the "substitution discovered at its use site" case), kept here as a regression
+        # lock alongside the new probe-side resolution above.
+        baseline = [
+            {"in": ["0x00"], "op": "LiteralAssignment", "out": ["v1"]},
+            {"in": ["v1", "v2"], "op": "slt", "out": ["v3"]},
+        ]
+        probe = [{"in": ["0x00", "v4"], "op": "slt", "out": ["v3b"]}]
+
+        facts, _ = match_block_instructions(baseline, probe)
+
+        assert facts == {1: {"v1": "0x00"}}
+
+    def test_a_materialized_literal_that_genuinely_differs_is_not_matched(self):
+        baseline = [{"in": ["0x00", "v2"], "op": "slt", "out": ["v3"]}]
+        probe = [
+            {"in": ["0x01"], "op": "LiteralAssignment", "out": ["v1"]},
+            {"in": ["v1", "v4"], "op": "slt", "out": ["v3b"]},
+        ]
+
+        facts, var_map = match_block_instructions(baseline, probe)
+
+        assert facts == {}
+        assert "v2" not in var_map
 
 
 class TestExtractSeedFactsForInstructions:

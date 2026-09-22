@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import sys
+import multiprocessing as mp
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -29,10 +30,10 @@ from global_params.types import Yul_CFG_T
 
 def _count_constancy_facts(annotated: Dict[str, Yul_CFG_T]) -> int:
     return sum(len(entry)
-              for yul_cfg_json in annotated.values()
-              for _, blocks in iter_block_scopes(yul_cfg_json)
-              for block in blocks
-              for entry in block.get("constancy", []))
+               for yul_cfg_json in annotated.values()
+               for _, blocks in iter_block_scopes(yul_cfg_json)
+               for block in blocks
+               for entry in block.get("constancy", []))
 
 
 def process_standard_json(json_input: Dict[str, Any], output_dir: str,
@@ -50,8 +51,8 @@ def process_standard_json(json_input: Dict[str, Any], output_dir: str,
     caller (or a test) can use it directly without a disk round trip.
     """
     occurrences = dump_steps.dump_all_occurrences(json_input, output_dir, base_sequence=base_sequence,
-                                                   solc_executable=solc_executable,
-                                                   disable_stack_allocation=True)
+                                                  solc_executable=solc_executable,
+                                                  disable_stack_allocation=True)
     manifest = []
     for occurrence in occurrences:
         annotated, restructuring_warning_count = compare_constancy.annotate_constancy_between(
@@ -74,7 +75,7 @@ def process_standard_json(json_input: Dict[str, Any], output_dir: str,
 
     with open(os.path.join(output_dir, "manifest.json"), "w") as f:
         json.dump([{key: value for key, value in entry.items() if key != "annotated"} for entry in manifest],
-                 f, indent=2)
+                  f, indent=2)
 
     return manifest
 
@@ -85,37 +86,44 @@ def _find_standard_json_inputs(input_path: str) -> List[str]:
     return sorted(glob.glob(os.path.join(input_path, "**", "*_standard_input.json"), recursive=True))
 
 
+def process_json_input(json_path: str, args: argparse.Namespace):
+    # Determine whether the input is a JSON path or not
+    if os.path.isdir(args.input_path):
+        relative_dir = os.path.relpath(os.path.dirname(json_path), args.input_path)
+        subdir = os.path.join(args.output_dir, relative_dir) if relative_dir != "." \
+            else os.path.join(args.output_dir, Path(json_path).stem)
+    else:
+        subdir = args.output_dir
+
+    with open(json_path) as f:
+        json_input = json.load(f)
+
+    print("Executing ", json_path)
+    manifest = process_standard_json(json_input, subdir, base_sequence=args.base_sequence,
+                                     solc_executable=args.solc)
+    print(f"{json_path}: wrote {len(manifest)} occurrence(s) to {subdir}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("input_path", help="A solc standard-json input file, or a directory "
-                        "containing one or more (searched recursively for *_standard_input.json)")
+                                           "containing one or more (searched recursively for *_standard_input.json)")
     parser.add_argument("--output-dir", default="full_constancy_trace_output",
                         help="Directory to write results to")
     parser.add_argument("--base-sequence", default=DEFAULT_OPTIMIZER_SEQUENCE,
                         help="Yul optimizer step sequence to trace occurrences of")
+    parser.add_argument("-cpus", "--num-cpus", default=1, type=int,
+                        help="Determines how many CPUS are executed in parallel", dest="num_cpus")
     parser.add_argument("--solc", default="solc", help="Path to solc binary (default: solc on PATH)")
     args = parser.parse_args()
 
-    is_folder = os.path.isdir(args.input_path)
     inputs = _find_standard_json_inputs(args.input_path)
     if not inputs:
         logging.error(f"No standard-json input found at {args.input_path}")
         sys.exit(1)
 
-    for json_path in inputs:
-        if is_folder:
-            relative_dir = os.path.relpath(os.path.dirname(json_path), args.input_path)
-            subdir = os.path.join(args.output_dir, relative_dir) if relative_dir != "." \
-                else os.path.join(args.output_dir, Path(json_path).stem)
-        else:
-            subdir = args.output_dir
-
-        with open(json_path) as f:
-            json_input = json.load(f)
-
-        manifest = process_standard_json(json_input, subdir, base_sequence=args.base_sequence,
-                                         solc_executable=args.solc)
-        print(f"{json_path}: wrote {len(manifest)} occurrence(s) to {subdir}")
+    with mp.Pool(args.num_cpus) as pool:
+        pool.starmap(process_json_input, [(json_path, args) for json_path in inputs])
 
 
 if __name__ == "__main__":
