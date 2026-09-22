@@ -1,0 +1,1 @@
+MAX_STACK_DEPTH = 16

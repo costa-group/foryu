@@ -8,7 +8,6 @@ import logging
 import networkx
 from global_params.types import block_id_T
 from parser.cfg_block import CFGBlock, include_function_call_tags
-from parser.constants import split_block
 from graphs.cfg import compute_loop_nesting_forest_graph
 from graphs.algorithms import compute_dominance_tree
 
