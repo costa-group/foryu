@@ -4,7 +4,8 @@ with a baseline Yul optimizer step sequence, and one with that same sequence plu
 application of a step (see libyul/optimiser/Suite.cpp) that can substitute a variable's
 already-known value into its use sites -- LiteralRematerialiser ('T'), Rematerialiser ('m'),
 CommonSubexpressionEliminator ('c'), or ExpressionSimplifier ('s'), used this way both by
-annotate.py's production path and by occurrence_trace.py's wider per-occurrence trace.
+next_step_constancy.py's production path and by full_constancy_trace.py's wider per-occurrence
+trace.
 Wherever a variable that is still symbolic in the baseline shows up as a plain literal at the
 same argument position in the probe compilation, that variable is known to have that constant
 value.
@@ -85,8 +86,8 @@ pressure differences one extra step can introduce. Since the resulting block-cou
 happen inside an otherwise-uniform, single-predecessor chain, it produces no observable ambiguity
 for any purely local block matcher (id-based or structural) to catch --
 `with_stack_allocation_disabled` (below) is the actual fix for that class, used by isolated
-probing callers (`occurrence_trace.py`, `annotate_single_step.py` via `extract_seed_facts`'s
-`disable_stack_allocation` parameter).
+probing callers (`dump_steps.py`'s `dump_occurrence`/`dump_all_occurrences`, and
+`next_step_constancy.py`'s `--disable-stack-allocation` flag).
 
 A block whose `ConditionalJump` branches on a variable that's provably a compile-time literal
 (a `LiteralAssignment`, possibly several blocks up) can get eliminated outright by solc's block-
@@ -123,7 +124,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import networkx as nx
 
-from execution.sol_compilation import SolidityCompilation, DEFAULT_OPTIMIZER_SEQUENCE, get_yul_details
+from execution.sol_compilation import get_yul_details
 from global_params.types import block_id_T, component_name_T, constant_T, var_id_T, Yul_CFG_T
 from graphs.algorithms import compute_dominance_tree
 
@@ -997,49 +998,3 @@ def probe_sequence(base_sequence: str, steps_to_consider: List[str] = CONSTANT_P
     real colon (the production DEFAULT_OPTIMIZER_SEQUENCE) is unaffected.
     """
     return isolate_cleanup_sequence(base_sequence) + "".join(steps_to_consider)
-
-
-def extract_seed_facts(json_input: Dict[str, Any], solc_executable: str = "solc",
-                       base_sequence: str = DEFAULT_OPTIMIZER_SEQUENCE,
-                       steps_to_consider: List[str] = CONSTANT_PROPAGATING_STEPS,
-                       disable_stack_allocation: bool = False) -> \
-        Optional[Tuple[Dict[str, Yul_CFG_T], Dict[str, Yul_CFG_T], Dict[str, seed_facts_T]]]:
-    """
-    Compiles json_input with the baseline sequence and with the baseline sequence plus an
-    extra application of steps_to_consider, then extracts the seed facts discovered for
-    every contract. Returns None if either compilation fails.
-
-    The baseline compilation (first element of the returned tuple) is the yulCFGJson meant
-    to be kept/annotated; the probe compilation is only used to discover facts. It is returned
-    as the second argument for debugging purposes. base_sequence is isolated (see
-    isolate_cleanup_sequence) before compiling, so baseline and probe share an identical,
-    explicitly-delimited prefix -- a no-op for the production DEFAULT_OPTIMIZER_SEQUENCE
-    default, which already has its own real colon.
-
-    disable_stack_allocation, when True, forces solc's StackCompressor off for both compiles
-    (see with_stack_allocation_disabled() above) -- intended for isolated single-step probing
-    (annotate_single_step.py), not the production default: forcing it there would change the
-    kept baseline's actual compiled shape, not just how facts are discovered about it, which is
-    a bigger and separate decision from this function's own job.
-    """
-    prepared_input = with_stack_allocation_disabled(json_input) if disable_stack_allocation else json_input
-    baseline_cfg = SolidityCompilation.from_json_input(copy.deepcopy(prepared_input),
-                                                       optimizer_steps=isolate_cleanup_sequence(base_sequence),
-                                                       solc_executable=solc_executable)
-    probe_cfg = SolidityCompilation.from_json_input(copy.deepcopy(prepared_input),
-                                                    optimizer_steps=probe_sequence(base_sequence, steps_to_consider),
-                                                    solc_executable=solc_executable)
-
-    if baseline_cfg is None or probe_cfg is None:
-        logging.warning("Compilation failed while extracting constancy seed facts")
-        return None
-
-    seed_facts_per_contract = {}
-    for contract_name, baseline_yul_cfg in baseline_cfg.items():
-        probe_yul_cfg = probe_cfg.get(contract_name)
-        if probe_yul_cfg is None:
-            logging.warning(f"Contract {contract_name} is missing from the probe compilation; skipping")
-            continue
-        seed_facts_per_contract[contract_name] = extract_seed_facts_for_contract(baseline_yul_cfg, probe_yul_cfg)
-
-    return baseline_cfg, probe_cfg, seed_facts_per_contract

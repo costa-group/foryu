@@ -1,0 +1,122 @@
+"""
+Given a solc standard-json input, dumps every intermediate compilation revealed by DEFAULT_
+OPTIMIZER_SEQUENCE's T/m/c/s occurrences (dump_steps.py) and annotates the constancy each one
+reveals (compare_constancy.py), writing the before/after pair, the annotated result, and a
+manifest per occurrence to --output-dir.
+
+If input_path is a directory, it's searched recursively for "*_standard_input.json" files, and
+each gets its own subdirectory of --output-dir (mirroring the input directory's own layout) --
+the folder-batch mode.
+
+Usage (run from src/, or with src/ on PYTHONPATH):
+    python3 full_constancy_trace.py contract.standard-json.json --output-dir out/
+    python3 full_constancy_trace.py path/to/many_contracts/ --output-dir out/
+"""
+import argparse
+import glob
+import json
+import logging
+import os
+import sys
+from pathlib import Path
+from typing import Any, Dict, List
+
+from constancy import compare_constancy, dump_steps
+from constancy.seed_extraction import iter_block_scopes
+from execution.sol_compilation import DEFAULT_OPTIMIZER_SEQUENCE
+from global_params.types import Yul_CFG_T
+
+
+def _count_constancy_facts(annotated: Dict[str, Yul_CFG_T]) -> int:
+    return sum(len(entry)
+              for yul_cfg_json in annotated.values()
+              for _, blocks in iter_block_scopes(yul_cfg_json)
+              for block in blocks
+              for entry in block.get("constancy", []))
+
+
+def process_standard_json(json_input: Dict[str, Any], output_dir: str,
+                          base_sequence: str = DEFAULT_OPTIMIZER_SEQUENCE,
+                          solc_executable: str = "solc") -> List[Dict[str, Any]]:
+    """
+    Dumps every occurrence's before/after pair (dump_steps.dump_all_occurrences, isolated via
+    disable_stack_allocation=True -- this diagnostic tool's whole purpose is isolated per-step
+    comparison, see seed_extraction.with_stack_allocation_disabled) and annotates constancy for
+    each (compare_constancy.annotate_constancy_between). An occurrence that revealed nothing (no
+    facts, no restructuring warnings) still has its before/after pair on disk, but is left out of
+    the annotated output and the manifest. Writes <output_dir>/manifest.json summarizing every
+    occurrence that did reveal something (metadata and file names only); the *returned* manifest
+    additionally carries each entry's in-memory "annotated" per-contract yulCFGJson dict, so a
+    caller (or a test) can use it directly without a disk round trip.
+    """
+    occurrences = dump_steps.dump_all_occurrences(json_input, output_dir, base_sequence=base_sequence,
+                                                   solc_executable=solc_executable,
+                                                   disable_stack_allocation=True)
+    manifest = []
+    for occurrence in occurrences:
+        annotated, restructuring_warning_count = compare_constancy.annotate_constancy_between(
+            occurrence["before"], occurrence["after"])
+        fact_count = _count_constancy_facts(annotated)
+        if fact_count == 0 and restructuring_warning_count == 0:
+            continue
+
+        annotated_file = f"occ_{occurrence['index']:03d}_{occurrence['step']}{occurrence['step_index']}_annotated.json"
+        with open(os.path.join(output_dir, annotated_file), "w") as f:
+            json.dump(annotated, f, indent=2)
+
+        manifest.append({
+            "index": occurrence["index"], "step": occurrence["step"], "step_index": occurrence["step_index"],
+            "position": occurrence["position"], "fact_count": fact_count,
+            "restructuring_warning_count": restructuring_warning_count,
+            "before_file": occurrence["before_file"], "after_file": occurrence["after_file"],
+            "annotated_file": annotated_file, "annotated": annotated,
+        })
+
+    with open(os.path.join(output_dir, "manifest.json"), "w") as f:
+        json.dump([{key: value for key, value in entry.items() if key != "annotated"} for entry in manifest],
+                 f, indent=2)
+
+    return manifest
+
+
+def _find_standard_json_inputs(input_path: str) -> List[str]:
+    if os.path.isfile(input_path):
+        return [input_path]
+    return sorted(glob.glob(os.path.join(input_path, "**", "*_standard_input.json"), recursive=True))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input_path", help="A solc standard-json input file, or a directory "
+                        "containing one or more (searched recursively for *_standard_input.json)")
+    parser.add_argument("--output-dir", default="full_constancy_trace_output",
+                        help="Directory to write results to")
+    parser.add_argument("--base-sequence", default=DEFAULT_OPTIMIZER_SEQUENCE,
+                        help="Yul optimizer step sequence to trace occurrences of")
+    parser.add_argument("--solc", default="solc", help="Path to solc binary (default: solc on PATH)")
+    args = parser.parse_args()
+
+    is_folder = os.path.isdir(args.input_path)
+    inputs = _find_standard_json_inputs(args.input_path)
+    if not inputs:
+        logging.error(f"No standard-json input found at {args.input_path}")
+        sys.exit(1)
+
+    for json_path in inputs:
+        if is_folder:
+            relative_dir = os.path.relpath(os.path.dirname(json_path), args.input_path)
+            subdir = os.path.join(args.output_dir, relative_dir) if relative_dir != "." \
+                else os.path.join(args.output_dir, Path(json_path).stem)
+        else:
+            subdir = args.output_dir
+
+        with open(json_path) as f:
+            json_input = json.load(f)
+
+        manifest = process_standard_json(json_input, subdir, base_sequence=args.base_sequence,
+                                         solc_executable=args.solc)
+        print(f"{json_path}: wrote {len(manifest)} occurrence(s) to {subdir}")
+
+
+if __name__ == "__main__":
+    main()
