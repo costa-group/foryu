@@ -59,6 +59,35 @@ def _resolve_phi_input(value: var_id_T, predecessor_id: Optional[block_id_T],
     return predecessor_constants.get(predecessor_id, {}).get(value)
 
 
+def _predecessor_consensus(resolve_for_predecessor, predecessors: List[block_id_T]) -> \
+        Tuple[Optional[constant_T], bool]:
+    """
+    Used only by the live-in-passthrough pass below (never by PhiFunction input resolution,
+    which stays on its own strict aggregation -- see that branch's own comment for why the two
+    cases can't share this).
+
+    The single value that every predecessor *that currently resolves to something* agrees on --
+    ignoring a predecessor that doesn't (yet) resolve to anything (not yet processed, e.g. the
+    back edge of a loop, or otherwise unknown). A variable with no PhiFunction at this block is
+    guaranteed by SSA to carry the same value on every incoming edge (solc's own SSA
+    construction only omits a phi when a variable has exactly one reaching definition on every
+    path, including back edges), so an unprocessed predecessor has nothing to contribute that an
+    already-processed one hasn't already settled -- there is nothing to wait for.
+
+    Returns (value, disagreement): value is the agreed value, or None if nothing currently
+    resolves; disagreement is True when two predecessors that *do* currently resolve disagree --
+    a genuine inconsistency worth logging (under the same SSA guarantee, this can only mean an
+    upstream seed-extraction/matching bug), distinct from simply not having enough information
+    yet, which stays quiet.
+    """
+    resolved = {resolve_for_predecessor(p) for p in predecessors}
+    known = resolved - {None}
+    if len(known) == 1:
+        (value,) = known
+        return value, False
+    return None, len(known) > 1
+
+
 def _seed_facts_conflict_internally(instructions: List, seed_facts_for_block: block_seed_facts_T) -> bool:
     """
     True if seed_facts_for_block, on its own, already contains a disagreement for some
@@ -202,21 +231,26 @@ def compute_block_constancy(block: CFGBlock, seed_facts_for_block: block_seed_fa
 
     # A live-in variable with no PhiFunction of its own (the common case: a single
     # predecessor, or a merge where SSA never needed to rename it) still carries whatever
-    # value its predecessors already agreed was constant at their exit -- resolved the same
-    # unanimous way a PhiFunction's inputs are, via _resolve_phi_input, since the variable
-    # keeps the same name across every incoming edge precisely because no phi was needed for
-    # it. Only fills in what the loop above left unresolved, so a direct seed fact or an
-    # explicit PhiFunction keeps priority, matching the PhiFunction branch's own precedent.
+    # value its predecessors already agreed was constant at their exit. Resolved from whichever
+    # predecessors are *already processed* (_predecessor_consensus), not requiring all of them:
+    # a predecessor reachable only through a not-yet-processed back edge (this pipeline makes a
+    # single forward pass, never revisiting a block) is guaranteed by SSA to agree once it is
+    # processed anyway, so there's nothing to wait for. Only fills in what the loop above left
+    # unresolved, so a direct seed fact or an explicit PhiFunction keeps priority, matching the
+    # PhiFunction branch's own precedent.
     phi_outputs = {instr.get_out_args()[0] for instr in instructions if instr.get_op_name() == "PhiFunction"}
     for var in block.liveness.get("in", []):
         if var in known or var in phi_outputs:
             continue
-        resolved = {_resolve_phi_input(var, predecessor_id, predecessor_constants)
-                   for predecessor_id in (predecessors or [])}
-        if len(resolved) == 1:
-            (value,) = resolved
-            if value is not None:
-                _record(var, value)
+        value, disagreement = _predecessor_consensus(
+            lambda predecessor_id, var=var: _resolve_phi_input(var, predecessor_id, predecessor_constants),
+            predecessors or [])
+        if disagreement:
+            logging.warning(f"Predecessors of block {block.get_block_id()} disagree on live-in variable "
+                            f"{var}, which has no PhiFunction of its own here; this should be impossible "
+                            f"under SSA and likely indicates an upstream seed-extraction/matching bug")
+        elif value is not None:
+            _record(var, value)
 
     # A known-constant variable is reported at every program point where it is both known
     # and (per a simple in-block last-use scan, or block-exit liveness) still live. result[0]
