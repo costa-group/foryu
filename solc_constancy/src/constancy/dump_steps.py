@@ -30,6 +30,7 @@ import copy
 import json
 import logging
 import os
+import time
 from typing import Any, Dict, List, Optional, TypedDict
 
 from constancy.seed_extraction import isolate_cleanup_sequence, with_stack_allocation_disabled
@@ -109,7 +110,8 @@ def enumerate_occurrences(base_sequence: str = DEFAULT_OPTIMIZER_SEQUENCE,
 
 
 def dump_occurrence(json_input: Dict[str, Any], occurrence: Occurrence, solc_executable: str = "solc",
-                    disable_stack_allocation: bool = False) -> Optional[Dict[str, Any]]:
+                    disable_stack_allocation: bool = False,
+                    stats_out: Optional[Dict[str, float]] = None) -> Optional[Dict[str, Any]]:
     """
     Compiles occurrence's seq_before/seq_after pair. Returns {"before": {contract: yulCFGJson},
     "after": {contract: yulCFGJson}, "structure": {filename: [contract_name, ...]}}, or None if
@@ -127,8 +129,13 @@ def dump_occurrence(json_input: Dict[str, Any], occurrence: Occurrence, solc_exe
     comparison (see PROGRESS.md). Defaults to False so this function's default behavior doesn't
     change the kept CFG's actual compiled shape; callers doing isolated per-step probing (e.g.
     full_constancy_trace.py) pass True explicitly.
+
+    stats_out, when given, gets "compile_seconds" added to (accumulated, not overwritten, so a
+    caller invoking this repeatedly across occurrences with the same dict gets a running total)
+    -- the wall time spent in the two solc invocations, whether or not they succeeded.
     """
     prepared_input = with_stack_allocation_disabled(json_input) if disable_stack_allocation else json_input
+    start = time.perf_counter()
     try:
         baseline_compilation = SolidityCompilation(None, solc_executable)
         baseline_compilation.flags = "--standard-json"
@@ -140,7 +147,10 @@ def dump_occurrence(json_input: Dict[str, Any], occurrence: Occurrence, solc_exe
     except Exception as e:
         logging.warning(f"Occurrence {occurrence['step']}#{occurrence['step_index']} "
                         f"(position {occurrence['position']}) failed to compile: {e}")
-        return None
+        baseline_cfg = probe_cfg = None
+    finally:
+        if stats_out is not None:
+            stats_out["compile_seconds"] = stats_out.get("compile_seconds", 0.0) + (time.perf_counter() - start)
 
     if baseline_cfg is None or probe_cfg is None:
         return None
@@ -151,7 +161,8 @@ def dump_occurrence(json_input: Dict[str, Any], occurrence: Occurrence, solc_exe
 def dump_all_occurrences(json_input: Dict[str, Any], output_dir: str,
                          base_sequence: str = DEFAULT_OPTIMIZER_SEQUENCE,
                          steps_to_consider: List[str] = PROPAGATION_STEPS_TO_TRACE,
-                         solc_executable: str = "solc", disable_stack_allocation: bool = False) -> List[Dict[str, Any]]:
+                         solc_executable: str = "solc", disable_stack_allocation: bool = False,
+                         stats_out: Optional[Dict[str, float]] = None) -> List[Dict[str, Any]]:
     """
     Compiles every occurrence of steps_to_consider in base_sequence (enumerate_occurrences) and
     writes one <output_dir>/occ_XXX_<step><step_index>_before.json / _after.json pair per
@@ -162,22 +173,29 @@ def dump_all_occurrences(json_input: Dict[str, Any], output_dir: str,
     (baseline file/contract skeleton) dump_occurrence produced -- so a caller (e.g.
     full_constancy_trace.py) can use them directly without having to re-read its own output off
     disk.
+
+    stats_out, when given, is passed through to every dump_occurrence call ("compile_seconds",
+    accumulated across all occurrences) and also gets "dump_seconds" added to (the wall time
+    spent writing the before/after JSON pairs to disk).
     """
     os.makedirs(output_dir, exist_ok=True)
     manifest = []
     for occurrence in enumerate_occurrences(base_sequence, steps_to_consider):
         dumped = dump_occurrence(json_input, occurrence, solc_executable=solc_executable,
-                                 disable_stack_allocation=disable_stack_allocation)
+                                 disable_stack_allocation=disable_stack_allocation, stats_out=stats_out)
         if dumped is None:
             continue
 
         prefix = f"occ_{occurrence['index']:03d}_{occurrence['step']}{occurrence['step_index']}"
         before_file = f"{prefix}_before.json"
         after_file = f"{prefix}_after.json"
+        dump_start = time.perf_counter()
         with open(os.path.join(output_dir, before_file), "w") as f:
             json.dump(dumped["before"], f, indent=2)
         with open(os.path.join(output_dir, after_file), "w") as f:
             json.dump(dumped["after"], f, indent=2)
+        if stats_out is not None:
+            stats_out["dump_seconds"] = stats_out.get("dump_seconds", 0.0) + (time.perf_counter() - dump_start)
 
         manifest.append({
             **occurrence,

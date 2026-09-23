@@ -93,7 +93,8 @@ def _seed_facts_conflict_internally(instructions: List, seed_facts_for_block: bl
 
 
 def compute_block_constancy(block: CFGBlock, seed_facts_for_block: block_seed_facts_T,
-                            predecessor_constants: Optional[Dict[block_id_T, exit_constants_T]] = None) -> \
+                            predecessor_constants: Optional[Dict[block_id_T, exit_constants_T]] = None,
+                            predecessors: Optional[List[block_id_T]] = None) -> \
         Tuple[List[instruction_constancy_T], exit_constants_T]:
     """
     Computes the per-instruction constancy list for a single block (excluding the synthetic
@@ -105,8 +106,14 @@ def compute_block_constancy(block: CFGBlock, seed_facts_for_block: block_seed_fa
 
     seed_facts_for_block gives, per instruction index, the {var: literal} facts discovered
     for that instruction by the seed extraction pass; predecessor_constants gives, per
-    already-processed predecessor block id, the constants known at *its* exit (used only to
-    resolve PhiFunction inputs).
+    already-processed predecessor block id, the constants known at *its* exit.
+
+    predecessors is the block's real graph predecessors (used for the live-in passthrough pass
+    below), deliberately kept separate from block.entries: solc's own yulCFGJson only populates
+    a block's "entries" field when it actually contains a PhiFunction (see parser.parser.
+    process_block_entry), so it's empty for the common case of a plain block with a single
+    predecessor -- entries stays reserved for what it already correctly does, mapping each
+    PhiFunction's inputs to the predecessor edge they came from, in that solc-provided order.
 
     Length is len(instructions) - leading_phi_count + 1, not unconditionally + 1
     (seed_extraction.count_leading_phis): every PhiFunction in a block resolves in parallel with
@@ -193,6 +200,24 @@ def compute_block_constancy(block: CFGBlock, seed_facts_for_block: block_seed_fa
             for var, value in seed_facts_for_block.get(idx, {}).items():
                 _record(var, value)
 
+    # A live-in variable with no PhiFunction of its own (the common case: a single
+    # predecessor, or a merge where SSA never needed to rename it) still carries whatever
+    # value its predecessors already agreed was constant at their exit -- resolved the same
+    # unanimous way a PhiFunction's inputs are, via _resolve_phi_input, since the variable
+    # keeps the same name across every incoming edge precisely because no phi was needed for
+    # it. Only fills in what the loop above left unresolved, so a direct seed fact or an
+    # explicit PhiFunction keeps priority, matching the PhiFunction branch's own precedent.
+    phi_outputs = {instr.get_out_args()[0] for instr in instructions if instr.get_op_name() == "PhiFunction"}
+    for var in block.liveness.get("in", []):
+        if var in known or var in phi_outputs:
+            continue
+        resolved = {_resolve_phi_input(var, predecessor_id, predecessor_constants)
+                   for predecessor_id in (predecessors or [])}
+        if len(resolved) == 1:
+            (value,) = resolved
+            if value is not None:
+                _record(var, value)
+
     # A known-constant variable is reported at every program point where it is both known
     # and (per a simple in-block last-use scan, or block-exit liveness) still live. result[0]
     # is the leading live-in slot (state before any real instruction runs, absorbing every
@@ -261,11 +286,13 @@ def compute_constancy_for_block_list(block_list: CFGBlockList,
     """
     constancy_per_block = {}
     exit_constants_per_block: Dict[block_id_T, exit_constants_T] = {}
+    graph = block_list.to_graph()
 
     for block_id in _block_processing_order(block_list):
         block = block_list.get_block(block_id)
+        predecessors = list(graph.predecessors(block_id))
         constancy, exit_constants = compute_block_constancy(block, seed_facts_by_block.get(block_id, {}),
-                                                             exit_constants_per_block)
+                                                             exit_constants_per_block, predecessors)
         constancy_per_block[block_id] = constancy
         exit_constants_per_block[block_id] = exit_constants
 

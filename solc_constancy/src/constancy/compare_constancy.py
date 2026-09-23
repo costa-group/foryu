@@ -13,7 +13,8 @@ import copy
 import hashlib
 import json
 import logging
-from typing import Dict, Tuple
+import time
+from typing import Dict, Optional, Tuple
 
 from constancy.annotate import annotate_constancy
 from constancy.propagation import compute_constancy_for_cfg
@@ -61,8 +62,8 @@ def _annotate_with_no_facts(yul_cfg_json: Yul_CFG_T) -> None:
             block["constancy"] = [{} for _ in range(len(instructions) - count_leading_phis(instructions) + 1)]
 
 
-def annotate_constancy_between(baseline_cfg: Dict[str, Yul_CFG_T],
-                               probe_cfg: Dict[str, Yul_CFG_T]) -> Tuple[Dict[str, Yul_CFG_T], int]:
+def annotate_constancy_between(baseline_cfg: Dict[str, Yul_CFG_T], probe_cfg: Dict[str, Yul_CFG_T],
+                               stats_out: Optional[Dict[str, float]] = None) -> Tuple[Dict[str, Yul_CFG_T], int]:
     """
     For every contract present in both baseline_cfg and probe_cfg (a contract missing from
     probe_cfg is logged and skipped), extracts seed facts (seed_extraction.
@@ -83,6 +84,11 @@ def annotate_constancy_between(baseline_cfg: Dict[str, Yul_CFG_T],
     via the cheap all-empty shortcut (_annotate_with_no_facts) rather than needlessly re-deriving
     "no facts" for a large CFG through the full parse/extract/propagate pipeline.
 
+    stats_out, when given, gets two keys accumulated across every contract processed:
+    "fact_analysis_seconds" (time in extract_seed_facts_for_contract) and "annotation_seconds"
+    (time spent parsing, computing, and injecting constancy -- including the byte-identical
+    shortcut branch, which produces the same field this would have, just cheaper).
+
     Returns (annotated baseline per contract, total "missing from probe" warning count across
     every contract compared).
     """
@@ -97,19 +103,31 @@ def annotate_constancy_between(baseline_cfg: Dict[str, Yul_CFG_T],
 
         annotated[contract_name] = baseline_yul_cfg
         if _hash_cfg(baseline_yul_cfg) == _hash_cfg(probe_yul_cfg):
+            annotation_start = time.perf_counter()
             _annotate_with_no_facts(baseline_yul_cfg)
+            if stats_out is not None:
+                stats_out["annotation_seconds"] = stats_out.get("annotation_seconds", 0.0) + \
+                    (time.perf_counter() - annotation_start)
             continue
 
         counter = _MissingWarningCounter()
         logging.getLogger().addHandler(counter)
+        fact_analysis_start = time.perf_counter()
         try:
             seed_facts = extract_seed_facts_for_contract(baseline_yul_cfg, probe_yul_cfg)
         finally:
             logging.getLogger().removeHandler(counter)
+            if stats_out is not None:
+                stats_out["fact_analysis_seconds"] = stats_out.get("fact_analysis_seconds", 0.0) + \
+                    (time.perf_counter() - fact_analysis_start)
 
+        annotation_start = time.perf_counter()
         parsed_cfg = parse_CFG_from_json_dict({contract_name: copy.deepcopy(baseline_yul_cfg)})[contract_name]
         constancy_map = compute_constancy_for_cfg(parsed_cfg, seed_facts)
         annotate_constancy(baseline_yul_cfg, constancy_map)
+        if stats_out is not None:
+            stats_out["annotation_seconds"] = stats_out.get("annotation_seconds", 0.0) + \
+                (time.perf_counter() - annotation_start)
 
         restructuring_warning_count += counter.count
 
