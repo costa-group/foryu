@@ -2,6 +2,7 @@ Require Import FORYU.state.
 Require Import FORYU.program.
 Require Import FORYU.semantics.
 Require Import FORYU.list_functions.
+Require Import FORYU.constancy_info.
 Require Import FORYU.constancy_snd.
 
 From Stdlib Require Import Orders.
@@ -22,29 +23,16 @@ Global Open Scope string_scope.
 From Stdlib Require Import MSets.MSetAVL.
 From Stdlib Require Import Structures.OrdersEx.      (* Provides New Keys *)
 
-(* A finite, efficient map from variables to values, used to represent
-constancy information. [VarID.VarID_as_OT] is the same (modern,
-[Orders]-style) ordered type already used for [VarSet] in liveness.v;
-[FMapAVL] expects the legacy [OrderedType.OrderedType] interface, so
-we bridge the two with [Backport_OT]. Defined once, outside the
-[Constancy] functor, since it does not depend on the dialect. *)
-Module VarID_legacy_OT := OrdersAlt.Backport_OT VarID.VarID_as_OT.
-Module VarMap := FMapAVL.Make(VarID_legacy_OT).
-
-
 Module Constancy (D: DIALECT).
 
-  (* Routed through [Constancy_snd(D)] (rather than calling
-  [SmallStep(D)] independently, as this module used to) so that a
-  downstream file connecting this checker to [Constancy_snd]'s
-  relational spec sees the *same* [CFGProgD]/etc. -- Coq's module
-  system does not consider two separate applications of the same
-  functor to the same argument interchangeable, so two independent
-  instantiations of [SmallStep(D)] would leave [check_const_program]'s
-  own [CFGProgD.t] and [Constancy_snd(D).const_at_pc]'s unable to
-  unify. *)
+  (* The program modules (and the constancy information types) are
+  projected out of the specification's own instance of
+  [Constancy_info(D)], via [ConstSndD], so that the checker and the
+  specification share one [CFGProgD]/etc. (see constancy_info.v); this
+  is the only reason the checker imports the specification. *)
   Module ConstSndD := Constancy_snd(D).
-  Module SmallStepD := ConstSndD.SmallStepD.
+  Module InfoD := ConstSndD.InfoD.
+  Module SmallStepD := InfoD.SmallStepD.
   Module StateD := SmallStepD.StateD.
   Module CallStackD := StateD.CallStackD.
   Module StackFrameD := CallStackD.StackFrameD.
@@ -71,26 +59,12 @@ Module Constancy (D: DIALECT).
   Import SimpleExprD.
 
 
-  (* The constancy information at a program point is a finite map from
-  variables to values: [x -> v] in the map means that [x] is known to
-  be constant [v] there; a variable absent from the map is simply not
-  known to be constant (it may or may not be, in reality).
-
-  As with liveness, information is assigned for each block, and for
-  every program point inside the block (0 being the first program
-  point). Since optimizations that rely on this information query it
-  at arbitrary program points -- not just at block boundaries -- we
-  keep one map per program point rather than just a block-level
-  summary. *)
-
-  Definition pp_const_info_t := VarMap.t D.value_t.
-  (* [block_const_info_t] has exactly one more entry than the block
-  has instructions: entry [pc] is the info that holds right before
-  instruction [pc]; the extra, trailing entry is the block-exit info
-  (used when checking how blocks compose into a function). *)
-  Definition block_const_info_t := list pp_const_info_t.
-  Definition func_const_info_t := BlockID.t ->  option block_const_info_t.
-  Definition prog_const_info_t := FuncName.t -> option func_const_info_t.
+  (* The constancy information types (see constancy_info.v), re-exported
+  under their usual names. *)
+  Definition pp_const_info_t := InfoD.pp_const_info_t.
+  Definition block_const_info_t := InfoD.block_const_info_t.
+  Definition func_const_info_t := InfoD.func_const_info_t.
+  Definition prog_const_info_t := InfoD.prog_const_info_t.
 
   (* Resolves a simple expression under the constancy info [pp]: a
   variable is resolved by looking it up in [pp], a value resolves to
@@ -178,6 +152,22 @@ Module Constancy (D: DIALECT).
         update_const_info Cb instr.(output) []
     end.
 
+  (* Symbolically executes the phi-function of block [b] for an edge
+  coming from its predecessor [pred_bid], starting from the
+  predecessor's exit info [C]: the phi-defined [out_vars] are
+  overwritten by whatever their corresponding input (for [pred_bid])
+  resolves to under [C], every other variable is passed through
+  unchanged -- exactly the transfer function [handle_jump_aux] in
+  semantics.v applies at runtime. This is the counterpart of
+  liveness's [apply_inv_phi]. *)
+  Definition sym_exec_phi (b: BlockD.t) (pred_bid: BlockID.t) (C: pp_const_info_t) : pp_const_info_t :=
+    let out_vars := fst b.(phi_function) in
+    match snd b.(phi_function) pred_bid with
+    | in_phi_info in_sexprs =>
+        let values := List.map (eval_sexpr_pp C) in_sexprs in
+        update_const_info C out_vars (derive_pairs out_vars values)
+    end.
+
   (* Checks the constancy information across a single instruction:
   [Cb] is the claimed info right before [instr], [Ca] is the claimed
   info right after it. This holds iff [Ca] is a subset of what is
@@ -225,10 +215,8 @@ Module Constancy (D: DIALECT).
   (* Checks that the entry info of block [next_bid] is consistent with
   the exit info [pred_exit] of one of its predecessors, [pred_bid]:
   the predecessor's exit, forward-transformed through the successor's
-  phi-function for [pred_bid] (renamed/overwritten [out_vars], every
-  other variable passed through unchanged -- exactly the transfer
-  function [handle_jump_aux] in semantics.v applies at runtime), must
-  entail the successor's claimed entry info. *)
+  phi-function for [pred_bid] ([sym_exec_phi]), must entail the
+  successor's claimed entry info. *)
   Definition check_const_successor (p: CFGProgD.t) (f_info: func_const_info_t) (fname: FuncName.t) (pred_bid: BlockID.t) (pred_exit: pp_const_info_t) (next_bid: BlockID.t) : bool :=
     match CFGProgD.get_block p fname next_bid with
     | None => false
@@ -239,13 +227,7 @@ Module Constancy (D: DIALECT).
             match block_entry_info next_b_info with
             | None => false
             | Some next_entry =>
-                let out_vars := fst next_b.(phi_function) in
-                match snd next_b.(phi_function) pred_bid with
-                | in_phi_info in_sexprs =>
-                    let values := List.map (eval_sexpr_pp pred_exit) in_sexprs in
-                    let transformed := update_const_info pred_exit out_vars (derive_pairs out_vars values) in
-                    const_info_subset next_entry transformed
-                end
+                const_info_subset next_entry (sym_exec_phi next_b pred_bid pred_exit)
             end
         end
     end.

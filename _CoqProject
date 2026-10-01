@@ -18,8 +18,10 @@ theories/liveness_snd.v
 #test_translation.v
 theories/checker.v
 
-theories/constancy.v
+theories/constancy_info.v
 theories/constancy_snd.v
+theories/constancy.v
 theories/constancy_checker_snd.v
 
 theories/extract_ocaml.v
+theories/jlamp.v
