@@ -19,6 +19,7 @@ theories/liveness_snd.v
 theories/checker.v
 
 theories/constancy_info.v
+theories/evm_constancy.v
 theories/constancy_snd.v
 theories/constancy.v
 theories/constancy_checker_snd.v

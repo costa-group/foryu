@@ -20,6 +20,62 @@ Module VarID_legacy_OT := OrdersAlt.Backport_OT VarID.VarID_as_OT.
 Module VarMap := FMapAVL.Make(VarID_legacy_OT).
 
 
+(* ** Abstract execution of opcodes **
+
+[CONST_SYMB D] collects the knowledge about the opcodes of dialect [D]
+that the constancy analysis uses, separately from the dialect itself
+(which only defines the semantics). [abs_exec op es known] is the
+abstract execution of opcode [op] on the inputs [es] (variables or
+values), where [known] gives the variables that are known to be
+constant: it returns the known value of each output, if any, or [None]
+if nothing is known. For example, it can evaluate an opcode whose
+inputs are all known and whose result does not depend on the dialect
+state, but also handle cases such as [x - x] or [x * 0] where some
+inputs are unknown. [abs_exec_snd] states that it is correct: in any
+dialect state, and for any values of the variables ([rho]) that agree
+with [known], executing the opcode succeeds and produces the predicted
+values. *)
+Module Type CONST_SYMB (D: DIALECT).
+
+  Parameter abs_exec :
+    D.opcode_t -> list (VarID.t + D.value_t) -> (VarID.t -> option D.value_t) ->
+    option (list (option D.value_t)).
+
+  Parameter abs_exec_snd :
+    forall (op: D.opcode_t) (es: list (VarID.t + D.value_t)) (known: VarID.t -> option D.value_t)
+           (res: list (option D.value_t)) (st: D.dialect_state_t) (rho: VarID.t -> D.value_t),
+      abs_exec op es known = Some res ->
+      (forall (v: VarID.t) (c: D.value_t), known v = Some c -> rho v = c) ->
+      exists (out: list D.value_t) (st': D.dialect_state_t),
+        D.execute_opcode st op (List.map (fun e => match e with inl v => rho v | inr c => c end) es)
+        = (out, st', Status.Running) /\
+        (forall (k: nat) (c: D.value_t), nth_error res k = Some (Some c) -> nth_error out k = Some c).
+
+End CONST_SYMB.
+
+(* The trivial abstract execution, which never derives anything: it
+can be used with any dialect *)
+Module No_abs_exec (D: DIALECT) <: CONST_SYMB D.
+
+  Definition abs_exec (op: D.opcode_t) (es: list (VarID.t + D.value_t)) (known: VarID.t -> option D.value_t)
+    : option (list (option D.value_t)) := None.
+
+  Lemma abs_exec_snd :
+    forall (op: D.opcode_t) (es: list (VarID.t + D.value_t)) (known: VarID.t -> option D.value_t)
+           (res: list (option D.value_t)) (st: D.dialect_state_t) (rho: VarID.t -> D.value_t),
+      abs_exec op es known = Some res ->
+      (forall (v: VarID.t) (c: D.value_t), known v = Some c -> rho v = c) ->
+      exists (out: list D.value_t) (st': D.dialect_state_t),
+        D.execute_opcode st op (List.map (fun e => match e with inl v => rho v | inr c => c end) es)
+        = (out, st', Status.Running) /\
+        (forall (k: nat) (c: D.value_t), nth_error res k = Some (Some c) -> nth_error out k = Some c).
+  Proof.
+    intros op es known res st rho H. discriminate H.
+  Qed.
+
+End No_abs_exec.
+
+
 Module Constancy_info (D: DIALECT).
 
   (* The one instance of [SmallStep(D)] (and hence of [CFGProg(D)]

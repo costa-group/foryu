@@ -23,14 +23,14 @@ Global Open Scope string_scope.
 From Stdlib Require Import MSets.MSetAVL.
 From Stdlib Require Import Structures.OrdersEx.      (* Provides New Keys *)
 
-Module Constancy (D: DIALECT).
+Module Constancy (D: DIALECT) (E: CONST_SYMB D).
 
   (* The program modules (and the constancy information types) are
   projected out of the specification's own instance of
   [Constancy_info(D)], via [ConstSndD], so that the checker and the
   specification share one [CFGProgD]/etc. (see constancy_info.v); this
   is the only reason the checker imports the specification. *)
-  Module ConstSndD := Constancy_snd(D).
+  Module ConstSndD := Constancy_snd(D)(E).
   Module InfoD := ConstSndD.InfoD.
   Module SmallStepD := InfoD.SmallStepD.
   Module StateD := SmallStepD.StateD.
@@ -119,13 +119,10 @@ Module Constancy (D: DIALECT).
        is dropped, since it is being overwritten. Variables that are
        not outputs keep whatever [Cb] said about them.
 
-     - For an opcode, folding is only attempted when it does not
-       depend on the dialect state ([D.opcode_indep_state]) and when
-       all of its inputs are constant (unlike assignment, an opcode's
-       result genuinely depends on all of its arguments at once).
-       When folding succeeds and yields [Status.Running], the outputs
-       get the computed values; otherwise nothing is derived for them
-       (and any prior fact about them is still dropped).
+     - For an opcode, the outputs get the values given by its
+       abstract execution [E.abs_exec] (see constancy_info.v), given
+       the constants known in [Cb]; any prior fact about the outputs
+       is dropped.
 
      - For a function call, nothing can be derived statically, so
        nothing is recorded for the outputs (and any prior fact about
@@ -136,16 +133,8 @@ Module Constancy (D: DIALECT).
         let values := List.map (eval_sexpr_pp Cb) instr.(input) in
         update_const_info Cb instr.(output) (derive_pairs instr.(output) values)
     | inl (inr opcode) =>
-        match ListFunctions.option_list (List.map (eval_sexpr_pp Cb) instr.(input)) with
-        | Some concrete_inputs =>
-            if D.opcode_indep_state opcode then
-              let '(res_vals, _, status) := D.execute_opcode D.empty_dialect_state opcode concrete_inputs in
-              match status with
-              | Status.Running =>
-                  update_const_info Cb instr.(output) (derive_pairs instr.(output) (List.map (fun v => Some v) res_vals))
-              | _ => update_const_info Cb instr.(output) []
-              end
-            else update_const_info Cb instr.(output) []
+        match E.abs_exec opcode instr.(input) (fun x => VarMap.find x Cb) with
+        | Some res => update_const_info Cb instr.(output) (derive_pairs instr.(output) res)
         | None => update_const_info Cb instr.(output) []
         end
     | inl (inl fname) =>

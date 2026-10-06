@@ -12,12 +12,12 @@ From Stdlib Require Import Arith.
 From Stdlib Require Import Lia.
 From Stdlib Require Import FSets.FMapFacts.
 
-Module Constancy_checker_snd (D: DIALECT).
+Module Constancy_checker_snd (D: DIALECT) (E: CONST_SYMB D).
 
   (* [ConstSndD] is projected out of [ConstD], so that the checker and
   the specification share one [CFGProgD]/etc. lineage (see
   constancy_info.v). *)
-  Module ConstD := Constancy(D).
+  Module ConstD := Constancy(D)(E).
   Module ConstSndD := ConstD.ConstSndD.
 
   Module SmallStepD := ConstD.SmallStepD.
@@ -239,27 +239,6 @@ Module Constancy_checker_snd (D: DIALECT).
         exists (S k'). split; exact Hk1 || exact Hk2.
   Qed.
 
-  (* [ListFunctions.option_list]'s own index-based characterization:
-  when it succeeds, the resulting list's own [k]-th element is exactly
-  whatever the [k]-th input's [Some] carried. *)
-  Lemma option_list_nth_error :
-    forall (A: Type) (l: list (option A)) (l': list A) (k: nat) (x: A),
-      ListFunctions.option_list l = Some l' ->
-      nth_error l k = Some (Some x) ->
-      nth_error l' k = Some x.
-  Proof.
-    induction l as [| x0 l0 IH]; intros l' k x Hlist Hnth.
-    - destruct k; simpl in Hnth; discriminate.
-    - destruct x0 as [x0|].
-      + simpl in Hlist.
-        destruct (ListFunctions.option_list l0) as [ys|] eqn:Hl0; try discriminate.
-        injection Hlist as Hlist. subst l'.
-        destruct k as [| k'].
-        * simpl in Hnth. injection Hnth as Hnth. subst x0. reflexivity.
-        * simpl in Hnth. exact (IH ys k' x eq_refl Hnth).
-      + simpl in Hlist. discriminate.
-  Qed.
-
   (* Specialized, direct inductive versions of [List.nth_error_map],
   stated throughout in terms of this file's own [SimpleExprD.t] alias
   rather than a generic type parameter -- [List.nth_error_map] itself
@@ -279,18 +258,6 @@ Module Constancy_checker_snd (D: DIALECT).
     - destruct k as [| k'].
       + simpl in Hnth. injection Hnth as Hnth.
         exists x0. split; [reflexivity | exact Hnth].
-      + simpl in Hnth. exact (IH k' val Hnth).
-  Qed.
-
-  Lemma map_some_nth_error_some :
-    forall (l: list D.value_t) (k: nat) (val: D.value_t),
-      nth_error (List.map (fun v0 => Some v0) l) k = Some (Some val) ->
-      nth_error l k = Some val.
-  Proof.
-    induction l as [| x0 l' IH]; intros k val Hnth.
-    - destruct k; simpl in Hnth; discriminate.
-    - destruct k as [| k'].
-      + simpl in Hnth. injection Hnth as Hnth. subst val. reflexivity.
       + simpl in Hnth. exact (IH k' val Hnth).
   Qed.
 
@@ -362,17 +329,10 @@ Module Constancy_checker_snd (D: DIALECT).
     unfold ConstD.sym_exec_instr.
     destruct (i.(InstrD.op)) as [[callee | opcode] | aux] eqn:Hop.
     - exact (update_const_info_empty_notin Cb i.(output) v Hnotin).
-    - destruct (ListFunctions.option_list (List.map (ConstD.eval_sexpr_pp Cb) i.(input))) as [concrete_inputs|] eqn:Hoptlist.
-      + destruct (D.opcode_indep_state opcode) eqn:Hindep.
-        * destruct (D.execute_opcode D.empty_dialect_state opcode concrete_inputs) as [[res_vals st] status] eqn:Hexec.
-          destruct status as [ | | | msg] eqn:Hstatus.
-          -- unfold ConstD.update_const_info.
-             rewrite (fold_left_add_notin _ _ v (derive_pairs_notin_vs_notin_fst i.(output) _ v Hnotin)).
-             exact (fold_left_remove_notin i.(output) Cb v Hnotin).
-          -- exact (update_const_info_empty_notin Cb i.(output) v Hnotin).
-          -- exact (update_const_info_empty_notin Cb i.(output) v Hnotin).
-          -- exact (update_const_info_empty_notin Cb i.(output) v Hnotin).
-        * exact (update_const_info_empty_notin Cb i.(output) v Hnotin).
+    - destruct (E.abs_exec opcode i.(input) (fun x => VarMap.find x Cb)) as [res|] eqn:Habs.
+      + unfold ConstD.update_const_info.
+        rewrite (fold_left_add_notin _ _ v (derive_pairs_notin_vs_notin_fst i.(output) _ v Hnotin)).
+        exact (fold_left_remove_notin i.(output) Cb v Hnotin).
       + exact (update_const_info_empty_notin Cb i.(output) v Hnotin).
     - destruct aux.
       unfold ConstD.update_const_info.
@@ -595,13 +555,11 @@ Module Constancy_checker_snd (D: DIALECT).
             nth_error i.(output) k = Some v /\
             nth_error i.(input) k = Some x /\
             ConstSndD.sexpr_const m x c)
-      \/ (exists (opcode: D.opcode_t) (k: nat) (cs res_vals: list D.value_t) (st: D.dialect_state_t),
+      \/ (exists (opcode: D.opcode_t) (k: nat) (res: list (option D.value_t)),
             i.(InstrD.op) = inl (inr opcode) /\
-            D.opcode_indep_state opcode = true /\
-            Forall2 (ConstSndD.sexpr_const m) i.(input) cs /\
-            D.execute_opcode D.empty_dialect_state opcode cs = (res_vals, st, Status.Running) /\
+            E.abs_exec opcode i.(input) (fun x => VarMap.find x m) = Some res /\
             nth_error i.(output) k = Some v /\
-            nth_error res_vals k = Some c).
+            nth_error res k = Some (Some c)).
 
   Lemma eval_sexpr_pp_sexpr_const :
     forall (m: ConstD.pp_const_info_t) (x: SimpleExprD.t) (c: D.value_t),
@@ -611,23 +569,6 @@ Module Constancy_checker_snd (D: DIALECT).
     destruct x as [v | val]; simpl in *.
     - exact H.
     - injection H as H. exact (eq_sym H).
-  Qed.
-
-  Lemma option_list_eval_sexpr_pp_forall2 :
-    forall (m: ConstD.pp_const_info_t) (es: list SimpleExprD.t) (cs: list D.value_t),
-      ListFunctions.option_list (List.map (ConstD.eval_sexpr_pp m) es) = Some cs ->
-      Forall2 (ConstSndD.sexpr_const m) es cs.
-  Proof.
-    intros m es.
-    induction es as [| x es' IH]; intros cs Hlist.
-    - simpl in Hlist. injection Hlist as Hlist. subst cs. constructor.
-    - simpl in Hlist.
-      destruct (ConstD.eval_sexpr_pp m x) as [c|] eqn:Heval; try discriminate.
-      destruct (ListFunctions.option_list (List.map (ConstD.eval_sexpr_pp m) es')) as [cs'|] eqn:Hlist'; try discriminate.
-      injection Hlist as Hlist. subst cs.
-      constructor.
-      + exact (eval_sexpr_pp_sexpr_const m x c Heval).
-      + exact (IH cs' eq_refl).
   Qed.
 
   Lemma sym_exec_instr_snd :
@@ -640,30 +581,19 @@ Module Constancy_checker_snd (D: DIALECT).
       unfold ConstD.sym_exec_instr in Hfind.
       destruct (i.(InstrD.op)) as [[callee | opcode] | aux] eqn:Hop.
       + exfalso. rewrite (update_const_info_empty_in m i.(output) v Hin) in Hfind. discriminate Hfind.
-      + destruct (ListFunctions.option_list (List.map (ConstD.eval_sexpr_pp m) i.(input))) as [cs|] eqn:Hoptlist.
-        * destruct (D.opcode_indep_state opcode) eqn:Hindep.
-          -- destruct (D.execute_opcode D.empty_dialect_state opcode cs) as [[res_vals st] status] eqn:Hexec.
-             destruct status as [ | | | msg] eqn:Hstatus;
-               try (exfalso; rewrite (update_const_info_empty_in m i.(output) v Hin) in Hfind; discriminate Hfind).
-             destruct (List.in_dec VarMapFacts.eq_dec v (List.map fst (ConstD.derive_pairs i.(output) (List.map (fun v0 => Some v0) res_vals)))) as [HinPairs | HnotinPairs].
-             ++ apply List.in_map_iff in HinPairs. destruct HinPairs as [[v' val'] [Heqfst HinPairs']].
-                simpl in Heqfst. subst v'.
-                rewrite (update_const_info_in_pairs m i.(output) _ v val' HinPairs'
-                           (derive_pairs_nodup i.(output) _ i.(InstrD.H_nodup))) in Hfind.
-                injection Hfind as Hfind. subst val'.
-                destruct (derive_pairs_in_iff_nth_error i.(output) (List.map (fun v0 => Some v0) res_vals) v c HinPairs') as [k [Hk1 Hk2]].
-                right. exists opcode, k, cs, res_vals, st.
-                repeat split;
-                  first [ reflexivity
-                        | exact Hindep
-                        | exact Hexec
-                        | exact (option_list_eval_sexpr_pp_forall2 m i.(input) cs Hoptlist)
-                        | exact Hk1
-                        | exact (map_some_nth_error_some res_vals k c Hk2) ].
-             ++ exfalso.
-                rewrite (update_const_info_notin_pairs_in_vs m i.(output) _ v HnotinPairs Hin) in Hfind.
-                discriminate Hfind.
-          -- exfalso. rewrite (update_const_info_empty_in m i.(output) v Hin) in Hfind. discriminate Hfind.
+      + destruct (E.abs_exec opcode i.(input) (fun x => VarMap.find x m)) as [res|] eqn:Habs.
+        * destruct (List.in_dec VarMapFacts.eq_dec v (List.map fst (ConstD.derive_pairs i.(output) res))) as [HinPairs | HnotinPairs].
+          -- apply List.in_map_iff in HinPairs. destruct HinPairs as [[v' val'] [Heqfst HinPairs']].
+             simpl in Heqfst. subst v'.
+             rewrite (update_const_info_in_pairs m i.(output) _ v val' HinPairs'
+                        (derive_pairs_nodup i.(output) _ i.(InstrD.H_nodup))) in Hfind.
+             injection Hfind as Hfind. subst val'.
+             destruct (derive_pairs_in_iff_nth_error i.(output) res v c HinPairs') as [k [Hk1 Hk2]].
+             right. exists opcode, k, res.
+             repeat split; first [ reflexivity | exact Habs | exact Hk1 | exact Hk2 ].
+          -- exfalso.
+             rewrite (update_const_info_notin_pairs_in_vs m i.(output) _ v HnotinPairs Hin) in Hfind.
+             discriminate Hfind.
         * exfalso. rewrite (update_const_info_empty_in m i.(output) v Hin) in Hfind. discriminate Hfind.
       + destruct aux.
         destruct (List.in_dec VarMapFacts.eq_dec v (List.map fst (ConstD.derive_pairs i.(output) (List.map (ConstD.eval_sexpr_pp m) i.(input))))) as [HinPairs | HnotinPairs].
@@ -891,17 +821,6 @@ Module Constancy_checker_snd (D: DIALECT).
     - subst c. reflexivity.
   Qed.
 
-  Lemma forall2_option_list_eval_sexpr_pp :
-    forall (m: ConstD.pp_const_info_t) (es: list SimpleExprD.t) (cs: list D.value_t),
-      Forall2 (ConstSndD.sexpr_const m) es cs ->
-      ListFunctions.option_list (List.map (ConstD.eval_sexpr_pp m) es) = Some cs.
-  Proof.
-    intros m es cs H.
-    induction H as [| x c es' cs' Hx Hrest IH].
-    - reflexivity.
-    - simpl. rewrite (sexpr_const_eval_sexpr_pp m x c Hx), IH. reflexivity.
-  Qed.
-
   Lemma eval_sexpr_pp_nth_error_intro :
     forall (m: ConstD.pp_const_info_t) (l: list SimpleExprD.t) (k: nat) (x: SimpleExprD.t) (c: D.value_t),
       nth_error l k = Some x ->
@@ -913,18 +832,6 @@ Module Constancy_checker_snd (D: DIALECT).
     - destruct k as [| k'].
       + simpl in Hnth. injection Hnth as Hnth. subst x0. simpl. rewrite Heval. reflexivity.
       + simpl in Hnth |- *. exact (IH k' x c Hnth Heval).
-  Qed.
-
-  Lemma map_some_nth_error_intro :
-    forall (l: list D.value_t) (k: nat) (c: D.value_t),
-      nth_error l k = Some c ->
-      nth_error (List.map (fun v0 => Some v0) l) k = Some (Some c).
-  Proof.
-    induction l as [| x0 l' IH]; intros k c Hnth.
-    - destruct k; discriminate.
-    - destruct k as [| k'].
-      + simpl in Hnth |- *. injection Hnth as Hnth. subst x0. reflexivity.
-      + simpl in Hnth |- *. exact (IH k' c Hnth).
   Qed.
 
   Lemma in_combine_nth_error :
@@ -950,17 +857,16 @@ Module Constancy_checker_snd (D: DIALECT).
     destruct (H v c Hfind) as
       [ [Hnotin Hfind_m]
       | [ [Hop [k [x [Hk [Hx Hxc]]]]]
-        | [opcode [k [cs [res_vals [st [Hop [Hindep [Hcs [Hexec [Hk Hres]]]]]]]]]] ] ].
+        | [opcode [k [res [Hop [Habs [Hk Hres]]]]]] ] ].
     - rewrite (sym_exec_instr_unaffected m i v Hnotin). exact Hfind_m.
     - unfold ConstD.sym_exec_instr. rewrite Hop.
       apply (update_const_info_in_pairs m i.(output) _ v c).
       + apply (derive_pairs_nth_error_some i.(output) _ k v c Hk).
         exact (eval_sexpr_pp_nth_error_intro m i.(input) k x c Hx (sexpr_const_eval_sexpr_pp m x c Hxc)).
       + exact (derive_pairs_nodup i.(output) _ i.(InstrD.H_nodup)).
-    - unfold ConstD.sym_exec_instr. rewrite Hop.
-      rewrite (forall2_option_list_eval_sexpr_pp m i.(input) cs Hcs), Hindep, Hexec.
+    - unfold ConstD.sym_exec_instr. rewrite Hop, Habs.
       apply (update_const_info_in_pairs m i.(output) _ v c).
-      + exact (derive_pairs_nth_error_some i.(output) _ k v c Hk (map_some_nth_error_intro res_vals k c Hres)).
+      + exact (derive_pairs_nth_error_some i.(output) _ k v c Hk Hres).
       + exact (derive_pairs_nodup i.(output) _ i.(InstrD.H_nodup)).
   Qed.
 

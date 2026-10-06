@@ -254,10 +254,14 @@ Module JLAMP (D: DIALECT).
 
   End Liveness_JLAMP.
 
-  (* ** Constancy (Section 5) ** *)
-  Module Constancy_JLAMP.
+  (* ** Constancy (Section 5) **
 
-    Module ConstChkD := Constancy_checker_snd(D).
+  The constancy analysis is parameterized by the abstract execution of
+  opcodes [E] (see constancy_info.v), e.g., [EVMConstSymb] for the EVM
+  dialect (see evm_constancy.v). *)
+  Module Constancy_JLAMP (E: CONST_SYMB D).
+
+    Module ConstChkD := Constancy_checker_snd(D)(E).
     Module ConstD := ConstChkD.ConstD.
     Module ConstSndD := ConstChkD.ConstSndD.
     Module CFGProgD := ConstD.CFGProgD.

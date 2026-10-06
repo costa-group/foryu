@@ -767,6 +767,129 @@ Module EVM_opcode.
       if eq_dec a b then true else false.
       
 
+    Definition show (op: t): string :=
+      match op with
+      | STOP => "STOP"
+      | ADD => "ADD"
+      | SUB => "SUB"
+      | MUL => "MUL"
+      | DIV => "DIV"
+      | SDIV => "SDIV"
+      | MOD => "MOD"
+      | SMOD => "SMOD"
+      | EXP => "EXP"
+      | NOT => "NOT" 
+      | LT => "LT"
+      | GT => "GT"
+      | SLT => "SLT"
+      | SGT => "SGT"
+      | EQ => "EQ"
+      | ISZERO => "ISZERO"
+      | AND => "AND"
+      | OR => "OR"
+      | XOR => "XOR"
+      | BYTE => "BYTE"
+      | SHL => "SHL"
+      | SHR => "SHR"
+      | SAR => "SAR"
+      | CLZ => "CLZ"
+      | ADDMOD => "ADDMOD"
+      | MULMOD => "MULMOD"
+      | SIGNEXTEND => "SIGNEXTEND"
+      | KECCAK256 => "KECCAK256"
+      | POP => "POP"
+      | MLOAD => "MLOAD"
+      | MSTORE => "MSTORE"
+      | MSTORE8 => "MSTORE8"
+      | SLOAD => "SLOAD"
+      | SSTORE => "SSTORE"
+      | TLOAD => "TLOAD"
+      | TSTORE => "TSTORE"
+      | MSIZE => "MSIZE"
+      | GAS => "GAS"
+      | ADDRESS => "ADDRESS"
+      | BALANCE => "BALANCE"
+      | SELFBALANCE => "SELFBALANCE"
+      | CALLER => "CALLER"
+      | CALLVALUE => "CALLVALUE"
+      | CALLDATALOAD => "CALLDATALOAD"
+      | CALLDATASIZE => "CALLDATASIZE"
+      | CALLDATACOPY => "CALLDATACOPY"
+      | CODESIZE => "CODESIZE"
+      | CODECOPY => "CODECOPY"
+      | EXTCODESIZE => "EXTCODESIZE"
+      | EXTCODECOPY => "EXTCODECOPY"
+      | RETURNDATASIZE => "RETURNDATASIZE"
+      | RETURNDATACOPY => "RETURNDATACOPY"
+      | MCOPY => "MCOPY"
+      | EXTCODEHASH => "EXTCODEHASH"
+      | CREATE => "CREATE"
+      | CREATE2 => "CREATE2"
+      | CALL => "CALL"
+      | CALLCODE => "CALLCODE"
+      | DELEGATECALL => "DELEGATECALL"
+      | STATICCALL => "STATICCALL"
+      | RETURN => "RETURN"
+      | REVERT => "REVERT"
+      | SELFDESTRUCT => "SELFDESTRUCT"
+      | INVALID => "INVALID"
+      | LOG0 => "LOG0"
+      | LOG1 => "LOG1"
+      | LOG2 => "LOG2"
+      | LOG3 => "LOG3"
+      | LOG4 => "LOG4"
+      | CHAINID => "CHAINID"
+      | BASEFEE => "BASEFEE"
+      | BLOBBASEFEE => "BLOBBASEFEE"
+      | ORIGIN => "ORIGIN"
+      | GASPRICE => "GASPRICE"
+      | BLOCKHASH => "BLOCKHASH"
+      | BLOBHASH => "BLOBHASH"
+      | COINBASE => "COINBASE"
+      | TIMESTAMP => "TIMESTAMP"
+      | NUMBER => "NUMBER"
+      | DIFFICULTY => "DIFFICULTY" (* obsolete from Paris, now uses PREVRANDAO *)
+      | PREVRANDAO => "PREVRANDAO"
+      | GASLIMIT => "GASLIMIT"
+      (* *)
+      | MEMORYGUARD => "MEMORYGUARD"
+      | DATASIZE => "DATASIZE"
+      | DATAOFFSET => "DATAOFFSET"
+      | DATACOPY => "DATACOPY"
+      | LINKERSYMBOL => "LINKERSYMBOL"
+      | SETIMMUTABLE => "SETIMMUTABLE"
+      | LOADIMMUTABLE => "LOADIMMUTABLE"
+      end.
+
+End EVM_opcode.
+
+(* The operations of the EVM that interact with the blockchain, or that
+are too complex to be implemented here (e.g., computing hashes), are
+not implemented: they are assumed to be provided externally by a
+module of type [BLOCK_CHAIN], and the EVM dialect is parameterized by
+such a module. All results proven for [EVMDialect BC] (e.g., the
+soundness of the checkers) hold for any implementation [BC]. For now
+the interface is empty; the operations will be added later. 
+*)
+Module Type BLOCK_CHAIN.
+End BLOCK_CHAIN.
+
+(* A default implementation of the blockchain operations, used to
+obtain a concrete checker (see checker.v) that can be extracted and used
+from OCaml. The checkers never execute these operations, so their
+results do not matter for the checkers; the proofs hold for any
+implementation. For now the interface is empty. *)
+Module DefaultBlockChain <: BLOCK_CHAIN.
+End DefaultBlockChain.
+
+(* The execution of EVM opcodes. It is separate from [EVM_opcode] (the
+datatype of opcodes), since it depends on the implementation [BC] of
+the blockchain operations: making [EVM_opcode] itself a functor would
+create a different (incompatible) datatype of opcodes for each
+application. *)
+Module EVM_exec (BC: BLOCK_CHAIN).
+  Import EVM_opcode.
+
     Definition execute (state: EVMState.t) (op: t) (inputs: list U256.t): (list U256.t * EVMState.t * Status.t) :=
       match op with
       | STOP => ([], state, Status.Terminated)
@@ -1172,114 +1295,15 @@ Module EVM_opcode.
                 | [name] => ([], state, Status.Running)  
                 | _ => ([], state, Status.Error "LOADIMMUTABLE expects 1 input")
                 end 
-    end. 
+    end.
 
-    Definition show (op: t): string :=
-      match op with
-      | STOP => "STOP"
-      | ADD => "ADD"
-      | SUB => "SUB"
-      | MUL => "MUL"
-      | DIV => "DIV"
-      | SDIV => "SDIV"
-      | MOD => "MOD"
-      | SMOD => "SMOD"
-      | EXP => "EXP"
-      | NOT => "NOT" 
-      | LT => "LT"
-      | GT => "GT"
-      | SLT => "SLT"
-      | SGT => "SGT"
-      | EQ => "EQ"
-      | ISZERO => "ISZERO"
-      | AND => "AND"
-      | OR => "OR"
-      | XOR => "XOR"
-      | BYTE => "BYTE"
-      | SHL => "SHL"
-      | SHR => "SHR"
-      | SAR => "SAR"
-      | CLZ => "CLZ"
-      | ADDMOD => "ADDMOD"
-      | MULMOD => "MULMOD"
-      | SIGNEXTEND => "SIGNEXTEND"
-      | KECCAK256 => "KECCAK256"
-      | POP => "POP"
-      | MLOAD => "MLOAD"
-      | MSTORE => "MSTORE"
-      | MSTORE8 => "MSTORE8"
-      | SLOAD => "SLOAD"
-      | SSTORE => "SSTORE"
-      | TLOAD => "TLOAD"
-      | TSTORE => "TSTORE"
-      | MSIZE => "MSIZE"
-      | GAS => "GAS"
-      | ADDRESS => "ADDRESS"
-      | BALANCE => "BALANCE"
-      | SELFBALANCE => "SELFBALANCE"
-      | CALLER => "CALLER"
-      | CALLVALUE => "CALLVALUE"
-      | CALLDATALOAD => "CALLDATALOAD"
-      | CALLDATASIZE => "CALLDATASIZE"
-      | CALLDATACOPY => "CALLDATACOPY"
-      | CODESIZE => "CODESIZE"
-      | CODECOPY => "CODECOPY"
-      | EXTCODESIZE => "EXTCODESIZE"
-      | EXTCODECOPY => "EXTCODECOPY"
-      | RETURNDATASIZE => "RETURNDATASIZE"
-      | RETURNDATACOPY => "RETURNDATACOPY"
-      | MCOPY => "MCOPY"
-      | EXTCODEHASH => "EXTCODEHASH"
-      | CREATE => "CREATE"
-      | CREATE2 => "CREATE2"
-      | CALL => "CALL"
-      | CALLCODE => "CALLCODE"
-      | DELEGATECALL => "DELEGATECALL"
-      | STATICCALL => "STATICCALL"
-      | RETURN => "RETURN"
-      | REVERT => "REVERT"
-      | SELFDESTRUCT => "SELFDESTRUCT"
-      | INVALID => "INVALID"
-      | LOG0 => "LOG0"
-      | LOG1 => "LOG1"
-      | LOG2 => "LOG2"
-      | LOG3 => "LOG3"
-      | LOG4 => "LOG4"
-      | CHAINID => "CHAINID"
-      | BASEFEE => "BASEFEE"
-      | BLOBBASEFEE => "BLOBBASEFEE"
-      | ORIGIN => "ORIGIN"
-      | GASPRICE => "GASPRICE"
-      | BLOCKHASH => "BLOCKHASH"
-      | BLOBHASH => "BLOBHASH"
-      | COINBASE => "COINBASE"
-      | TIMESTAMP => "TIMESTAMP"
-      | NUMBER => "NUMBER"
-      | DIFFICULTY => "DIFFICULTY" (* obsolete from Paris, now uses PREVRANDAO*)
-      | PREVRANDAO => "PREVRANDAO"
-      | GASLIMIT => "GASLIMIT"
-      (**)
-      | MEMORYGUARD => "MEMORYGUARD"
-      | DATASIZE => "DATASIZE"
-      | DATAOFFSET => "DATAOFFSET"
-      | DATACOPY => "DATACOPY"
-      | LINKERSYMBOL => "LINKERSYMBOL"
-      | SETIMMUTABLE => "SETIMMUTABLE"
-      | LOADIMMUTABLE => "LOADIMMUTABLE"
-      end.
-
-End EVM_opcode.
+End EVM_exec.
 
 
-(*
-Module Type BLOCK_CHAIN.
-  Parameter get_addr: U256.t ->  U256.t.
-End BLOCK_CHAIN.
+
 Module EVMDialect (BC: BLOCK_CHAIN) <: DIALECT.
+  Module Exec := EVM_exec(BC).
 
-*)
-
-Module EVMDialect <: DIALECT.
   Definition value_t := U256.t.
 
   Definition eqb := U256.eqb.
@@ -1295,121 +1319,7 @@ Module EVMDialect <: DIALECT.
   Definition default_value: value_t := U256.zero.
 
   Definition execute_opcode (state: dialect_state_t) (op: opcode_t) (inputs: list value_t): (list value_t * dialect_state_t * Status.t) :=
-    EVM_opcode.execute state op inputs.
-
-  Definition opcode_indep_state (op: opcode_t) := 
-    match op with
-    | EVM_opcode.ADD => true
-    | EVM_opcode.SUB => true
-    | EVM_opcode.MUL => true
-    | EVM_opcode.DIV => true
-    | EVM_opcode.SDIV => true
-    | EVM_opcode.MOD => true
-    | EVM_opcode.SMOD => true
-    | EVM_opcode.EXP => true
-    | EVM_opcode.NOT => true
-    | EVM_opcode.LT => true
-    | EVM_opcode.GT => true
-    | EVM_opcode.SLT => true
-    | EVM_opcode.SGT => true
-    | EVM_opcode.EQ => true
-    | EVM_opcode.ISZERO => true
-    | EVM_opcode.AND => true
-    | EVM_opcode.OR => true
-    | EVM_opcode.XOR => true
-    | EVM_opcode.BYTE => true
-    | EVM_opcode.SHL => true
-    | EVM_opcode.SHR => true
-    | EVM_opcode.SAR => true
-    | EVM_opcode.CLZ => true
-    | EVM_opcode.ADDMOD => true
-    | EVM_opcode.MULMOD => true
-    | EVM_opcode.SIGNEXTEND => true
-    | _ => false
-    end.
-
-  Ltac solve_binary_op op msg args :=
-  simpl;
-  destruct args as [|v [|v0 [|v1 args]]];
-  (* We use [ | | | ] to explicitly handle the 4 cases created by the destruct above *)
-  [ 
-    (* Case: args = [] *)
-    (exists []; exists (Status.Error msg); split; reflexivity) 
-  | (* Case: args = [v] *)
-    (exists []; exists (Status.Error msg); split; reflexivity)
-  | (* Case: args = [v; v0] -> SUCCESS *)
-    (exists [op v v0]; exists Status.Running; split; reflexivity)
-  | (* Case: args = [v; v0; v1; ...] *)
-    (exists []; exists (Status.Error msg); split; reflexivity)
-  ].
-
-  Ltac solve_unary_op op msg args :=
-  simpl;
-  destruct args as [|v [|v0 rest]];
-  [ (* Case: [] *)
-    (exists []; exists (Status.Error msg); split; reflexivity) 
-  | (* Case: [v] -> SUCCESS *)
-    (exists [op v]; exists Status.Running; split; reflexivity)
-  | (* Case: [v; v0; ...] *)
-    (exists []; exists (Status.Error msg); split; reflexivity)
-  ].
-
-  Ltac solve_ternary_op op msg args :=
-  simpl;
-  destruct args as [|v [|v0 [|v1 [|v2 rest]]]];
-  [ (* Case: [] *)
-    (exists []; exists (Status.Error msg); split; reflexivity) 
-  | (* Case: [v] *)
-    (exists []; exists (Status.Error msg); split; reflexivity)
-  | (* Case: [v; v0] *)
-    (exists []; exists (Status.Error msg); split; reflexivity)
-  | (* Case: [v; v0; v1] -> SUCCESS *)
-    (exists [op v v0 v1]; exists Status.Running; split; reflexivity)
-  | (* Case: [v; v0; v1; v2; ...] *)
-    (exists []; exists (Status.Error msg); split; reflexivity)
-  ].
-
-  Lemma evm_opcode_indep_state_snd: forall (op: opcode_t),
-    opcode_indep_state op = true -> 
-    forall (s1 s2: dialect_state_t) (args: list value_t), 
-    exists (res: list value_t) (status: Status.t),
-    execute_opcode s1 op args = (res, s1, status) /\
-    execute_opcode s2 op args = (res, s2, status).
-  Proof.
-    unfold execute_opcode. intros op Hopcode s1 s2 args.
-    destruct op; try (simpl in Hopcode; discriminate Hopcode).
-    - solve_binary_op (U256.add) "ADD expects 2 inputs" args.
-    - solve_binary_op (U256.sub) "SUB expects 2 inputs" args.
-    - solve_binary_op (U256.mul) "MUL expects 2 inputs" args.
-    - solve_binary_op (U256.div) "DIV expects 2 inputs" args.
-    - solve_binary_op (U256.sdiv) "SDIV expects 2 inputs" args.
-    - solve_binary_op (U256.mod_evm) "MOD expects 2 inputs" args.
-    - solve_binary_op (U256.smod) "SMOD expects 2 inputs" args.
-    - solve_binary_op (U256.exp) "EXP expects 2 inputs" args.
-    - solve_unary_op (U256.not) "NOT expects 1 input" args.
-    - solve_binary_op (U256.lt) "LT expects 2 inputs" args.
-    - solve_binary_op (U256.gt) "GT expects 2 inputs" args.
-    - solve_binary_op (U256.slt) "SLT expects 2 inputs" args.
-    - solve_binary_op (U256.sgt) "SGT expects 2 inputs" args.
-    - solve_binary_op (U256.eq) "EQ expects 2 inputs" args.
-    - solve_unary_op (U256.iszero) "ISZERO expects 1 input" args.
-    - solve_binary_op (U256.and) "AND expects 2 inputs" args.
-    - solve_binary_op (U256.or) "OR expects 2 inputs" args.
-    - solve_binary_op (U256.xor) "XOR expects 2 inputs" args.
-    - solve_binary_op (U256.byte) "BYTE expects 2 inputs" args.
-    - solve_binary_op (U256.shl) "SHL expects 2 inputs" args.
-    - solve_binary_op (U256.shr) "SHR expects 2 inputs" args.
-    - solve_binary_op (U256.sar) "SAR expects 2 inputs" args.
-    - solve_unary_op (U256.clz) "CLZ expects 1 input" args.
-    - solve_ternary_op (U256.addmod) "ADDMOD expects 3 inputs" args.
-    - solve_ternary_op (U256.mulmod) "MULMOD expects 3 inputs" args. 
-    - solve_binary_op (U256.signextend) "SIGNEXTEND expects 2 inputs" args.
-  Qed.
-      
-  Definition opcode_indep_state_snd := evm_opcode_indep_state_snd.
-
-  Definition empty_dialect_state: dialect_state_t :=
-    EVMState.empty.
+    Exec.execute state op inputs.
 
   Definition show_value (v: value_t): string :=
     HexString.of_Z (v.(U256.val)).
@@ -1418,5 +1328,3 @@ Module EVMDialect <: DIALECT.
     EVM_opcode.show op.
 
 End EVMDialect.
-
-Module EVMDialect_Facts := DialectFacts EVMDialect.

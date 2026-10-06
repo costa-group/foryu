@@ -51,20 +51,6 @@ Module Type DIALECT.
     complicate things a bit. *)
   Parameter execute_opcode: dialect_state_t -> opcode_t -> list value_t -> (list value_t * dialect_state_t * Status.t).
 
-   (* [opcode_indep_state] specifies whether the execution of an opcode depends on the dialect state *)
-  Parameter opcode_indep_state : opcode_t -> bool. 
-  
-  (* If [opcode_indep_state op = true], then the execution of [op] should not depend on the dialect state. *)
-  Parameter opcode_indep_state_snd : forall (op: opcode_t),
-    opcode_indep_state op = true -> 
-    forall (s1 s2: dialect_state_t) (args: list value_t), 
-    exists (res: list value_t) (status: Status.t),
-    execute_opcode s1 op args = (res, s1, status) /\
-    execute_opcode s2 op args = (res, s2, status).
-
-  (* An empty dialect state, which is mainly used to testing *)
-  Parameter empty_dialect_state : dialect_state_t.
-
   (* A function to show a value as a string, used for debugging *)
   Parameter show_value : value_t -> string.
 

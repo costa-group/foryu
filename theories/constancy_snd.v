@@ -10,7 +10,7 @@ From Stdlib Require Import Lia.
 
 (* Specification of valid constancy information, and its soundness
 w.r.t. program execution ([const_at_pc_snd]). *)
-Module Constancy_snd (D: DIALECT).
+Module Constancy_snd (D: DIALECT) (E: CONST_SYMB D).
 
   (* Projected out of [Constancy_info(D)] so that everything built on
   this file (in particular the checker, constancy.v) shares one single
@@ -181,16 +181,14 @@ Module Constancy_snd (D: DIALECT).
               nth_error i.(output) k = Some v /\
               nth_error i.(input) k = Some x /\
               sexpr_const m x c)
-        (* [i] is an opcode that does not depend on the dialect state,
-        all of its inputs resolve to constants [cs], and executing it
-        on [cs] succeeds and gives [c] for [v] *)
-        \/ (exists (opcode: D.opcode_t) (k: nat) (cs res_vals: list D.value_t) (st: D.dialect_state_t),
+        (* [i] is an opcode, and its abstract execution ([E.abs_exec],
+        see constancy_info.v), given the constants known in [m], gives
+        [c] for [v] *)
+        \/ (exists (opcode: D.opcode_t) (k: nat) (res: list (option D.value_t)),
               i.(InstrD.op) = inl (inr opcode) /\
-              D.opcode_indep_state opcode = true /\
-              Forall2 (sexpr_const m) i.(input) cs /\
-              D.execute_opcode D.empty_dialect_state opcode cs = (res_vals, st, Status.Running) /\
+              E.abs_exec opcode i.(input) (fun x => VarMap.find x m) = Some res /\
               nth_error i.(output) k = Some v /\
-              nth_error res_vals k = Some c)) ->
+              nth_error res k = Some (Some c))) ->
         (* The outputs of a function call are never constant: nothing
         is known statically about a callee's results. *)
     const_at_pc p fname bid (S pc) m'.
@@ -864,21 +862,18 @@ Module Constancy_snd (D: DIALECT).
     - destruct x0 as [var0 | val0]; simpl; f_equal; exact (IH sf).
   Qed.
 
-  (* If every fact claimed by [m] holds in the frame [sf], then
-  simple expressions that resolve to constants under [m] evaluate, in
-  [sf], to exactly those constants. *)
-  Lemma sexprs_const_eval :
-    forall (m: pp_const_info_t) (es: list SimpleExprD.t) (cs: list D.value_t) (sf: StackFrameD.t),
-      Forall2 (sexpr_const m) es cs ->
-      (forall (v: VarID.t) (c: D.value_t), VarMap.find v m = Some c -> LocalsD.get sf.(StackFrameD.locals) v = c) ->
-      SmallStepD.eval_sexpr es sf = cs.
+  (* [eval_sexpr] evaluates each simple expression using the values of
+  the variables in the frame [sf] -- the evaluation used by
+  [CONST_SYMB.abs_exec_snd] *)
+  Lemma eval_sexpr_map :
+    forall (es: list SimpleExprD.t) (sf: StackFrameD.t),
+      SmallStepD.eval_sexpr es sf
+      = List.map (fun e => match e with inl v => LocalsD.get sf.(StackFrameD.locals) v | inr c => c end) es.
   Proof.
-    intros m es cs sf Hcs Hval.
-    induction Hcs as [| x c es' cs' Hx Hrest IH].
+    intros es sf.
+    induction es as [| e es' IH].
     - reflexivity.
-    - destruct x as [var | val]; simpl in Hx |- *.
-      + rewrite (Hval var c Hx). f_equal. exact IH.
-      + subst c. f_equal. exact IH.
+    - destruct e as [v | c]; simpl; f_equal; exact IH.
   Qed.
 
   (* [constant_var p fn bid at_pc v c] is the formal meaning of "[v]
@@ -1806,11 +1801,10 @@ Module Constancy_snd (D: DIALECT).
         }
         { (* opcode: symmetric to the assignment case, with the "assign"
           and "opcode" roles of ruled-out/target swapped, and with
-          [sexprs_const_eval] discharging the "all inputs constant"
-          premise, plus [D.opcode_indep_state_snd] bridging the
-          premise's [D.empty_dialect_state] against the actual run's
-          current dialect state. *)
-          destruct Hc4 as [opcode4 [k4 [ci4 [rv4 [st4 [Hop4 [Hindep4 [Hcs4 [Hexec4 [Hout4 Hres4]]]]]]]]]].
+          [E.abs_exec_snd] giving the values of the outputs, since the
+          values in the frame agree with the constants known before the
+          opcode (by the induction hypothesis). *)
+          destruct Hc4 as [opcode4 [k4 [res4 [Hop4 [Habs4 [Hout4 Hres4]]]]]].
           rename fname2 into fname4, bid2 into bid4, pc2 into pc4, b2 into b4, i2 into i4,
                  Hblock2 into Hblock4, Hnth2 into Hnth4, v into v4, c into c4.
           destruct n as [| n'].
@@ -1906,20 +1900,20 @@ Module Constancy_snd (D: DIALECT).
                          { intros vv cc Hvc.
                            exact (IH n' Hlt p fname4 bid4 pc4 m2 Hprev2 vv cc Hvc
                                     s0 s_mid f [] rest locals0 (StackFrameD.locals sf_mid) Hgetf Hs0 Heval_mid Hsmid_shape). }
-                         assert (Heval_ci4 : SmallStepD.eval_sexpr (InstrD.input i4) sf_mid = ci4)
-                           by exact (sexprs_const_eval m2 (InstrD.input i4) ci4 sf_mid Hcs4 Hval4).
-                         rewrite Heval_ci4 in Hexec_mid.
-                         destruct (D.opcode_indep_state_snd opcode4 Hindep4 (StateD.dialect_state s_mid) D.empty_dialect_state ci4)
-                           as [res [status [Hexec_smid_indep Hexec_empty_indep]]].
-                         rewrite Hexec4 in Hexec_empty_indep.
-                         injection Hexec_empty_indep as Hres_eq Hst_eq Hstatus_eq.
-                         subst res status.
-                         rewrite Hexec_smid_indep in Hexec_mid.
+                         (* the values in the frame agree with the constants known
+                         before i4, so the abstract execution is correct *)
+                         destruct (E.abs_exec_snd opcode4 (InstrD.input i4) (fun x => VarMap.find x m2) res4
+                                     (StateD.dialect_state s_mid) (LocalsD.get (StackFrameD.locals sf_mid))
+                                     Habs4 Hval4) as [out4 [st4 [Hexec4 Hagree4]]].
+                         assert (Hexec4' : D.execute_opcode (StateD.dialect_state s_mid) opcode4
+                                             (SmallStepD.eval_sexpr (InstrD.input i4) sf_mid) = (out4, st4, Status.Running))
+                           by (rewrite eval_sexpr_map; exact Hexec4).
+                         rewrite Hexec4' in Hexec_mid.
                          injection Hexec_mid as Hout_eq Hdstate_eq Hstat_eq.
                          subst out_vals.
                          rewrite <- Hloc_eq.
-                         exact (set_all_nth_error (InstrD.output i4) rv4 (StackFrameD.locals sf_mid) locals_mid' k4 v4 c4
-                                  (i4.(InstrD.H_nodup)) Hset_mid Hout4 Hres4).
+                         exact (set_all_nth_error (InstrD.output i4) out4 (StackFrameD.locals sf_mid) locals_mid' k4 v4 c4
+                                  (i4.(InstrD.H_nodup)) Hset_mid Hout4 (Hagree4 k4 c4 Hres4)).
                      --- simpl in Hsn.
                          try rewrite Hsmid in Hsn; destruct (frame_cons_eq_fields _ _ _ _ Hsn) as [Hfn_eq [Hloc_eq [Hbid_eq [Hpc_eq Hrsf_eq]]]].
                          exact (Hih_unchanged Hfn_eq Hloc_eq Hbid_eq Hpc_eq Hrsf_eq).
