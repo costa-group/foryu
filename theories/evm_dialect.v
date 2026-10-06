@@ -1328,3 +1328,8 @@ Module EVMDialect (BC: BLOCK_CHAIN) <: DIALECT.
     EVM_opcode.show op.
 
 End EVMDialect.
+
+(* The EVM dialect with the default implementation of the blockchain
+operations; this is the dialect used by the extracted checker (see
+checker.v) *)
+Module DefaultEVMDialect := EVMDialect(DefaultBlockChain).
