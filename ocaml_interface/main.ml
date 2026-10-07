@@ -734,7 +734,7 @@ let extract_const_info (flatjson: Yojson.Safe.t) : Checker.Checker.EVMConstancy.
 let show_pp_const_info (pp: Checker.Checker.EVMConstancy.pp_const_info_t) : string =
   let pairs = Checker.VarMap.elements pp in
   "{" ^ String.concat ", " (List.map (fun (v, k) ->
-      (char_list_to_string (Checker.VarID.show v)) ^ "=" ^ (char_list_to_string (Checker.EVMDialect.show_value k)))
+      (char_list_to_string (Checker.VarID.show v)) ^ "=" ^ (char_list_to_string (Checker.Checker.EVMDialectBC.show_value k)))
     pairs) ^ "}"
 
 
@@ -1025,7 +1025,7 @@ let liveness_info2 : Checker.Checker.EVMLiveness.prog_live_info_t =
 SUMMARY OF OCAML TYPES:
 * Checker.BlockID.t = Checker.n
 * Checker.VarID.t = Checker.n
-* Checker.EVMDialect.value_t = Checker.z
+* Checker.Checker.EVMDialectBC.value_t = Checker.z
 * Checker.Checker.ExitInfo.SimpleExprD.t = Inl Checker.n | Inr Checker.z
 * Checker.FuncName.t = char list
 * Checker.Checker.ExitInfo.t = 
