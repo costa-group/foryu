@@ -111,7 +111,8 @@ def enumerate_occurrences(base_sequence: str = DEFAULT_OPTIMIZER_SEQUENCE,
 
 def dump_occurrence(json_input: Dict[str, Any], occurrence: Occurrence, solc_executable: str = "solc",
                     disable_stack_allocation: bool = False,
-                    stats_out: Optional[Dict[str, float]] = None) -> Optional[Dict[str, Any]]:
+                    stats_out: Optional[Dict[str, float]] = None,
+                    compile_timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
     """
     Compiles occurrence's seq_before/seq_after pair. Returns {"before": {contract: yulCFGJson},
     "after": {contract: yulCFGJson}, "structure": {filename: [contract_name, ...]}}, or None if
@@ -133,6 +134,10 @@ def dump_occurrence(json_input: Dict[str, Any], occurrence: Occurrence, solc_exe
     stats_out, when given, gets "compile_seconds" added to (accumulated, not overwritten, so a
     caller invoking this repeatedly across occurrences with the same dict gets a running total)
     -- the wall time spent in the two solc invocations, whether or not they succeeded.
+
+    compile_timeout, when given, bounds each of the two solc invocations (seconds); a timeout is
+    treated the same as any other compile failure (occurrence skipped, logged) -- guards against
+    the rare, outsized contract whose compile time blows up under disable_stack_allocation.
     """
     prepared_input = with_stack_allocation_disabled(json_input) if disable_stack_allocation else json_input
     start = time.perf_counter()
@@ -140,10 +145,12 @@ def dump_occurrence(json_input: Dict[str, Any], occurrence: Occurrence, solc_exe
         baseline_compilation = SolidityCompilation(None, solc_executable)
         baseline_compilation.flags = "--standard-json"
         baseline_compilation.set_optimizer_steps(occurrence["seq_before"])
-        baseline_cfg = baseline_compilation.compile_json_input(copy.deepcopy(prepared_input))
+        baseline_cfg = baseline_compilation.compile_json_input(copy.deepcopy(prepared_input),
+                                                                timeout=compile_timeout)
         probe_cfg = SolidityCompilation.from_json_input(copy.deepcopy(prepared_input),
                                                         optimizer_steps=occurrence["seq_after"],
-                                                        solc_executable=solc_executable)
+                                                        solc_executable=solc_executable,
+                                                        timeout=compile_timeout)
     except Exception as e:
         logging.warning(f"Occurrence {occurrence['step']}#{occurrence['step_index']} "
                         f"(position {occurrence['position']}) failed to compile: {e}")
@@ -162,7 +169,8 @@ def dump_all_occurrences(json_input: Dict[str, Any], output_dir: str,
                          base_sequence: str = DEFAULT_OPTIMIZER_SEQUENCE,
                          steps_to_consider: List[str] = PROPAGATION_STEPS_TO_TRACE,
                          solc_executable: str = "solc", disable_stack_allocation: bool = False,
-                         stats_out: Optional[Dict[str, float]] = None) -> List[Dict[str, Any]]:
+                         stats_out: Optional[Dict[str, float]] = None,
+                         compile_timeout: Optional[float] = None) -> List[Dict[str, Any]]:
     """
     Compiles every occurrence of steps_to_consider in base_sequence (enumerate_occurrences) and
     writes one <output_dir>/occ_XXX_<step><step_index>_before.json / _after.json pair per
@@ -182,7 +190,8 @@ def dump_all_occurrences(json_input: Dict[str, Any], output_dir: str,
     manifest = []
     for occurrence in enumerate_occurrences(base_sequence, steps_to_consider):
         dumped = dump_occurrence(json_input, occurrence, solc_executable=solc_executable,
-                                 disable_stack_allocation=disable_stack_allocation, stats_out=stats_out)
+                                 disable_stack_allocation=disable_stack_allocation, stats_out=stats_out,
+                                 compile_timeout=compile_timeout)
         if dumped is None:
             continue
 

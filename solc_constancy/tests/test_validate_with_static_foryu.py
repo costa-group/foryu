@@ -3,7 +3,10 @@ import subprocess
 
 import pytest
 
-from validate_with_static_foryu import DEFAULT_STATIC_FORYU, _find_annotated_files, _run_static_foryu
+import json
+
+from validate_with_static_foryu import DEFAULT_STATIC_FORYU, _find_annotated_files, _run_static_foryu, \
+    _strip_unverified
 
 _requires_static_foryu = pytest.mark.skipif(not os.path.isfile(DEFAULT_STATIC_FORYU),
                                             reason="static_foryu binary not found at the default path")
@@ -16,10 +19,47 @@ class _FakeCompletedProcess:
         self.returncode = returncode
 
 
+def _annotated(constancy, unverified):
+    block = {"id": "Block0", "instructions": [], "constancy": constancy, "constancy_unverified": unverified}
+    return {"contracts": {"a.sol": {"A": {"yulCFGJson": {"A_1": {"blocks": [block], "functions": {},
+                                                               "subObjects": {}}}}}}}
+
+
+class TestStripUnverified:
+    def test_removes_only_the_unverified_facts_and_the_field_itself(self):
+        data = _annotated([{"v0": "0x80"}, {"v0": "0x80", "v17": "0x64"}], [{}, {"v17": "0x64"}])
+
+        removed = _strip_unverified(data)
+
+        block = data["contracts"]["a.sol"]["A"]["yulCFGJson"]["A_1"]["blocks"][0]
+        assert removed == 1
+        assert block["constancy"] == [{"v0": "0x80"}, {"v0": "0x80"}]
+        assert "constancy_unverified" not in block
+
+
 class TestRunStaticForyu:
+    def test_checks_the_verified_subset_separately(self, monkeypatch, tmp_path):
+        path = tmp_path / "f.json"
+        path.write_text(json.dumps(_annotated([{"v17": "0x64"}], [{"v17": "0x64"}])))
+        verdicts = iter(["CONSTANCY_INVALID", "CONSTANCY_VALID"])
+        seen_inputs = []
+
+        def fake_run(cmd, **kw):
+            seen_inputs.append(json.load(open(cmd[-1])))
+            return _FakeCompletedProcess(stdout=f"{cmd[-1]},JSON_PROCESSING_OK,1,0,0,0,0,{next(verdicts)}\n")
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        row = _run_static_foryu(str(path), "/path/to/static_foryu")
+
+        assert row["constancy_result"] == "CONSTANCY_INVALID"
+        assert row["constancy_result_verified"] == "CONSTANCY_VALID"
+        assert row["unverified_fact_count"] == 1
+        stripped_block = seen_inputs[1]["contracts"]["a.sol"]["A"]["yulCFGJson"]["A_1"]["blocks"][0]
+        assert stripped_block["constancy"] == [{}]
+
     def test_parses_a_full_csv_line(self, monkeypatch):
-        line = ("some/file.json,JSON_PROCESSING_OK,293,948,15320063,10895014,32554865,"
-               "LIVENESS_VALID,8288860,17141819,CONSTANCY_VALID")
+        line = ("some/file.json,JSON_PROCESSING_OK,293,948,15320063,"
+               "8288860,17141819,CONSTANCY_VALID")
         monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _FakeCompletedProcess(stdout=line + "\n"))
 
         row = _run_static_foryu("some/file.json", "/path/to/static_foryu")
@@ -30,7 +70,6 @@ class TestRunStaticForyu:
         assert row["json_status"] == "JSON_PROCESSING_OK"
         assert row["nblocks"] == "293"
         assert row["ninstrs"] == "948"
-        assert row["liveness_result"] == "LIVENESS_VALID"
         assert row["constancy_result"] == "CONSTANCY_VALID"
         assert row["constancy_extract_ns"] == "8288860"
         assert row["constancy_check_ns"] == "17141819"
@@ -39,7 +78,7 @@ class TestRunStaticForyu:
     def test_a_json_processing_error_is_recorded_even_though_exit_code_is_0(self, monkeypatch):
         # Confirmed directly against the real binary: JSON_PROCESSING_ERROR still exits 0 --
         # pass/fail must come from the parsed verdict field, never the exit code
-        line = "bad/file.json,JSON_PROCESSING_ERROR,,,,,,,,,"
+        line = "bad/file.json,JSON_PROCESSING_ERROR,,,,,,"
         monkeypatch.setattr(subprocess, "run", lambda *a, **kw: _FakeCompletedProcess(stdout=line + "\n", returncode=0))
 
         row = _run_static_foryu("bad/file.json", "/path/to/static_foryu")

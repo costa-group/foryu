@@ -122,6 +122,20 @@ def evaluate(op: str, in_args: List[str]) -> Optional[str]:
         return None
 
 
+SELF_CANCELING_OPS = {"sub", "xor"}
+"""
+2-argument ops where identical operands deterministically yield 0 -- sub(x, x) = 0, xor(x, x) = 0
+-- by algebraic identity, independent of x's actual value. Only valid to use without resolving x
+at all when the two operand occurrences are provably the exact same value; under SSA (this
+project's codebase-wide assumption -- see CLAUDE.md and seed_extraction.py), the exact same
+variable name occurring twice is guaranteed to be the exact same value both times, since it can
+only have been assigned once. Deliberately not extended to and/or (and(x,x)=x, or(x,x)=x -- true
+identities too, but they resolve to "x" itself, not a concrete literal, so they don't help ground
+a fact) or to comparison ops like lt/gt/eq (also true identities, e.g. lt(x,x)=0) -- out of scope
+by choice, since neither is needed by any case this module currently handles.
+"""
+
+
 def _to_hex(value: int) -> str:
     """
     value as a byte-aligned hex string (even number of digits, minimum one byte) -- solc's own

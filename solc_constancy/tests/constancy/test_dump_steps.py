@@ -1,10 +1,17 @@
+import shutil
+
+import pytest
+
 from constancy.dump_steps import (
     PROPAGATION_STEPS_TO_TRACE,
+    dump_all_occurrences,
     enumerate_occurrences,
     find_occurrences,
     truncate_sequence,
 )
 from execution.sol_compilation import DEFAULT_OPTIMIZER_SEQUENCE
+
+_requires_solc = pytest.mark.skipif(shutil.which("solc") is None, reason="solc is not available on PATH")
 
 
 def test_find_occurrences_matches_all_positions():
@@ -78,3 +85,32 @@ def test_occurrences_within_the_real_cleanup_are_traced_without_a_double_colon()
         for seq in (occurrence["seq_before"], occurrence["seq_after"]):
             assert seq.count(":") == 1
             assert seq.index(":") == real_colon_position
+
+
+@_requires_solc
+def test_dump_all_occurrences_accumulates_stats(tmp_path, constant_local_contract_input):
+    stats = {}
+
+    manifest = dump_all_occurrences(constant_local_contract_input, str(tmp_path), stats_out=stats)
+
+    assert manifest  # at least one occurrence compiled
+    assert stats["compile_seconds"] > 0
+    assert stats["dump_seconds"] > 0
+
+
+@_requires_solc
+def test_dump_all_occurrences_without_stats_out_is_unaffected(tmp_path, constant_local_contract_input):
+    # Omitting stats_out (the default) must change nothing about the existing return value --
+    # the regression lock for the additive-parameter guarantee
+    manifest = dump_all_occurrences(constant_local_contract_input, str(tmp_path))
+
+    assert manifest
+
+
+@_requires_solc
+def test_compile_timeout_treats_an_overrun_as_a_compile_failure(tmp_path, constant_local_contract_input):
+    # An impossibly short timeout must behave exactly like any other compile failure -- every
+    # occurrence skipped, nothing raised -- not left to hang or propagate a bare TimeoutExpired
+    manifest = dump_all_occurrences(constant_local_contract_input, str(tmp_path), compile_timeout=0.0001)
+
+    assert manifest == []

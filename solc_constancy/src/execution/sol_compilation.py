@@ -39,10 +39,15 @@ def get_yul_details(settings: Dict[str, Any]) -> Dict[str, Any]:
     return details.setdefault("yulDetails", {})
 
 
-def run_command(cmd):
+def run_command(cmd, timeout=None):
     solc_p = subprocess.Popen(shlex.split(cmd), stdout=subprocess.PIPE,
                               stderr=subprocess.PIPE)
-    outs, err = solc_p.communicate();
+    try:
+        outs, err = solc_p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        solc_p.kill()
+        solc_p.communicate()
+        raise
     return outs.decode(), err.decode()
 
 
@@ -351,7 +356,8 @@ class SolidityCompilation:
     @staticmethod
     def from_json_input(json_input: Dict[str, Any], deployed_contract: Optional[str] = None, final_file: Optional[str] = None,
                         solc_executable: str = "solc", original_folder: Optional[str] = None,
-                        optimizer_steps: Optional[str] = None) -> Optional[Dict[str, Yul_CFG_T]]:
+                        optimizer_steps: Optional[str] = None,
+                        timeout: Optional[float] = None) -> Optional[Dict[str, Yul_CFG_T]]:
         """
         Compiles a file in the JSON input representation. If optimizer_steps is given, it
         forces that Yul optimizer step sequence via settings.optimizer.details.yulDetails.optimizerSteps
@@ -359,7 +365,8 @@ class SolidityCompilation:
         compilation = SolidityCompilation(final_file, solc_executable)
         compilation.flags = "--standard-json"
         compilation.set_optimizer_steps(optimizer_steps)
-        return compilation.compile_json_input(json_input, deployed_contract, json_folder=original_folder)
+        return compilation.compile_json_input(json_input, deployed_contract, json_folder=original_folder,
+                                              timeout=timeout)
 
     def _json_optimization_settings(self) -> Dict[str, Any]:
         """
@@ -395,9 +402,9 @@ class SolidityCompilation:
 
         return settings
 
-    def _compile_json_input(self, json_file: str) -> Tuple[Dict, str]:
+    def _compile_json_input(self, json_file: str, timeout: Optional[float] = None) -> Tuple[Dict, str]:
         command = f"{self._solc_command} {self.flags} {json_file}"
-        output, error = run_command(command)
+        output, error = run_command(command, timeout=timeout)
         output_dict = json.loads(output)
         return output_dict, error
 
@@ -437,7 +444,8 @@ class SolidityCompilation:
         return True, json_dict
 
     def compile_json_input(self, json_input: Dict, deployed_contract: Optional[str] = None,
-                           json_folder: Optional[str] = None) -> Optional[Dict[str, Yul_CFG_T]]:
+                           json_folder: Optional[str] = None,
+                           timeout: Optional[float] = None) -> Optional[Dict[str, Yul_CFG_T]]:
         # Change the settings from the json input
         if self.CHANGE_SETTINGS:
             json_input["settings"] = self._json_input_set_settings()
@@ -465,13 +473,13 @@ class SolidityCompilation:
             f.write(json.dumps(json_input))
 
         # Compile it using the corresponding options
-        output_dict, error = self._compile_json_input(tmp_file)
-
-        os.remove(tmp_file)
-
-        # We restore the file afterward
-        if json_folder is not None:
-            self._restore_path_for_compilation()
+        try:
+            output_dict, error = self._compile_json_input(tmp_file, timeout=timeout)
+        finally:
+            os.remove(tmp_file)
+            # We restore the file afterward
+            if json_folder is not None:
+                self._restore_path_for_compilation()
 
         # Then we process the output and generate the corresponding file
         correct_compilation, yul_cfg_dict = self._process_json_output(output_dict, error, deployed_contract)

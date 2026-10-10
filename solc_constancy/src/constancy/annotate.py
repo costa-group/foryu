@@ -9,7 +9,7 @@ module only does the injection itself, so it stays reusable independently of how
 constancy_map was produced.
 """
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from constancy.propagation import instruction_constancy_T
 from constancy.seed_extraction import iter_block_scopes, scope_path_T
@@ -27,12 +27,15 @@ def _blocks_by_scope_and_id(yul_cfg_json: Yul_CFG_T) -> Dict[Tuple[scope_path_T,
 
 
 def annotate_constancy(yul_cfg_json: Yul_CFG_T,
-                       constancy_map: Dict[Tuple[scope_path_T, block_id_T], List[instruction_constancy_T]]) -> \
-        Yul_CFG_T:
+                       constancy_map: Dict[Tuple[scope_path_T, block_id_T], List[instruction_constancy_T]],
+                       unverified_map: Optional[Dict[Tuple[scope_path_T, block_id_T],
+                                                     List[instruction_constancy_T]]] = None) -> Yul_CFG_T:
     """
     Mutates yul_cfg_json in place, injecting a "constancy" field into every block dict that
     has an entry in constancy_map (next to its existing "liveness" and "instructions"
-    fields), and returns it for convenience
+    fields), and returns it for convenience. When unverified_map is given, also injects
+    "constancy_unverified" (same shape as "constancy"): the subset of each entry's facts that are
+    sound but not locally verifiable -- see compare_constancy.annotate_constancy_between.
     """
     blocks_by_key = _blocks_by_scope_and_id(yul_cfg_json)
 
@@ -42,5 +45,7 @@ def annotate_constancy(yul_cfg_json: Yul_CFG_T,
             logging.warning(f"Block {key} not found while annotating constancy; skipping")
             continue
         block["constancy"] = constancy
+        if unverified_map is not None:
+            block["constancy_unverified"] = unverified_map.get(key, [{} for _ in constancy])
 
     return yul_cfg_json

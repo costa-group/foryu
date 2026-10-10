@@ -1,4 +1,4 @@
-from constancy.evm_arithmetic import evaluate
+from constancy.evm_arithmetic import evaluate, SELF_CANCELING_OPS
 
 
 def test_reversed_argument_order_matches_the_real_panic_error_0x11_shape():
@@ -37,3 +37,7 @@ def test_unfoldable_op_returns_none():
 
 def test_arity_mismatch_returns_none():
     assert evaluate("add", ["0x01"]) is None
+
+
+def test_self_canceling_ops_is_exactly_sub_and_xor():
+    assert SELF_CANCELING_OPS == {"sub", "xor"}

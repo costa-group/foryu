@@ -60,6 +60,29 @@ def _annotate_with_no_facts(yul_cfg_json: Yul_CFG_T) -> None:
         for block in blocks:
             instructions = block.get("instructions", [])
             block["constancy"] = [{} for _ in range(len(instructions) - count_leading_phis(instructions) + 1)]
+            block["constancy_unverified"] = [{} for _ in block["constancy"]]
+
+
+def _unverified_constancy(parsed_cfg, seed_facts, unverified_seeds, constancy_map):
+    """
+    The "constancy_unverified" counterpart of constancy_map: every entry of the full constancy
+    that a second propagation, seeded with only the verified seed facts, does not also produce --
+    so a fact propagated from (or merged at a phi with) an unverified seed is marked too, not just
+    the seed itself. "constancy" stays the complete set; this only says which part of it the
+    external checker can be expected to confirm locally.
+    """
+    if not unverified_seeds:
+        return {key: [{} for _ in entries] for key, entries in constancy_map.items()}
+    verified_map = compute_constancy_for_cfg(
+        parsed_cfg, {key: value for key, value in seed_facts.items() if key not in unverified_seeds})
+    unverified_map = {}
+    for key, entries in constancy_map.items():
+        verified_entries = verified_map.get(key, [])
+        unverified_map[key] = [
+            {var: value for var, value in entry.items()
+             if i >= len(verified_entries) or verified_entries[i].get(var) != value}
+            for i, entry in enumerate(entries)]
+    return unverified_map
 
 
 def annotate_constancy_between(baseline_cfg: Dict[str, Yul_CFG_T], probe_cfg: Dict[str, Yul_CFG_T],
@@ -113,8 +136,9 @@ def annotate_constancy_between(baseline_cfg: Dict[str, Yul_CFG_T], probe_cfg: Di
         counter = _MissingWarningCounter()
         logging.getLogger().addHandler(counter)
         fact_analysis_start = time.perf_counter()
+        unverified_seeds: set = set()
         try:
-            seed_facts = extract_seed_facts_for_contract(baseline_yul_cfg, probe_yul_cfg)
+            seed_facts = extract_seed_facts_for_contract(baseline_yul_cfg, probe_yul_cfg, unverified_seeds)
         finally:
             logging.getLogger().removeHandler(counter)
             if stats_out is not None:
@@ -124,7 +148,8 @@ def annotate_constancy_between(baseline_cfg: Dict[str, Yul_CFG_T], probe_cfg: Di
         annotation_start = time.perf_counter()
         parsed_cfg = parse_CFG_from_json_dict({contract_name: copy.deepcopy(baseline_yul_cfg)})[contract_name]
         constancy_map = compute_constancy_for_cfg(parsed_cfg, seed_facts)
-        annotate_constancy(baseline_yul_cfg, constancy_map)
+        annotate_constancy(baseline_yul_cfg, constancy_map,
+                           _unverified_constancy(parsed_cfg, seed_facts, unverified_seeds, constancy_map))
         if stats_out is not None:
             stats_out["annotation_seconds"] = stats_out.get("annotation_seconds", 0.0) + \
                 (time.perf_counter() - annotation_start)

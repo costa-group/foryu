@@ -42,6 +42,51 @@ class TestWithStackAllocationDisabled:
 
 
 class TestMatchScope:
+    @staticmethod
+    def _two_block_scope(defining_instr):
+        # B0 defines v17 and an anchor claims it; B1 sees v17 as a live-in and its own anchor
+        # claims it too.
+        baseline = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
+             "instructions": [defining_instr, {"in": ["v17", "0x00"], "op": "mstore", "out": []}]},
+            {"id": "B1", "exit": {"type": "Terminated", "targets": []},
+             "instructions": [{"in": ["v17", "0x20"], "op": "mstore", "out": []}]},
+        ]
+        probe = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
+             "instructions": [{"in": ["0x64", "0x00"], "op": "mstore", "out": []}]},
+            {"id": "B1", "exit": {"type": "Terminated", "targets": []},
+             "instructions": [{"in": ["0x64", "0x20"], "op": "mstore", "out": []}]},
+        ]
+        return baseline, probe
+
+    def test_an_unverifiable_claim_is_marked_unverified_in_every_block(self):
+        # B1's live-in claim is only as verifiable as B0's definition: B1 alone would treat it as
+        # an ordinary live-in fact, so marking has to be scope-wide (per variable).
+        baseline, probe = self._two_block_scope({"in": ["v98", "v99"], "op": "add", "out": ["v17"]})
+        unverified = set()
+
+        _, _, facts_by_block = _match_scope(baseline, probe, unverified_out=unverified)
+
+        assert facts_by_block["B0"][1] == {"v17": "0x64"}
+        assert facts_by_block["B1"][0] == {"v17": "0x64"}
+        assert unverified == {"v17"}
+
+    def test_a_distrusted_claim_is_dropped_from_every_block(self):
+        # sub(v5, v5) is 0 whatever v5 is, contradicting B0's claim v17=0x64: the correspondence
+        # behind it is wrong, so B1's own claim about the same variable can't stand either (kept,
+        # it would be a live-in claim with nothing upstream to justify it -- the shape behind most
+        # of the c-occurrence regressions in the 1000-contract sweep).
+        baseline, probe = self._two_block_scope({"in": ["v5", "v5"], "op": "sub", "out": ["v17"]})
+        unverified = set()
+
+        correspondence, _, facts_by_block = _match_scope(baseline, probe, unverified_out=unverified)
+
+        assert correspondence["B1"] == "B1"
+        assert all("v17" not in var_facts
+                   for block_facts in facts_by_block.values() for var_facts in block_facts.values())
+        assert unverified == set()
+
     def test_a_silently_vanished_block_produces_a_confident_but_wrong_pairing(self):
         # Mirrors a real bug found against a real contract (see PROGRESS.md): solc's
         # StackCompressor can silently drop one block from a chain of otherwise-identically-
@@ -946,6 +991,204 @@ class TestMatchBlockInstructions:
         facts, _ = match_block_instructions(baseline, probe)
 
         assert facts == {}
+
+    def test_reassociation_does_not_override_an_already_confirmed_binding_with_a_literal(self):
+        # Mirrors a real unsound fact found against a real contract (ReservoirV6_0_1,
+        # fun_getAmount/Block5, occurrence s0 -- see PROGRESS.md): ExpressionSimplifier
+        # reassociates "v23 + (0x20+v16)" into "0x20 + (v19+v14)". The outer abi_decode call
+        # (an anchor) correctly pins v25 <-> v21 and, via array_length_bytes, v23 <-> v19 --
+        # but that then forces baseline's "add(v23, v24) -> v25" to align against probe's
+        # "add(0x20, v20) -> v21" positionally, putting the already-bound v23 (a real runtime
+        # length) in the same slot probe's literal 0x20 now occupies. v23 must not be reported
+        # as 0x20 just because it landed in that slot after the regrouping: it already has its
+        # own, correct, symbolic correspondent (v19)
+        baseline = [
+            {"in": ["v16"], "op": "array_length_bytes", "out": ["v23"]},
+            {"in": ["0x20", "v16"], "op": "add", "out": ["v24"]},
+            {"in": ["v23", "v24"], "op": "add", "out": ["v25"]},
+            {"in": ["0x20", "v16"], "op": "add", "out": ["v26"]},
+            {"in": ["v25", "v26"], "op": "abi_decode_uint256_fromMemory", "out": ["v27"]},
+        ]
+        probe = [
+            {"in": ["v14"], "op": "array_length_bytes", "out": ["v19"]},
+            {"in": ["v19", "v14"], "op": "add", "out": ["v20"]},
+            {"in": ["0x20", "v20"], "op": "add", "out": ["v21"]},
+            {"in": ["0x20", "v14"], "op": "add", "out": ["v22"]},
+            {"in": ["v21", "v22"], "op": "abi_decode_uint256_fromMemory", "out": ["v23"]},
+        ]
+
+        facts, var_map = match_block_instructions(baseline, probe)
+
+        assert "v23" not in facts.get(2, {})
+        assert var_map["v23"] == "v19"
+
+    def test_backward_solves_a_vanished_chain_grounding_every_intermediate_fact(self):
+        # Mirrors a real case (PendleRouterV4_190/Block4, occurrence s2 -- see PROGRESS.md): the
+        # probe folds "sub(v0,v0)+0x64" into the literal 0x64, so the anchor (revert) claims
+        # v17=0x64 while v17's own defining chain vanished. v16's entry (sub(v0,v0)=0, a pure
+        # syntactic identity -- valid under SSA) is filled in, so v17 is locally verifiable too.
+        baseline = [
+            {"in": ["v0", "v0"], "op": "sub", "out": ["v16"]},
+            {"in": ["0x64", "v16"], "op": "add", "out": ["v17"]},
+            {"in": ["v17", "v0"], "op": "revert", "out": []},
+        ]
+        probe = [{"in": ["0x64", "0x80"], "op": "revert", "out": []}]
+        unverified = set()
+
+        facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
+
+        assert facts.get(0) == {"v16": "0x00"}
+        assert facts.get(1) == {"v17": "0x64"}
+        assert unverified == set()
+
+    def test_an_unknown_operand_keeps_the_claim_but_marks_it_unverified(self):
+        # v17 = add(v98, v99) with neither operand known: the claim can't be re-derived locally,
+        # but it comes from a unique, consistent correspondence, so it is sound and kept --
+        # marked unverified so a checker rejection can be traced to this, not to a wrong fact.
+        baseline = [
+            {"in": ["v98", "v99"], "op": "add", "out": ["v17"]},
+            {"in": ["v17", "v0"], "op": "revert", "out": []},
+        ]
+        probe = [{"in": ["0x64", "0x80"], "op": "revert", "out": []}]
+        unverified = set()
+
+        facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
+
+        assert facts.get(1) == {"v17": "0x64", "v0": "0x80"}
+        assert unverified == {"v17"}
+
+    def test_a_value_solc_resolved_through_memory_is_kept_unverified(self):
+        # solc can tell which value an mload reads back (LoadResolver), folding the whole
+        # add(mload(..), 0x20) into one literal; neither this module nor the checker models
+        # memory, so v6's chain can't be completed -- but the fact is still sound and kept.
+        baseline = [
+            {"in": ["0x40"], "op": "mload", "out": ["v5"]},
+            {"in": ["v5", "0x20"], "op": "add", "out": ["v6"]},
+            {"in": ["v6", "0x00"], "op": "revert", "out": []},
+        ]
+        probe = [{"in": ["0xa0", "0x00"], "op": "revert", "out": []}]
+        unverified = set()
+
+        facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
+
+        assert facts.get(2) == {"v6": "0xa0"}
+        assert unverified == {"v6"}
+        assert all("v5" not in f for f in facts.values())
+
+    def test_a_chain_contradicting_its_claim_is_distrusted_and_dropped(self):
+        # With v0 known (0x80), v17's own chain derives add(0x64, mul(0x80, 0x80)) = 0x4064, not the
+        # claimed 0x64: evidence that the correspondence behind the claim is wrong, so it is
+        # dropped -- the one case where a probe-derived claim is removed rather than kept.
+        baseline = [
+            {"in": ["v0", "v0"], "op": "mul", "out": ["v16"]},
+            {"in": ["0x64", "v16"], "op": "add", "out": ["v17"]},
+            {"in": ["v17", "v0"], "op": "revert", "out": []},
+        ]
+        probe = [{"in": ["0x64", "0x80"], "op": "revert", "out": []}]
+        distrusted, unverified = set(), set()
+
+        facts, _ = match_block_instructions(baseline, probe, distrusted=distrusted, unverified=unverified)
+
+        assert all("v16" not in f and "v17" not in f for f in facts.values())
+        assert distrusted == {"v17"}
+        assert unverified == set()
+
+    def test_a_conflicting_claim_is_dropped_and_claims_through_it_become_unverified(self):
+        # v16 is 0 by the sub(v0,v0) identity, but an anchor positionally claims v16=0x05 against a
+        # mismatched probe: that claim is distrusted and dropped. v17's own claim isn't
+        # contradicted -- its chain just runs through the now-distrusted v16 -- so it is kept,
+        # unverified.
+        baseline = [
+            {"in": ["v0", "v0"], "op": "sub", "out": ["v16"]},
+            {"in": ["v16", "0x99"], "op": "mstore", "out": []},
+            {"in": ["0x64", "v16"], "op": "add", "out": ["v17"]},
+            {"in": ["v17", "v0"], "op": "revert", "out": []},
+        ]
+        probe = [
+            {"in": ["0x05", "0x99"], "op": "mstore", "out": []},
+            {"in": ["0x64", "0x80"], "op": "revert", "out": []},
+        ]
+        distrusted, unverified = set(), set()
+
+        facts, _ = match_block_instructions(baseline, probe, distrusted=distrusted, unverified=unverified)
+
+        assert all("v16" not in f for f in facts.values())
+        assert facts.get(3, {}).get("v17") == "0x64"
+        assert distrusted == {"v16"}
+        assert unverified == {"v17"}
+
+    def test_a_value_only_obtainable_by_inverting_an_instruction_is_not_derived(self):
+        # v17's claim could be "solved" backward to v16=0 and v0=-5, but nothing forward-derives
+        # either, so no intermediate is invented: v17 is kept (sound), unverified, and v16 gets no
+        # fact.
+        baseline = [
+            {"in": ["v0", "0x05"], "op": "add", "out": ["v16"]},
+            {"in": ["0x64", "v16"], "op": "add", "out": ["v17"]},
+            {"in": ["v17", "v0"], "op": "revert", "out": []},
+        ]
+        probe = [{"in": ["0x64", "v99"], "op": "revert", "out": []}]
+        unverified = set()
+
+        facts, var_map = match_block_instructions(baseline, probe, unverified=unverified)
+
+        assert facts.get(2) == {"v17": "0x64"}
+        assert all("v16" not in f for f in facts.values())
+        assert unverified == {"v17"}
+        assert var_map["v0"] == "v99"
+
+    def test_phi_output_claims_are_left_to_the_cross_block_phi_rule(self):
+        # A PhiFunction output's claim is justified by the predecessors' exit facts, not by
+        # anything inside this block -- treating it as in-block arithmetic broke 20
+        # previously-valid files in the 1000-contract sweep, so it is passed through untouched.
+        baseline = [
+            {"in": ["v3", "v4"], "op": "PhiFunction", "out": ["phi1"]},
+            {"in": ["phi1", "0x00"], "op": "mstore", "out": []},
+        ]
+        probe = [
+            {"in": ["v3", "v4"], "op": "PhiFunction", "out": ["phi1"]},
+            {"in": ["0x05", "0x00"], "op": "mstore", "out": []},
+        ]
+        unverified = set()
+
+        facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
+
+        assert facts.get(1) == {"phi1": "0x05"}
+        assert unverified == set()
+
+    def test_a_literal_fold_nobody_claimed_is_not_reported(self):
+        # sub(0x01, 0x10) is foldable, but solc never showed v1 as a literal in the probe -- this
+        # module reports what the probe comparison found, not every literal fold it could do.
+        baseline = [
+            {"in": ["0x01", "0x10"], "op": "sub", "out": ["v1"]},
+            {"in": ["v1", "v2"], "op": "mstore", "out": []},
+        ]
+        probe = [
+            {"in": ["0x01", "0x10"], "op": "sub", "out": ["w1"]},
+            {"in": ["w1", "v2"], "op": "mstore", "out": []},
+        ]
+
+        facts, _ = match_block_instructions(baseline, probe)
+
+        assert facts == {}
+
+    def test_a_chain_bottoming_out_in_unknown_operands_is_kept_unverified(self):
+        # vBottom = add(vA, vB) with both operands unknown: nothing along vTop's chain is
+        # derivable, so vTop's claim is kept but unverified, and no intermediate is invented.
+        # (Also the shape that hung an earlier fixpoint-based version against SocketGateway,
+        # 0x3a23f943181408eac424116af7b7790c94cb97a5.)
+        baseline = [
+            {"in": ["vA", "vB"], "op": "add", "out": ["vBottom"]},
+            {"in": ["0x05", "vBottom"], "op": "add", "out": ["vMiddle"]},
+            {"in": ["0x64", "vMiddle"], "op": "add", "out": ["vTop"]},
+            {"in": ["vTop", "v0"], "op": "revert", "out": []},
+        ]
+        probe = [{"in": ["0x64", "0x80"], "op": "revert", "out": []}]
+        unverified = set()
+
+        facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
+
+        assert facts == {3: {"vTop": "0x64", "v0": "0x80"}}
+        assert unverified == {"vTop"}
 
     def test_partial_anchor_alignment_when_counts_differ(self):
         # An extra anchor (sstore) with no probe counterpart doesn't block the rest of the

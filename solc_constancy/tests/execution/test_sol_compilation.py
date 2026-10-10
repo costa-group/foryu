@@ -1,8 +1,55 @@
-from execution.sol_compilation import SolidityCompilation
+import subprocess
+
+import pytest
+
+from execution.sol_compilation import SolidityCompilation, run_command
 
 
 def _compilation():
     return SolidityCompilation(None, "solc")
+
+
+class TestRunCommand:
+    def test_passes_timeout_through_to_communicate(self, monkeypatch):
+        calls = {}
+
+        class _FakePopen:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def communicate(self, timeout=None):
+                calls["timeout"] = timeout
+                return b"out", b""
+
+        monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+
+        outs, err = run_command("solc --version", timeout=300)
+
+        assert calls["timeout"] == 300
+        assert outs == "out"
+
+    def test_kills_and_reaps_the_process_on_timeout_then_reraises(self, monkeypatch):
+        killed = []
+
+        class _FakePopen:
+            def __init__(self, *args, **kwargs):
+                self._calls = 0
+
+            def communicate(self, timeout=None):
+                self._calls += 1
+                if self._calls == 1:
+                    raise subprocess.TimeoutExpired(cmd="solc", timeout=timeout)
+                return b"", b""
+
+            def kill(self):
+                killed.append(True)
+
+        monkeypatch.setattr(subprocess, "Popen", _FakePopen)
+
+        with pytest.raises(subprocess.TimeoutExpired):
+            run_command("solc --standard-json slow.json", timeout=5)
+
+        assert killed == [True]
 
 
 class TestProcessJsonOutput:

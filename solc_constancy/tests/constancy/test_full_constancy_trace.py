@@ -1,11 +1,16 @@
+import argparse
+import csv
 import json
 import os
 import shutil
+import sys
 
 import pytest
 
 from constancy.seed_extraction import count_leading_phis, iter_block_scopes
-from full_constancy_trace import _wrap_in_original_structure, process_standard_json
+from execution.sol_compilation import DEFAULT_OPTIMIZER_SEQUENCE
+from full_constancy_trace import RESULTS_CSV_FIELDS, _wrap_in_original_structure, main, \
+    process_json_input, process_standard_json
 
 _requires_solc = pytest.mark.skipif(shutil.which("solc") is None, reason="solc is not available on PATH")
 
@@ -174,3 +179,67 @@ def test_annotated_file_on_disk_has_the_original_solc_output_nesting(tmp_path, h
                 found = contracts_in_file[contract_name]["yulCFGJson"]
         assert found is not None, f"{contract_name} missing from the on-disk contracts nesting"
         assert found == in_memory_yul_cfg
+
+
+@_requires_solc
+def test_process_standard_json_accumulates_stats(tmp_path, heavy_inlining_contract_input):
+    stats = {}
+
+    manifest = process_standard_json(heavy_inlining_contract_input, str(tmp_path), solc_executable="solc",
+                                     stats_out=stats)
+
+    assert manifest
+    assert stats["occurrence_count"] >= len(manifest)  # manifest is a filtered subset
+    for key in ("compile_seconds", "fact_analysis_seconds", "annotation_seconds", "dump_seconds"):
+        assert stats[key] > 0
+
+
+@_requires_solc
+def test_process_json_input_returns_a_results_csv_row(tmp_path, heavy_inlining_contract_input):
+    input_path = tmp_path / "contract_standard_input.json"
+    input_path.write_text(json.dumps(heavy_inlining_contract_input))
+    output_dir = tmp_path / "out"
+    args = argparse.Namespace(input_path=str(input_path), output_dir=str(output_dir),
+                              base_sequence=DEFAULT_OPTIMIZER_SEQUENCE, solc="solc",
+                              compile_timeout=300)
+
+    row = process_json_input(str(input_path), args)
+
+    assert set(row.keys()) == set(RESULTS_CSV_FIELDS)
+    assert row["input_file"] == str(input_path)
+    assert row["error"] == ""
+    assert row["manifest_entry_count"] > 0
+    assert row["total_seconds"] > 0
+
+
+def test_process_json_input_records_an_error_row_instead_of_raising(tmp_path):
+    # No _requires_solc: the failure (bad JSON) happens before any solc invocation is attempted
+    bad_input_path = tmp_path / "bad_standard_input.json"
+    bad_input_path.write_text("not valid json")
+    args = argparse.Namespace(input_path=str(bad_input_path), output_dir=str(tmp_path / "out"),
+                              base_sequence="dfDv:", solc="solc", compile_timeout=300)
+
+    row = process_json_input(str(bad_input_path), args)
+
+    assert row["input_file"] == str(bad_input_path)
+    assert row["error"] != ""
+    assert row["manifest_entry_count"] == 0
+
+
+@_requires_solc
+def test_main_writes_results_csv(tmp_path, monkeypatch, heavy_inlining_contract_input):
+    input_path = tmp_path / "contract_standard_input.json"
+    input_path.write_text(json.dumps(heavy_inlining_contract_input))
+    output_dir = tmp_path / "out"
+
+    monkeypatch.setattr(sys, "argv", ["full_constancy_trace.py", str(input_path), "--output-dir", str(output_dir)])
+    main()
+
+    csv_path = output_dir / "results.csv"
+    assert csv_path.is_file()
+    with open(csv_path) as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    assert rows[0]["input_file"] == str(input_path)
+    assert rows[0]["error"] == ""
+    assert float(rows[0]["compile_seconds"]) > 0
