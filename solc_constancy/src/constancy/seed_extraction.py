@@ -113,18 +113,18 @@ working block tracks which original block/instruction each of its own instructio
 every fact `_match_scope` finds is translated back to the real, unmerged baseline's addressing
 before being returned -- the annotated CFG itself is never touched, only how facts are discovered
 about it (mirrors `with_stack_allocation_disabled`'s own baseline/discovery split, just at the
-block-matching layer instead of the compile layer). This only folds a *directly*-literal
-condition; it does not, and isn't meant to, catch a branch that becomes dead for a genuinely
-different reason -- e.g. comparing two structurally-identical subexpressions
-(`eq(calldataload(x), calldataload(x))`, always true regardless of `x`'s actual runtime value) is
-CommonSubexpressionEliminator/ExpressionSimplifier's own value-numbering judgment, not a constant
-one, and replicating it here would mean re-deriving a piece of solc's own optimizer logic rather
-than comparing its output -- confirmed as the dominant cause of `ExpressionSimplifier`'s much
-larger, *unaddressed* block-count collapses (one real function goes from 39 blocks to 1: 18 of 19
-branches are exactly this shape, only 1 is a foldable literal comparison).
+block-matching layer instead of the compile layer). Besides literal conditions, it also folds a
+condition built from comparing two provably-identical values (`eq(calldataload(x),
+calldataload(x))` is 1 whatever `x` is; `_SAME_OPERAND_IDENTITIES`, equality via
+`_values_provably_equal`): the dominant cause of `ExpressionSimplifier`'s block-count collapses
+(one real function goes from 39 blocks to 1: 18 of 19 branches are this shape). Leaving them
+unfolded didn't just cost coverage -- the baseline kept a block the probe had merged into its
+successor, so the two got paired anyway and produced a wrong fact (`multicall`, occurrence s1:
+`eq(v19, v21)` aligned with an unrelated `eq(0x00, v22)`, claiming an arbitrary calldataload was 0).
 """
 import copy
 import logging
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -299,6 +299,42 @@ def _values_provably_equal(var_x: var_id_T, var_y: var_id_T,
                                        and matches(args_x, list(reversed(args_y))))
 
 
+# Memory/data regions given as (offset, size) arguments, in textual Yul argument order: for each
+# op, (size argument, arguments that are never read when that size is 0). solc canonicalizes such
+# unused arguments (e.g. return(memptr, 0) -> return(0, 0), confirmed on a real contract, occurrence
+# s1), so a literal the probe puts there says nothing about the baseline variable it lines up with.
+# returndatacopy's source offset is deliberately absent: it is still bounds-checked at size 0.
+_ZERO_SIZE_UNUSED_ARGS: Dict[str, List[Tuple[int, List[int]]]] = {
+    "return": [(1, [0])], "revert": [(1, [0])], "keccak256": [(1, [0])],
+    "log0": [(1, [0])], "log1": [(1, [0])], "log2": [(1, [0])], "log3": [(1, [0])], "log4": [(1, [0])],
+    "calldatacopy": [(2, [0, 1])], "codecopy": [(2, [0, 1])], "mcopy": [(2, [0, 1])],
+    "extcodecopy": [(3, [1, 2])], "returndatacopy": [(2, [0])],
+    "create": [(2, [1])], "create2": [(2, [1])],
+    "call": [(4, [3]), (6, [5])], "callcode": [(4, [3]), (6, [5])],
+    "delegatecall": [(3, [2]), (5, [4])], "staticcall": [(3, [2]), (5, [4])],
+}
+
+
+def _unused_arg_positions(op: Optional[str], baseline_in: List[var_id_T],
+                          probe_resolved: List[Optional[constant_T]]) -> Set[int]:
+    """
+    Raw ("in"-list) positions of op's arguments that the instruction never reads, because the
+    size of the region they describe is 0 on either side (a baseline literal 0, or a probe argument
+    resolving to 0). Raw "in" lists are reversed relative to textual Yul order (see
+    evm_arithmetic.evaluate), hence the index flip.
+    """
+    n = len(baseline_in)
+    unused: Set[int] = set()
+    for size_idx, dependent in _ZERO_SIZE_UNUSED_ARGS.get(op, []):
+        if size_idx >= n:
+            continue
+        raw_size = n - 1 - size_idx
+        sizes = [baseline_in[raw_size] if is_literal(baseline_in[raw_size]) else None, probe_resolved[raw_size]]
+        if any(size is not None and int(size, 16) == 0 for size in sizes):
+            unused.update(n - 1 - idx for idx in dependent)
+    return unused
+
+
 def _try_unify_instructions(baseline_instr: Dict[str, Any], probe_instr: Dict[str, Any], var_map: var_map_T,
                             probe_literal_table: Dict[var_id_T, constant_T],
                             probe_defs: Optional[Dict[var_id_T, Dict[str, Any]]] = None) -> \
@@ -353,11 +389,18 @@ def _try_unify_instructions(baseline_instr: Dict[str, Any], probe_instr: Dict[st
             return None
         pending.append((baseline_var, probe_var))
 
+    def resolve_probe(arg: var_id_T) -> Optional[constant_T]:
+        return arg if is_literal(arg) else \
+            (probe_literal_table.get(arg) or _resolve_scope_literal(arg, probe_defs or {}))
+
+    unused = _unused_arg_positions(baseline_instr.get("op"), baseline_in, [resolve_probe(a) for a in probe_in])
+
     facts: Dict[var_id_T, constant_T] = {}
-    for baseline_arg, probe_arg in zip(baseline_in, probe_in):
+    for raw_idx, (baseline_arg, probe_arg) in enumerate(zip(baseline_in, probe_in)):
+        if raw_idx in unused:
+            continue
         baseline_literal = is_literal(baseline_arg)
-        probe_resolved = probe_arg if is_literal(probe_arg) else \
-            (probe_literal_table.get(probe_arg) or _resolve_scope_literal(probe_arg, probe_defs or {}))
+        probe_resolved = resolve_probe(probe_arg)
         probe_literal = probe_resolved is not None
         if baseline_literal and probe_literal:
             if baseline_arg != probe_resolved:
@@ -436,6 +479,12 @@ def _is_movable(instr: Dict[str, Any]) -> bool:
     return instr.get("op") in _MOVABLE_OPS
 
 
+def _shape(instr: Dict[str, Any]) -> Tuple:
+    """(op, #in, #out): two instructions can only unify (_try_unify_instructions) if these agree, so
+    candidates are indexed by it instead of trying every pair -- same result, far fewer attempts."""
+    return instr.get("op"), len(instr.get("in", [])), len(instr.get("out", []))
+
+
 def _match_item_set(baseline_items: List[Tuple[int, Dict[str, Any]]], probe_items: List[Tuple[int, Dict[str, Any]]],
                     var_map: var_map_T, probe_literal_table: Dict[var_id_T, constant_T],
                     probe_defs: Optional[Dict[var_id_T, Dict[str, Any]]] = None) -> \
@@ -458,15 +507,24 @@ def _match_item_set(baseline_items: List[Tuple[int, Dict[str, Any]]], probe_item
     pairing: Dict[int, int] = {}
     remaining_baseline = dict(baseline_items)
     remaining_probe = dict(probe_items)
+    probe_by_shape: Dict[Tuple, List[int]] = defaultdict(list)
+    for p_idx, p_instr in probe_items:
+        probe_by_shape[_shape(p_instr)].append(p_idx)
+    # Each baseline instruction's candidates as of the previous round. A candidate that fails to
+    # unify can never succeed later in this run (var_map only grows and an entry is never changed;
+    # the commutative swap is only offered while none of the instruction's arguments are mapped),
+    # so only last round's survivors need re-checking -- same result as re-trying every candidate.
+    candidates = {b_idx: probe_by_shape.get(_shape(b_instr), []) for b_idx, b_instr in baseline_items}
 
     while remaining_baseline and remaining_probe:
         proposals: Dict[int, List[Tuple[int, List[Tuple[var_id_T, var_id_T]], Dict[var_id_T, constant_T]]]] = \
             defaultdict(list)
         for b_idx, b_instr in remaining_baseline.items():
             matches = [(p_idx, pending, step_facts)
-                      for p_idx, p_instr in remaining_probe.items()
+                      for p_idx in candidates[b_idx] if p_idx in remaining_probe
                       for pending, step_facts in _instruction_correspondences(
-                          b_instr, p_instr, var_map, probe_literal_table, probe_defs)]
+                          b_instr, remaining_probe[p_idx], var_map, probe_literal_table, probe_defs)]
+            candidates[b_idx] = [p_idx for p_idx, _, _ in matches]
             if len(matches) == 1:
                 p_idx, pending, step_facts = matches[0]
                 proposals[p_idx].append((b_idx, pending, step_facts))
@@ -475,14 +533,20 @@ def _match_item_set(baseline_items: List[Tuple[int, Dict[str, Any]]], probe_item
         if not commits:
             break
 
+        overwritten = False
         for p_idx, (b_idx, pending, step_facts) in commits:
             for baseline_var, probe_var in pending:
+                overwritten |= var_map.get(baseline_var, probe_var) != probe_var
                 var_map[baseline_var] = probe_var
             if step_facts:
                 facts[b_idx].update(step_facts)
             pairing[b_idx] = p_idx
             del remaining_baseline[b_idx]
             del remaining_probe[p_idx]
+        if overwritten:
+            # two same-round commits disagreed on a variable, so var_map did not only grow: the
+            # "a failed candidate stays failed" shortcut no longer holds -- start over from scratch
+            candidates = {b_idx: probe_by_shape.get(_shape(b_instr), []) for b_idx, b_instr in baseline_items}
 
     return dict(facts), var_map, pairing
 
@@ -516,6 +580,17 @@ def _match_anchors(baseline_anchors: List[Tuple[int, Dict[str, Any]]], probe_anc
     hi = [len(probe_order) - 1] * len(baseline_order)
     committed_probe_position: Dict[int, int] = {}
     facts: Dict[int, Dict[var_id_T, constant_T]] = {}
+    positions_by_shape: Dict[Tuple, List[int]] = defaultdict(list)  # ascending probe positions
+    for p_pos, p_idx in enumerate(probe_order):
+        positions_by_shape[_shape(probe_by_idx[p_idx])].append(p_pos)
+
+    def all_candidates() -> Dict[int, List[int]]:
+        return {b_pos: positions_by_shape.get(_shape(baseline_by_idx[b_idx]), [])
+                for b_pos, b_idx in enumerate(baseline_order)}
+
+    # last round's survivors per anchor -- see _match_item_set: a failed candidate stays failed
+    # (and windows only narrow), unless a same-round disagreement overwrites a var_map entry
+    candidates = all_candidates()
 
     progress = True
     while progress:
@@ -528,11 +603,13 @@ def _match_anchors(baseline_anchors: List[Tuple[int, Dict[str, Any]]], probe_anc
                 continue
             b_instr = baseline_by_idx[b_idx]
             matches = []
-            for p_pos in range(lo[b_pos], hi[b_pos] + 1):
+            in_window = candidates[b_pos]
+            for p_pos in in_window[bisect_left(in_window, lo[b_pos]):bisect_right(in_window, hi[b_pos])]:
                 p_instr = probe_by_idx[probe_order[p_pos]]
                 for pending, step_facts in _instruction_correspondences(
                         b_instr, p_instr, var_map, probe_literal_table, probe_defs):
                     matches.append((p_pos, pending, step_facts))
+            candidates[b_pos] = [p_pos for p_pos, _, _ in matches]
             if len(matches) == 1:
                 p_pos, pending, step_facts = matches[0]
                 proposals[p_pos].append((b_pos, pending, step_facts))
@@ -541,8 +618,10 @@ def _match_anchors(baseline_anchors: List[Tuple[int, Dict[str, Any]]], probe_anc
         if not commits:
             break
 
+        overwritten = False
         for p_pos, (b_pos, pending, step_facts) in commits:
             for baseline_var, probe_var in pending:
+                overwritten |= var_map.get(baseline_var, probe_var) != probe_var
                 var_map[baseline_var] = probe_var
             if step_facts:
                 facts[baseline_order[b_pos]] = step_facts
@@ -555,6 +634,8 @@ def _match_anchors(baseline_anchors: List[Tuple[int, Dict[str, Any]]], probe_anc
                 elif other_pos > b_pos:
                     lo[other_pos] = max(lo[other_pos], p_pos + 1)
             progress = True
+        if overwritten:
+            candidates = all_candidates()
 
     return facts, var_map
 
@@ -576,6 +657,10 @@ def _locally_derived_vars(baseline_instrs: List[Dict[str, Any]]) -> Dict[var_id_
             for out_var in instr.get("out", []):
                 defs[out_var] = (idx, instr)
     return defs
+
+
+# Ops whose result is 0 whenever either operand is 0, whatever the other one is.
+_ABSORBING_ZERO_OPS = {"and", "mul"}
 
 
 def _local_literal_assignments(baseline_instrs: List[Dict[str, Any]]) -> Dict[var_id_T, constant_T]:
@@ -633,6 +718,9 @@ def _ground_locally_derived_facts(facts: Dict[int, Dict[var_id_T, constant_T]],
         args = instr.get("in", [])
         return len(args) == 2 and instr.get("op") in _SELF_CANCELING_OPS and args[0] == args[1]
 
+    # for each derived variable, the operands its derivation actually used (what emit() follows)
+    used_operands: Dict[var_id_T, List[var_id_T]] = {}
+
     def ground(var: var_id_T, blocked: Set[var_id_T], memo: Dict[var_id_T, Optional[constant_T]]) -> \
             Optional[constant_T]:
         if is_literal(var):
@@ -646,11 +734,19 @@ def _ground_locally_derived_facts(facts: Dict[int, Dict[var_id_T, constant_T]],
             return None
         memo[var] = None  # SSA precludes a cycle; defensive only
         _, instr = locally_derived[var]
+        args = instr.get("in", [])
+        value: Optional[constant_T] = None
         if self_canceling(instr):
-            value: Optional[constant_T] = "0x00"
+            value, used_operands[var] = "0x00", []
         else:
-            operands = [ground(arg, blocked, memo) for arg in instr.get("in", [])]
-            value = None if any(o is None for o in operands) else _evaluate_arithmetic(instr["op"], operands)
+            operands = [ground(arg, blocked, memo) for arg in args]
+            zero_idx = next((i for i, o in enumerate(operands) if o is not None and int(o, 16) == 0), None) \
+                if instr.get("op") in _ABSORBING_ZERO_OPS and len(args) == 2 else None
+            if zero_idx is not None:
+                # and(x, 0) = mul(x, 0) = 0 for any x: only the zero operand's chain is needed
+                value, used_operands[var] = "0x00", [args[zero_idx]]
+            elif all(o is not None for o in operands):
+                value, used_operands[var] = _evaluate_arithmetic(instr["op"], operands), list(args)
         memo[var] = value
         return value
 
@@ -666,12 +762,11 @@ def _ground_locally_derived_facts(facts: Dict[int, Dict[var_id_T, constant_T]],
     def emit(var: var_id_T) -> None:
         if var in trusted or var not in locally_derived or var in var_map:
             return
-        idx, instr = locally_derived[var]
+        idx, _ = locally_derived[var]
         new_facts[idx][var] = memo[var]
-        if not self_canceling(instr):
-            for arg in instr.get("in", []):
-                if not is_literal(arg):
-                    emit(arg)
+        for arg in used_operands.get(var, []):
+            if not is_literal(arg):
+                emit(arg)
 
     newly_unverified: Set[var_id_T] = set()
     for var in to_check:
@@ -1120,6 +1215,15 @@ def _resolve_phi_value(block: Dict[str, Any], instr: Dict[str, Any],
     return values.pop() if len(values) == 1 else None
 
 
+# The value of op(x, y) whenever x and y are provably the same value (_values_provably_equal),
+# whatever that value is -- the identities ExpressionSimplifier applies to fold a branch like
+# iszero(eq(calldataload(p), calldataload(p))), the dominant cause of its block-count collapses.
+# Only used for block-exit folding (_literal_value_table), never to report a fact.
+_SAME_OPERAND_IDENTITIES: Dict[str, constant_T] = {
+    "eq": "0x01", "sub": "0x00", "xor": "0x00", "lt": "0x00", "gt": "0x00", "slt": "0x00", "sgt": "0x00",
+}
+
+
 def _literal_value_table(blocks: List[Dict[str, Any]],
                          entry_id: Optional[block_id_T] = None) -> Dict[block_id_T, Dict[var_id_T, constant_T]]:
     """
@@ -1130,11 +1234,13 @@ def _literal_value_table(blocks: List[Dict[str, Any]],
     by: a direct LiteralAssignment; any op evm_arithmetic.evaluate can fold once every one of its
     arguments is already known (via this same, incrementally-built table, so a later instruction
     can use an earlier one's folded result within the same block -- e.g. a whole `shl`/`sub`/`gt`
-    chain over literals, not just one direct assignment); or a PhiFunction whose every resolvable
+    chain over literals, not just one direct assignment); a comparison/cancellation of two
+    provably-identical values (_SAME_OPERAND_IDENTITIES); or a PhiFunction whose every resolvable
     predecessor agrees (_resolve_phi_value).
     """
     by_id = {block["id"]: block for block in blocks}
     predecessors = _predecessors(blocks)
+    defs = _scope_defining_instructions(blocks)
     table: Dict[block_id_T, Dict[var_id_T, constant_T]] = {}
 
     for block_id in _block_processing_order(blocks, entry_id):
@@ -1166,10 +1272,14 @@ def _literal_value_table(blocks: List[Dict[str, Any]],
                         local[out[0]] = resolved
             elif len(out) == 1:
                 operands = [arg if is_literal(arg) else local.get(arg) for arg in in_]
+                resolved = None
                 if all(operand is not None for operand in operands):
                     resolved = _evaluate_arithmetic(op, operands)
-                    if resolved is not None:
-                        local[out[0]] = resolved
+                if resolved is None and op in _SAME_OPERAND_IDENTITIES and len(in_) == 2 \
+                        and _values_provably_equal(in_[0], in_[1], defs):
+                    resolved = _SAME_OPERAND_IDENTITIES[op]
+                if resolved is not None:
+                    local[out[0]] = resolved
         table[block_id] = local
 
     return table

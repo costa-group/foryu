@@ -475,6 +475,47 @@ class TestLiteralValueTable:
         assert _literal_value_table(blocks)["B3"]["phi"] == "0x01"
 
 
+class TestSameOperandIdentityFolding:
+    # Mirrors a real wrong fact (fun_multicall/Block12, occurrence s1): B0 checks
+    # iszero(eq(calldataload(add(0x80, v17)), calldataload(add(0x80, v17)))) -- always 0 --
+    # and ExpressionSimplifier folds it, merging B0 into its successor in the probe. Raw "in"
+    # lists are reversed, irrelevant here since every op involved is symmetric or unary.
+    @staticmethod
+    def _multicall_shape(load_op="calldataload"):
+        return [
+            {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "v23", "targets": ["B1", "B2"]},
+             "instructions": [{"in": ["0x80", "v17"], "op": "add", "out": ["v18"]},
+                              {"in": ["v18"], "op": load_op, "out": ["v19"]},
+                              {"in": ["0x80", "v17"], "op": "add", "out": ["v20"]},
+                              {"in": ["v20"], "op": load_op, "out": ["v21"]},
+                              {"in": ["v19", "v21"], "op": "eq", "out": ["v22"]},
+                              {"in": ["v22"], "op": "iszero", "out": ["v23"]}]},
+            {"id": "B1", "exit": {"type": "Terminated", "targets": []},
+             "instructions": [{"in": ["v19"], "op": "iszero", "out": ["v30"]}]},
+            {"id": "B2", "exit": {"type": "Terminated", "targets": []},
+             "instructions": [{"in": ["0x00", "0x00"], "op": "revert", "out": []}]},
+        ]
+
+    def test_a_comparison_of_provably_identical_values_folds(self):
+        table = _literal_value_table(self._multicall_shape())["B0"]
+
+        assert table["v22"] == "0x01"
+        assert table["v23"] == "0x00"
+
+    def test_the_folded_branch_merges_the_block_into_its_successor(self):
+        working = _merge_trivial_blocks(self._multicall_shape())
+
+        assert [b["id"] for b in working] == ["B0"]
+        assert working[0]["_members"] == {"B0", "B1"}
+
+    def test_two_reads_that_may_differ_are_not_treated_as_identical(self):
+        # mload isn't movable (memory can change between two reads), so eq(mload(p), mload(p))
+        # is not provably 1 and nothing folds.
+        table = _literal_value_table(self._multicall_shape(load_op="mload"))["B0"]
+
+        assert "v22" not in table and "v23" not in table
+
+
 class TestMergeTrivialBlocks:
     def test_absorbs_a_block_left_behind_by_folding_a_provably_true_condition(self):
         # Mirrors the real abi_encode_array_address shape: B1's branch on v3 (always 0x01,
@@ -1189,6 +1230,42 @@ class TestMatchBlockInstructions:
 
         assert facts == {3: {"vTop": "0x64", "v0": "0x80"}}
         assert unverified == {"vTop"}
+
+    def test_an_argument_the_instruction_never_reads_yields_no_fact(self):
+        # Mirrors a real wrong fact (MapleTokenProxy_207_deployed/Block32, occurrence s1): textually
+        # return(memptr, 0) with memptr = mload(0x40). With size 0 the offset is never read, and solc
+        # canonicalized it to return(0, 0) -- the probe's 0x00 says nothing about v100 (really the
+        # free-memory pointer). Raw "in" lists are reversed: [size, offset].
+        baseline = [
+            {"in": ["0x40"], "op": "mload", "out": ["v100"]},
+            {"in": ["v100", "v100"], "op": "sub", "out": ["v109"]},
+            {"in": ["v109", "v100"], "op": "return", "out": []},
+        ]
+        probe = [{"in": ["0x00", "0x00"], "op": "return", "out": []}]
+
+        facts, _ = match_block_instructions(baseline, probe)
+
+        assert all("v100" not in f for f in facts.values())
+        assert facts.get(2) == {"v109": "0x00"}
+
+    def test_an_absorbing_zero_needs_no_chain_for_the_other_operand(self):
+        # Mirrors a real case (fun_setOwner/Block0, occurrences s1/s2): textually
+        # and(sub(shl(160, 1), 1), 0) -- the probe claims the and's output is 0, which holds whatever
+        # the mask is. Only the claimed fact is emitted; the mask intermediates (v0, v1) are not
+        # needed to justify it, so nothing is reported about them. Raw "in" lists are reversed.
+        baseline = [
+            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v0"]},
+            {"in": ["0x01", "v0"], "op": "sub", "out": ["v1"]},
+            {"in": ["v1", "0x00"], "op": "and", "out": ["v2"]},
+            {"in": ["v2", "0x40"], "op": "mstore", "out": []},
+        ]
+        probe = [{"in": ["0x00", "0x40"], "op": "mstore", "out": []}]
+        unverified = set()
+
+        facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
+
+        assert facts == {2: {"v2": "0x00"}, 3: {"v2": "0x00"}}
+        assert unverified == set()
 
     def test_partial_anchor_alignment_when_counts_differ(self):
         # An extra anchor (sstore) with no probe counterpart doesn't block the rest of the
