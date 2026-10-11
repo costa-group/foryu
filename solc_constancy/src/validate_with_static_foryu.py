@@ -134,7 +134,7 @@ def _check_verified_subset(annotated_file: str, static_foryu: str, row: Dict[str
     """
     Second verdict, on a copy of the file with every "constancy_unverified" fact removed: if the
     full file is CONSTANCY_INVALID but this is CONSTANCY_VALID, the rejection came only from
-    facts that are sound but not locally verifiable, not from a wrong one. Skipped (same verdict
+    unverified facts (best-effort, not confirmable by the checker), not from a verified one. Skipped (same verdict
     as the full file) when there is nothing to remove.
     """
     if not row["constancy_result"]:

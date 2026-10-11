@@ -698,7 +698,8 @@ def _local_literal_assignments(baseline_instrs: List[Dict[str, Any]]) -> Dict[va
 
 def _ground_locally_derived_facts(facts: Dict[int, Dict[var_id_T, constant_T]],
                                   baseline_instrs: List[Dict[str, Any]], var_map: var_map_T,
-                                  distrusted: Set[var_id_T], unverified: Set[var_id_T]) -> \
+                                  distrusted: Set[var_id_T], unverified: Set[var_id_T],
+                                  scope_literals: Optional[Dict[var_id_T, constant_T]] = None) -> \
         Tuple[Dict[int, Dict[var_id_T, constant_T]], Set[var_id_T], Set[var_id_T]]:
     """
     Sorts this block's probe-derived claims about locally-derived variables (see
@@ -711,10 +712,11 @@ def _ground_locally_derived_facts(facts: Dict[int, Dict[var_id_T, constant_T]],
       too, so the chain has no gaps.
     - Unverified: no derivable chain (an unknown operand, an op outside FOLDABLE_OPS along the
       way, or an operand that is itself unverified), or a chain through xor(x, x) / and(x, 0),
-      identities the checker doesn't replay (_CHECKER_PARTIAL_OPS). Still kept: a unique, consistent
-      correspondence means solc's own optimizer established the value, so the fact is sound even
-      though this module (and the checker) can't re-derive it locally. Reported separately so a
-      checker rejection can be traced to "unverifiable" rather than "wrong".
+      identities the checker doesn't replay (_CHECKER_PARTIAL_OPS). Still kept, as a best-effort
+      fact: a unique, consistent correspondence suggests solc's own optimizer established the
+      value, but nothing confirms the correspondence (a wrong pairing that leaves no contradiction
+      behind still lands here). Reported separately so a checker rejection can be traced to
+      "unverifiable" rather than "wrong".
     - Distrusted: the variable's own chain derives a *different* value -- evidence that the
       correspondence behind the claim is wrong. Dropped, here and (by the caller) in every other
       block of the scope.
@@ -726,7 +728,11 @@ def _ground_locally_derived_facts(facts: Dict[int, Dict[var_id_T, constant_T]],
 
     distrusted / unverified: the scope's running sets from blocks already processed. A distrusted
     variable's claims are stripped here too; an unverified one's are kept but never used as a
-    verified operand.
+    verified operand. scope_literals: every LiteralAssignment in the scope (SSA: one value wherever
+    it is live, and propagation delivers it to every block it is live-in to), trusted as operands.
+
+    Also used by _match_scope_once for a claim made in another block about a variable defined
+    here: facts is then that claim injected at its defining instruction.
     """
     locally_derived = _locally_derived_vars(baseline_instrs)
 
@@ -737,7 +743,7 @@ def _ground_locally_derived_facts(facts: Dict[int, Dict[var_id_T, constant_T]],
     trusted: Dict[var_id_T, constant_T] = {
         var: value for var, value in claims.items()
         if var not in locally_derived and var not in unverified}
-    for var, literal in _local_literal_assignments(baseline_instrs).items():
+    for var, literal in {**(scope_literals or {}), **_local_literal_assignments(baseline_instrs)}.items():
         trusted.setdefault(var, literal)
 
     def self_canceling(instr: Dict[str, Any]) -> bool:
@@ -825,7 +831,8 @@ def match_block_instructions(baseline_instrs: List[Dict[str, Any]], probe_instrs
                              seed_var_map: Optional[var_map_T] = None,
                              probe_defs: Optional[Dict[var_id_T, Dict[str, Any]]] = None,
                              distrusted: Optional[Set[var_id_T]] = None,
-                             unverified: Optional[Set[var_id_T]] = None) -> \
+                             unverified: Optional[Set[var_id_T]] = None,
+                             scope_literals: Optional[Dict[var_id_T, constant_T]] = None) -> \
         Tuple[Dict[int, Dict[var_id_T, constant_T]], var_map_T]:
     """
     Matches a block's baseline instructions against its probe instructions (see the module
@@ -894,7 +901,7 @@ def match_block_instructions(baseline_instrs: List[Dict[str, Any]], probe_instrs
                 distrusted.add(var)
 
     facts, newly_distrusted, newly_unverified = _ground_locally_derived_facts(
-        dict(facts), baseline_instrs, var_map, distrusted, unverified)
+        dict(facts), baseline_instrs, var_map, distrusted, unverified, scope_literals)
     distrusted |= newly_distrusted
     unverified |= newly_unverified
 
@@ -1572,6 +1579,8 @@ def _match_scope_once(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[
     block_correspondence: Dict[block_id_T, block_id_T] = {baseline_entry_id: probe_entry_id}
     var_maps_by_block: Dict[block_id_T, var_map_T] = {}
     facts_by_block: Dict[block_id_T, Dict[int, Dict[var_id_T, constant_T]]] = {}
+    scope_literals = {var: literal for block in baseline_blocks
+                      for var, literal in _local_literal_assignments(block.get("instructions", [])).items()}
 
     for block_id in _block_processing_order(baseline_blocks, baseline_entry_id):
         baseline_block = baseline_by_id[block_id]
@@ -1614,7 +1623,7 @@ def _match_scope_once(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[
         probe_instructions = _reorder_phi_args(baseline_block, probe_block, block_correspondence)
         block_facts, block_var_map = match_block_instructions(
             baseline_block.get("instructions", []), probe_instructions, seed_var_map=seed_var_map,
-            probe_defs=probe_defs, distrusted=distrusted, unverified=unverified)
+            probe_defs=probe_defs, distrusted=distrusted, unverified=unverified, scope_literals=scope_literals)
         var_maps_by_block[block_id] = block_var_map
         if block_facts:
             facts_by_block[block_id] = block_facts
@@ -1631,20 +1640,46 @@ def _match_scope_once(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[
                 values[var].add(int(value, 16))
     distrusted |= {var for var, var_values in values.items() if len(var_values) > 1}
 
+    claimed = {var: value for block_facts in facts_by_block.values() for var_facts in block_facts.values()
+               for var, value in var_facts.items()}
+
+    # A claim about a foldable-op output made only in a later block (the probe folded the value at
+    # a use, while the defining instruction itself looks the same in both): the checker needs the
+    # value at the defining block's exit too, so it is grounded there like a local claim -- emitted
+    # with its chain if derivable, otherwise unverified (or distrusted on a different value).
+    foldable_defs = {out: (block["id"], idx) for block in baseline_blocks
+                     for idx, instr in enumerate(block.get("instructions", []))
+                     if instr.get("op") in _FOLDABLE_OPS for out in instr.get("out", [])}
+    injected: Dict[block_id_T, Dict[int, Dict[var_id_T, constant_T]]] = defaultdict(lambda: defaultdict(dict))
+    for var, value in claimed.items():
+        if var not in foldable_defs or var in distrusted or var in unverified:
+            continue
+        def_block_id, def_idx = foldable_defs[var]
+        if any(var in var_facts for var_facts in facts_by_block.get(def_block_id, {}).values()):
+            continue
+        injected[def_block_id][def_idx][var] = value
+    for def_block_id, block_claims in injected.items():
+        grounded, newly_distrusted, newly_unverified = _ground_locally_derived_facts(
+            dict(block_claims), baseline_by_id[def_block_id].get("instructions", []),
+            var_maps_by_block.get(def_block_id, {}), distrusted, unverified, scope_literals)
+        for idx, var_facts in grounded.items():
+            facts_by_block.setdefault(def_block_id, {}).setdefault(idx, {}).update(var_facts)
+        distrusted |= newly_distrusted
+        unverified |= newly_unverified
+
     # Claims the checker can't re-derive are kept but unverified: about a variable with no
     # definition in the scope, the output of an op it doesn't fold (calldataload, mload, calls, ...),
     # or a phi output with an input not known to be that same constant (the checker's phi rule).
-    # Foldable-op outputs are sorted per block by _ground_locally_derived_facts.
+    # Foldable-op outputs are sorted by _ground_locally_derived_facts, in their defining block.
     definitions = {out: instr for block in baseline_blocks for instr in block.get("instructions", [])
                    for out in instr.get("out", [])}
-    claimed = {var for block_facts in facts_by_block.values() for var_facts in block_facts.values() for var in var_facts}
 
     def same_constant(arg: var_id_T, value: int) -> bool:
         if is_literal(arg):
             return int(arg, 16) == value
         return values.get(arg) == {value} and arg not in unverified and arg not in distrusted
 
-    for var in claimed - distrusted:
+    for var in claimed.keys() - distrusted:
         instr = definitions.get(var)
         op = instr.get("op") if instr else None
         if op == "PhiFunction":

@@ -35,7 +35,7 @@ def annotate_constancy(yul_cfg_json: Yul_CFG_T,
     has an entry in constancy_map (next to its existing "liveness" and "instructions"
     fields), and returns it for convenience. When unverified_map is given, also injects
     "constancy_unverified" (same shape as "constancy"): the subset of each entry's facts that are
-    sound but not locally verifiable -- see compare_constancy.annotate_constancy_between.
+    best-effort, not confirmable by the checker -- see compare_constancy.annotate_constancy_between.
     """
     blocks_by_key = _blocks_by_scope_and_id(yul_cfg_json)
 

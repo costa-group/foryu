@@ -135,6 +135,60 @@ class TestMatchScope:
         assert all("v1" not in var_facts
                    for block_facts in facts_by_block.values() for var_facts in block_facts.values())
 
+    @staticmethod
+    def _claim_after_definition_scope(v1_definition, folded_use):
+        # Mirrors a real case (abiEncoderV1_calldata_bytes_bytes32_arrays, occurrence s1): B1
+        # computes v32 = add(v1, 0x40) unchanged by the probe, which only folds v32 at its use in B2.
+        baseline = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]}, "instructions": [v1_definition]},
+            {"id": "B1", "exit": {"type": "Jump", "targets": ["B2"]},
+             "instructions": [{"in": ["0x40", "v1"], "op": "add", "out": ["v32"]}]},
+            {"id": "B2", "exit": {"type": "Terminated", "targets": []},
+             "instructions": [{"in": ["v32", "0x00"], "op": "mstore", "out": []}]},
+        ]
+        probe = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]}, "instructions": []},
+            {"id": "B1", "exit": {"type": "Jump", "targets": ["B2"]}, "instructions": []},
+            {"id": "B2", "exit": {"type": "Terminated", "targets": []},
+             "instructions": [{"in": [folded_use, "0x00"], "op": "mstore", "out": []}]},
+        ]
+        return baseline, probe
+
+    def test_a_later_claim_is_grounded_in_the_defining_block(self):
+        # The checker only accepts B2's live-in claim if B1's exit carries it: v1 is a literal
+        # assigned in another block, so the chain is derivable in B1 and emitted there.
+        baseline, probe = self._claim_after_definition_scope(
+            {"in": ["0x04"], "op": "LiteralAssignment", "out": ["v1"]}, "0x44")
+        unverified = set()
+
+        _, _, facts_by_block = _match_scope(baseline, probe, unverified_out=unverified)
+
+        assert facts_by_block["B1"][0] == {"v32": "0x44"}
+        assert facts_by_block["B2"][0] == {"v32": "0x44"}
+        assert unverified == set()
+
+    def test_a_later_claim_not_derivable_in_the_defining_block_is_unverified(self):
+        baseline, probe = self._claim_after_definition_scope(
+            {"in": ["0x04"], "op": "calldataload", "out": ["v1"]}, "0x44")
+        unverified = set()
+
+        _, _, facts_by_block = _match_scope(baseline, probe, unverified_out=unverified)
+
+        assert facts_by_block["B2"][0] == {"v32": "0x44"}
+        assert unverified == {"v32"}
+
+    def test_a_later_claim_contradicting_the_defining_block_is_dropped(self):
+        # add(0x04, 0x40) is 0x44, not 0x99: the correspondence behind B2's claim is wrong.
+        baseline, probe = self._claim_after_definition_scope(
+            {"in": ["0x04"], "op": "LiteralAssignment", "out": ["v1"]}, "0x99")
+        unverified = set()
+
+        _, _, facts_by_block = _match_scope(baseline, probe, unverified_out=unverified)
+
+        assert all("v32" not in var_facts
+                   for block_facts in facts_by_block.values() for var_facts in block_facts.values())
+        assert unverified == set()
+
     def test_a_silently_vanished_block_produces_a_confident_but_wrong_pairing(self):
         # Mirrors a real bug found against a real contract (see PROGRESS.md): solc's
         # StackCompressor can silently drop one block from a chain of otherwise-identically-
