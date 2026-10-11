@@ -1,6 +1,6 @@
 import logging
 
-from constancy.seed_extraction import (_block_processing_order, _fold_conditional_exit, _literal_value_table,
+from constancy.seed_extraction import (_block_processing_order, _try_unify_instructions, _fold_conditional_exit, _literal_value_table,
                                        _match_scope, _merge_trivial_blocks, _reachable_block_ids,
                                        _scope_defining_instructions, _scope_entry_id, _values_provably_equal,
                                        extract_seed_facts_for_contract, extract_seed_facts_for_instructions,
@@ -86,6 +86,54 @@ class TestMatchScope:
         assert all("v17" not in var_facts
                    for block_facts in facts_by_block.values() for var_facts in block_facts.values())
         assert unverified == set()
+
+    def test_claims_the_checker_cannot_rederive_are_unverified(self):
+        # B1 claims a phi output (one input unknown) and a calldataload output: both kept, but
+        # unverified. The phi whose inputs are all the same literal stays verified.
+        baseline = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
+             "instructions": [{"in": ["0x04"], "op": "calldataload", "out": ["v1"]}]},
+            {"id": "B1", "entries": ["B0", "B0"], "exit": {"type": "Terminated", "targets": []},
+             "instructions": [{"in": ["0x07", "v9"], "op": "PhiFunction", "out": ["phi0"]},
+                              {"in": ["0x07", "0x07"], "op": "PhiFunction", "out": ["phi1"]},
+                              {"in": ["phi0", "0x00"], "op": "mstore", "out": []},
+                              {"in": ["phi1", "0x20"], "op": "mstore", "out": []},
+                              {"in": ["v1", "0x40"], "op": "mstore", "out": []}]},
+        ]
+        probe = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]}, "instructions": []},
+            {"id": "B1", "entries": ["B0", "B0"], "exit": {"type": "Terminated", "targets": []},
+             "instructions": [{"in": ["0x07", "0x00"], "op": "mstore", "out": []},
+                              {"in": ["0x07", "0x20"], "op": "mstore", "out": []},
+                              {"in": ["0x09", "0x40"], "op": "mstore", "out": []}]},
+        ]
+        unverified = set()
+
+        _, _, facts_by_block = _match_scope(baseline, probe, unverified_out=unverified)
+
+        assert facts_by_block["B1"][2] == {"phi0": "0x07"} and facts_by_block["B1"][4] == {"v1": "0x09"}
+        assert unverified == {"phi0", "v1"}
+
+    def test_a_live_in_claim_contradicting_the_literal_assignment_is_dropped(self):
+        # Mirrors a real case (checked_div_uint32, occurrence s2): B0 assigns v1 := 0xffffffff, but
+        # the probe rewrote B1's and(v1, v0) into an unrelated and(0x7fffffff, w), so B1 alone claims
+        # v1 = 0x7fffffff. Under SSA v1 has one value, so the claim is wrong.
+        baseline = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
+             "instructions": [{"in": ["0xffffffff"], "op": "LiteralAssignment", "out": ["v1"]}]},
+            {"id": "B1", "exit": {"type": "FunctionReturn", "returnValues": ["v4"]},
+             "instructions": [{"in": ["v1", "v0"], "op": "and", "out": ["v4"]}]},
+        ]
+        probe = [
+            {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]}, "instructions": []},
+            {"id": "B1", "exit": {"type": "FunctionReturn", "returnValues": ["v4"]},
+             "instructions": [{"in": ["0x7fffffff", "v9"], "op": "and", "out": ["v4"]}]},
+        ]
+
+        _, _, facts_by_block = _match_scope(baseline, probe)
+
+        assert all("v1" not in var_facts
+                   for block_facts in facts_by_block.values() for var_facts in block_facts.values())
 
     def test_a_silently_vanished_block_produces_a_confident_but_wrong_pairing(self):
         # Mirrors a real bug found against a real contract (see PROGRESS.md): solc's
@@ -1248,11 +1296,69 @@ class TestMatchBlockInstructions:
         assert all("v100" not in f for f in facts.values())
         assert facts.get(2) == {"v109": "0x00"}
 
-    def test_an_absorbing_zero_needs_no_chain_for_the_other_operand(self):
+    def test_a_variable_used_twice_must_match_the_same_probe_operand_twice(self):
+        # Mirrors a real case (fun_upgradeToAndCall/Block2, occurrence s1): the probe folded
+        # sub(v21, v21) away, and in the full block an address mask's sub(0x01, v18) was the only
+        # candidate left for it, claiming v21 = 0x01 (v21 is mload(0x40)).
+        baseline = {"in": ["v21", "v21"], "op": "sub", "out": ["v24"]}
+        probe = {"in": ["0x01", "v18"], "op": "sub", "out": ["v19"]}
+
+        assert _try_unify_instructions(baseline, probe, {}, {}) is None
+        assert _try_unify_instructions(baseline, {"in": ["v7", "v7"], "op": "sub", "out": ["v8"]}, {}, {}) \
+            == ([("v24", "v8"), ("v21", "v7"), ("v21", "v7")], {})
+
+    def test_a_literal_claim_on_a_matched_calldataload_output_is_dropped(self):
+        # Mirrors a real case (BatchDistributor, occurrence s3): a reassociated add chain paired up
+        # wrongly and claimed v214 = 0x24, while v214's own calldataload was matched to the probe's
+        # v206. Here an anchor makes the same claim; no T/m/c/s step folds a calldataload, so one
+        # of the two correspondences is wrong and the claim is dropped.
+        baseline = [
+            {"in": ["v213"], "op": "calldataload", "out": ["v214"]},
+            {"in": ["v214", "0x00"], "op": "mstore", "out": []},
+            {"in": ["v214", "0x20"], "op": "mstore", "out": []},
+        ]
+        probe = [
+            {"in": ["v213"], "op": "calldataload", "out": ["v206"]},
+            {"in": ["0x24", "0x00"], "op": "mstore", "out": []},
+            {"in": ["v206", "0x20"], "op": "mstore", "out": []},
+        ]
+
+        facts, var_map = match_block_instructions(baseline, probe, seed_var_map={"v213": "v213"})
+
+        assert var_map.get("v214") == "v206"
+        assert all("v214" not in var_facts for var_facts in facts.values())
+
+    def test_a_literal_claim_on_a_matched_runtime_arithmetic_output_is_dropped(self):
+        # Mirrors a real case (external_fun_batchClaim, occurrence s1): v584 rounds a calldata
+        # length up, and(not(0x1f), add(0x1f, v558)), and the probe still computes it the same way,
+        # yet a reassociated add claimed v584 = 0x84.
+        baseline = [
+            {"in": ["0x1f"], "op": "not", "out": ["v582"]},
+            {"in": ["0x1f", "v558"], "op": "add", "out": ["v583"]},
+            {"in": ["v582", "v583"], "op": "and", "out": ["v584"]},
+            {"in": ["v584", "0x00"], "op": "mstore", "out": []},
+            {"in": ["v584", "0x20"], "op": "mstore", "out": []},
+        ]
+        probe = [
+            {"in": ["0x1f"], "op": "not", "out": ["v1"]},
+            {"in": ["0x1f", "v558"], "op": "add", "out": ["v2"]},
+            {"in": ["v1", "v2"], "op": "and", "out": ["v3"]},
+            {"in": ["0x84", "0x00"], "op": "mstore", "out": []},
+            {"in": ["v3", "0x20"], "op": "mstore", "out": []},
+        ]
+        unverified = set()
+
+        facts, var_map = match_block_instructions(baseline, probe, seed_var_map={"v558": "v558"},
+                                                  unverified=unverified)
+
+        assert var_map.get("v584") == "v3"
+        assert all("v584" not in var_facts for var_facts in facts.values())
+
+    def test_a_foldable_mask_is_emitted_as_the_chain_of_an_and_with_zero(self):
         # Mirrors a real case (fun_setOwner/Block0, occurrences s1/s2): textually
-        # and(sub(shl(160, 1), 1), 0) -- the probe claims the and's output is 0, which holds whatever
-        # the mask is. Only the claimed fact is emitted; the mask intermediates (v0, v1) are not
-        # needed to justify it, so nothing is reported about them. Raw "in" lists are reversed.
+        # and(sub(shl(160, 1), 1), 0) -- the probe claims the and's output is 0. The mask folds from
+        # literals, so the whole chain is emitted (the external checker doesn't replay and(x, 0) for
+        # an unknown x). Raw "in" lists are reversed.
         baseline = [
             {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v0"]},
             {"in": ["0x01", "v0"], "op": "sub", "out": ["v1"]},
@@ -1264,7 +1370,64 @@ class TestMatchBlockInstructions:
 
         facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
 
-        assert facts == {2: {"v2": "0x00"}, 3: {"v2": "0x00"}}
+        assert facts == {0: {"v0": "0x01" + "00" * 20}, 1: {"v1": hex((1 << 160) - 1)},
+                         2: {"v2": "0x00"}, 3: {"v2": "0x00"}}
+        assert unverified == set()
+
+    def test_a_mask_folded_with_a_probe_counterpart_is_still_emitted_as_the_chain(self):
+        # Same shape, but the mask is also used elsewhere, so the probe keeps it and it is matched
+        # (it has a var_map entry, no claim of its own): it is still evaluated from the baseline.
+        baseline = [
+            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v0"]},
+            {"in": ["0x01", "v0"], "op": "sub", "out": ["v1"]},
+            {"in": ["v1", "0x00"], "op": "and", "out": ["v2"]},
+            {"in": ["v2", "0x40"], "op": "mstore", "out": []},
+            {"in": ["v1", "0x60"], "op": "mstore", "out": []},
+        ]
+        probe = [
+            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v0"]},
+            {"in": ["0x01", "v0"], "op": "sub", "out": ["v1"]},
+            {"in": ["0x00", "0x40"], "op": "mstore", "out": []},
+            {"in": ["v1", "0x60"], "op": "mstore", "out": []},
+        ]
+        unverified = set()
+
+        facts, var_map = match_block_instructions(baseline, probe, unverified=unverified)
+
+        assert var_map.get("v1") == "v1"
+        assert facts.get(1) == {"v1": hex((1 << 160) - 1)} and facts.get(2) == {"v2": "0x00"}
+        assert unverified == set()
+
+    def test_an_and_with_zero_of_an_unknown_value_is_kept_but_unverified(self):
+        # and(x, 0) = 0 for any x, so the claim is sound, but the external checker only replays
+        # sub(x, x) and mul(x, 0) for an unknown x: the fact is kept and marked unverified.
+        baseline = [
+            {"in": ["0x00"], "op": "calldataload", "out": ["v0"]},
+            {"in": ["v0", "0x00"], "op": "and", "out": ["v1"]},
+            {"in": ["v1", "0x40"], "op": "mstore", "out": []},
+        ]
+        probe = [{"in": ["0x00"], "op": "calldataload", "out": ["v0"]},
+                 {"in": ["0x00", "0x40"], "op": "mstore", "out": []}]
+        unverified = set()
+
+        facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
+
+        assert facts.get(2) == {"v1": "0x00"}
+        assert unverified == {"v1"}
+
+    def test_a_mul_by_zero_of_an_unknown_value_is_verified(self):
+        baseline = [
+            {"in": ["0x00"], "op": "calldataload", "out": ["v0"]},
+            {"in": ["v0", "0x00"], "op": "mul", "out": ["v1"]},
+            {"in": ["v1", "0x40"], "op": "mstore", "out": []},
+        ]
+        probe = [{"in": ["0x00"], "op": "calldataload", "out": ["v0"]},
+                 {"in": ["0x00", "0x40"], "op": "mstore", "out": []}]
+        unverified = set()
+
+        facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
+
+        assert facts.get(1) == {"v1": "0x00"} and facts.get(2) == {"v1": "0x00"}
         assert unverified == set()
 
     def test_partial_anchor_alignment_when_counts_differ(self):

@@ -252,6 +252,18 @@ def _resolve_scope_literal(var: var_id_T, defs: Dict[var_id_T, Dict[str, Any]]) 
     return None
 
 
+def _fold_probe_value(var: var_id_T, defs: Dict[var_id_T, Dict[str, Any]], _depth: int = 0) -> Optional[constant_T]:
+    """var's value if its probe definition folds from literals alone (LiteralAssignment, or a
+    FOLDABLE_OPS chain of them); None otherwise."""
+    literal = _resolve_scope_literal(var, defs)
+    instr = defs.get(var)
+    if literal is not None or instr is None or _depth > 16 or instr.get("op") not in _FOLDABLE_OPS \
+            or len(instr.get("out", [])) != 1:
+        return literal
+    operands = [arg if is_literal(arg) else _fold_probe_value(arg, defs, _depth + 1) for arg in instr.get("in", [])]
+    return _evaluate_arithmetic(instr["op"], operands) if all(o is not None for o in operands) else None
+
+
 def _values_provably_equal(var_x: var_id_T, var_y: var_id_T,
                            defs: Dict[var_id_T, Dict[str, Any]], _depth: int = 0) -> bool:
     """
@@ -431,6 +443,16 @@ def _try_unify_instructions(baseline_instr: Dict[str, Any], probe_instr: Dict[st
                 # confirmed, so nothing new is proposed for it here
                 continue
             pending.append((baseline_arg, probe_arg))
+
+    # a variable used twice must line up with the same probe operand both times: sub(v21, v21) is
+    # not sub(0x01, v18) (confirmed on a real contract, where that pairing claimed v21 = 0x01)
+    seen: Dict[var_id_T, var_id_T] = {}
+    for raw_idx, (baseline_arg, probe_arg) in enumerate(zip(baseline_in, probe_in)):
+        if raw_idx in unused or is_literal(baseline_arg):
+            continue
+        counterpart = resolve_probe(probe_arg) or probe_arg
+        if seen.setdefault(baseline_arg, counterpart) != counterpart:
+            return None
 
     return pending, facts
 
@@ -661,6 +683,9 @@ def _locally_derived_vars(baseline_instrs: List[Dict[str, Any]]) -> Dict[var_id_
 
 # Ops whose result is 0 whenever either operand is 0, whatever the other one is.
 _ABSORBING_ZERO_OPS = {"and", "mul"}
+# The only identities with an unknown operand the external checker replays itself (sub(x, x), mul(x, 0);
+# abs_exec_partial in its evm_constancy.v): a value derived through any other is reported as unverified.
+_CHECKER_PARTIAL_OPS = {"sub", "mul"}
 
 
 def _local_literal_assignments(baseline_instrs: List[Dict[str, Any]]) -> Dict[var_id_T, constant_T]:
@@ -681,11 +706,12 @@ def _ground_locally_derived_facts(facts: Dict[int, Dict[var_id_T, constant_T]],
 
     - Verified: forward-derivable from the variable's own defining instruction, the way the
       external checker replays the block -- every operand a literal, a value already verified at
-      this point, or itself forward-derivable the same way, or the instruction is sub/xor of one
-      variable with itself (0 for any value; SELF_CANCELING_OPS, valid under SSA). Every
-      intermediate along the chain is emitted too, so the chain has no gaps.
+      this point, or itself forward-derivable the same way, or the instruction is sub(x, x) or
+      mul(x, 0) (0 for any value, valid under SSA). Every intermediate along the chain is emitted
+      too, so the chain has no gaps.
     - Unverified: no derivable chain (an unknown operand, an op outside FOLDABLE_OPS along the
-      way, or an operand that is itself unverified). Still kept: a unique, consistent
+      way, or an operand that is itself unverified), or a chain through xor(x, x) / and(x, 0),
+      identities the checker doesn't replay (_CHECKER_PARTIAL_OPS). Still kept: a unique, consistent
       correspondence means solc's own optimizer established the value, so the fact is sound even
       though this module (and the checker) can't re-derive it locally. Reported separately so a
       checker rejection can be traced to "unverifiable" rather than "wrong".
@@ -710,7 +736,7 @@ def _ground_locally_derived_facts(facts: Dict[int, Dict[var_id_T, constant_T]],
 
     trusted: Dict[var_id_T, constant_T] = {
         var: value for var, value in claims.items()
-        if (var not in locally_derived or var in var_map) and var not in unverified}
+        if var not in locally_derived and var not in unverified}
     for var, literal in _local_literal_assignments(baseline_instrs).items():
         trusted.setdefault(var, literal)
 
@@ -720,6 +746,8 @@ def _ground_locally_derived_facts(facts: Dict[int, Dict[var_id_T, constant_T]],
 
     # for each derived variable, the operands its derivation actually used (what emit() follows)
     used_operands: Dict[var_id_T, List[var_id_T]] = {}
+    # derived through an identity the checker doesn't replay (and(x, 0), xor(x, x)): sound, but unverified
+    beyond_checker: Set[var_id_T] = set()
 
     def ground(var: var_id_T, blocked: Set[var_id_T], memo: Dict[var_id_T, Optional[constant_T]]) -> \
             Optional[constant_T]:
@@ -729,28 +757,33 @@ def _ground_locally_derived_facts(facts: Dict[int, Dict[var_id_T, constant_T]],
             return trusted[var]
         if var in memo:
             return memo[var]
-        if var not in locally_derived or var in var_map or var in blocked or var in distrusted \
+        if var not in locally_derived or var in blocked or var in distrusted \
                 or var in unverified:
             return None
         memo[var] = None  # SSA precludes a cycle; defensive only
         _, instr = locally_derived[var]
         args = instr.get("in", [])
         value: Optional[constant_T] = None
-        if self_canceling(instr):
+        operands = [ground(arg, blocked, memo) for arg in args]
+        zero_idx = next((i for i, o in enumerate(operands) if o is not None and int(o, 16) == 0), None) \
+            if instr.get("op") in _ABSORBING_ZERO_OPS and len(args) == 2 else None
+        if all(o is not None for o in operands):
+            value, used_operands[var] = _evaluate_arithmetic(instr["op"], operands), list(args)
+        elif self_canceling(instr):
             value, used_operands[var] = "0x00", []
-        else:
-            operands = [ground(arg, blocked, memo) for arg in args]
-            zero_idx = next((i for i, o in enumerate(operands) if o is not None and int(o, 16) == 0), None) \
-                if instr.get("op") in _ABSORBING_ZERO_OPS and len(args) == 2 else None
-            if zero_idx is not None:
-                # and(x, 0) = mul(x, 0) = 0 for any x: only the zero operand's chain is needed
-                value, used_operands[var] = "0x00", [args[zero_idx]]
-            elif all(o is not None for o in operands):
-                value, used_operands[var] = _evaluate_arithmetic(instr["op"], operands), list(args)
+            if instr["op"] not in _CHECKER_PARTIAL_OPS:
+                beyond_checker.add(var)
+        elif zero_idx is not None:
+            # and(x, 0) = mul(x, 0) = 0 for any x: only the zero operand's chain is needed
+            value, used_operands[var] = "0x00", [args[zero_idx]]
+            if instr["op"] not in _CHECKER_PARTIAL_OPS:
+                beyond_checker.add(var)
+        if any(arg in beyond_checker for arg in used_operands.get(var, [])):
+            beyond_checker.add(var)
         memo[var] = value
         return value
 
-    to_check = [var for var in claims if var in locally_derived and var not in var_map]
+    to_check = [var for var in claims if var in locally_derived]
 
     first_pass: Dict[var_id_T, Optional[constant_T]] = {}
     newly_distrusted = {var for var in to_check
@@ -760,7 +793,7 @@ def _ground_locally_derived_facts(facts: Dict[int, Dict[var_id_T, constant_T]],
     new_facts: Dict[int, Dict[var_id_T, constant_T]] = defaultdict(dict)
 
     def emit(var: var_id_T) -> None:
-        if var in trusted or var not in locally_derived or var in var_map:
+        if var in trusted or var not in locally_derived:
             return
         idx, _ = locally_derived[var]
         new_facts[idx][var] = memo[var]
@@ -772,7 +805,7 @@ def _ground_locally_derived_facts(facts: Dict[int, Dict[var_id_T, constant_T]],
     for var in to_check:
         if var in newly_distrusted:
             continue
-        if ground(var, newly_distrusted, memo) == claims[var]:
+        if ground(var, newly_distrusted, memo) == claims[var] and var not in beyond_checker:
             emit(var)
         else:
             newly_unverified.add(var)
@@ -839,6 +872,27 @@ def match_block_instructions(baseline_instrs: List[Dict[str, Any]], probe_instrs
 
     distrusted = set() if distrusted is None else distrusted
     unverified = set() if unverified is None else unverified
+
+    # a variable claimed to be a literal but matched to a probe variable that is a different
+    # literal, or that the probe still computes from something other than literals (the output of
+    # calldataload, mload, a call, or arithmetic on such values): one of the two correspondences is
+    # wrong (confirmed on real contracts, where a reassociated add(v214, add(v221, 0x24)) claimed
+    # v214 = 0x24 while v214's own calldataload was matched too), so its claims are distrusted,
+    # scope-wide. A probe phi may still be symbolic while its value was already substituted at a
+    # use, so it's no contradiction.
+    all_probe_defs = {**(probe_defs or {}), **_scope_defining_instructions([{"instructions": probe_instrs}])}
+    for var_facts in facts.values():
+        for var, value in var_facts.items():
+            bound = var_map.get(var)
+            if bound is None:
+                continue
+            resolved = bound if is_literal(bound) else \
+                (probe_literal_table.get(bound) or _fold_probe_value(bound, all_probe_defs))
+            bound_op = all_probe_defs.get(bound, {}).get("op")
+            if (resolved is not None and int(resolved, 16) != int(value, 16)) or \
+                    (resolved is None and bound_op is not None and bound_op != "PhiFunction"):
+                distrusted.add(var)
+
     facts, newly_distrusted, newly_unverified = _ground_locally_derived_facts(
         dict(facts), baseline_instrs, var_map, distrusted, unverified)
     distrusted |= newly_distrusted
@@ -1564,6 +1618,40 @@ def _match_scope_once(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[
         var_maps_by_block[block_id] = block_var_map
         if block_facts:
             facts_by_block[block_id] = block_facts
+
+    # SSA: a variable has one value in the whole scope, so claims that disagree with each other or
+    # with the variable's own literal assignment mean some correspondence behind them is wrong
+    values: Dict[var_id_T, Set[int]] = defaultdict(set)
+    for block in baseline_blocks:
+        for var, literal in _local_literal_assignments(block.get("instructions", [])).items():
+            values[var].add(int(literal, 16))
+    for block_facts in facts_by_block.values():
+        for var_facts in block_facts.values():
+            for var, value in var_facts.items():
+                values[var].add(int(value, 16))
+    distrusted |= {var for var, var_values in values.items() if len(var_values) > 1}
+
+    # Claims the checker can't re-derive are kept but unverified: about a variable with no
+    # definition in the scope, the output of an op it doesn't fold (calldataload, mload, calls, ...),
+    # or a phi output with an input not known to be that same constant (the checker's phi rule).
+    # Foldable-op outputs are sorted per block by _ground_locally_derived_facts.
+    definitions = {out: instr for block in baseline_blocks for instr in block.get("instructions", [])
+                   for out in instr.get("out", [])}
+    claimed = {var for block_facts in facts_by_block.values() for var_facts in block_facts.values() for var in var_facts}
+
+    def same_constant(arg: var_id_T, value: int) -> bool:
+        if is_literal(arg):
+            return int(arg, 16) == value
+        return values.get(arg) == {value} and arg not in unverified and arg not in distrusted
+
+    for var in claimed - distrusted:
+        instr = definitions.get(var)
+        op = instr.get("op") if instr else None
+        if op == "PhiFunction":
+            if not all(same_constant(arg, next(iter(values[var]))) for arg in instr.get("in", [])):
+                unverified.add(var)
+        elif op != "LiteralAssignment" and op not in _FOLDABLE_OPS:
+            unverified.add(var)
 
     return block_correspondence, var_maps_by_block, facts_by_block
 
