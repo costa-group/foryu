@@ -170,7 +170,9 @@ def sym_exec_instr(instr, pp):
             if val is not None:
                 new_pp[v] = val
     elif op in FOLDABLE_OPS:
-        vals = [_eval_sexpr(e, pp) for e in ins]
+        # solc 0.8.34 stores a non-phi instruction's "in" reversed with
+        # respect to the textual Yul order (sub(a, b) is ["b", "a"]).
+        vals = [_eval_sexpr(e, pp) for e in reversed(ins)]
         if all(v is not None for v in vals):
             result = FOLDABLE_OPS[op](*vals)
             for v in outs:
