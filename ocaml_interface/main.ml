@@ -462,8 +462,10 @@ let extract_exit_info (exit_info: Yojson.Safe.t) : Checker.Checker.ExitInfo.t =
   | "MainExit" -> Checker.Checker.ExitInfo.Terminate
   | "ConditionalJump" -> 
       let cond = extract_var (to_string (member "cond" exit_info)) in
+      (* solc's yulCFGJson lists the zero-condition target first: "targets": [if_false, if_true]
+         (checked against solc 0.8.34 -- the body of `if c { ... }` is targets[1]) *)
       let btrue, bfalse = match to_list (member "targets" exit_info) with
-        | [`String btrue; `String bfalse] -> (extract_bid btrue, extract_bid bfalse)
+        | [`String bfalse; `String btrue] -> (extract_bid btrue, extract_bid bfalse)
         | _ -> failwith "Invalid targets in ConditionalJump exit info (must be list of 2 strings)" in
       Checker.Checker.ExitInfo.ConditionalJump (cond, btrue, bfalse)
   | "Jump" -> let target = match to_list (member "targets" exit_info) with
@@ -494,6 +496,10 @@ let extract_instruction (instr: Yojson.Safe.t) : Checker.Checker.EVMInstr.t =
                            | Some opcode -> (Checker.Inl (Checker.Inr opcode))
                            | None -> (Checker.Inl (Checker.Inl (string_to_char_list s))))
       | _ -> failwith "Invalid 'op' field in instruction (must be string)" in
+    (* solc's yulCFGJson (0.8.34) stores every instruction's "in" in reverse textual order: sub(a, b)
+       is ["b", "a"], and a call f(a, b) is ["b", "a"] against f's "arguments" [x, y]. evm_dialect.v
+       (SUB [x; y] = x - y) and function calls take them in textual order. *)
+    let inp = List.rev inp in
     { Checker.Checker.EVMInstr.input = inp; 
       Checker.Checker.EVMInstr.output = outv;
       Checker.Checker.EVMInstr.op = op;
