@@ -3,6 +3,7 @@ Require Import FORYU.program.
 Require Import FORYU.semantics.
 Require Import FORYU.liveness.
 Require Import FORYU.liveness_snd.
+Require Import FORYU.liveness_checker_snd.
 Require Import FORYU.constancy_info.
 Require Import FORYU.constancy.
 Require Import FORYU.constancy_snd.
@@ -13,7 +14,8 @@ Require Import Lia.
 (*
 
   This module includes a simplified version of the main statements
-  that appear in liveness.v and liveness_snd.v (Section 4), and in 
+  that appear in liveness_info.v, liveness.v, liveness_snd.v and
+  liveness_checker_snd.v (Section 4), and in constancy_info.v,
   constancy.v, constancy_snd.v and constancy_checker_snd.v (Section 5).
 
 *)
@@ -23,7 +25,8 @@ Module JLAMP (D: DIALECT).
   (* ** Liveness (Section 4) ** *)
   Module Liveness_JLAMP.
 
-    Module Liveness_sndD := Liveness_snd(D).
+    Module Liveness_checker_sndD := Liveness_checker_snd(D).
+    Module Liveness_sndD := Liveness_checker_sndD.Liveness_sndD.
     Module LivenessD := Liveness_sndD.LivenessD.
     Module SmallStepD := LivenessD.SmallStepD.
     Module StateD := SmallStepD.StateD.
@@ -54,6 +57,7 @@ Module JLAMP (D: DIALECT).
     Import SimpleExprD.
 
     Import Liveness_sndD.
+    Import Liveness_checker_sndD.
 
 
     (* Converts a list of simple expressions to a set of variables *)
@@ -179,16 +183,16 @@ Module JLAMP (D: DIALECT).
     taken as a whole: the in/out sets of every block are related to
     each other, and to those of its successors, as the equations
     require. *)
-    Definition liveness_info_snd_eq := Liveness_sndD.snd_all_blocks_info.
+    Definition liveness_info_snd_eq := Liveness_checker_sndD.snd_all_blocks_info.
 
     (* The liveness conditions with inclusions instead of equations:
     the live-in/live-out sets may over-approximate the propagated
     sets. Exact solutions are a special case (see
     liveness_info_snd_eq_dead below). *)
-    Definition snd_block_out_info := Liveness_sndD.snd_block_out_info_sub.
-    Definition snd_block_in_info := Liveness_sndD.snd_block_in_info_sub.
-    Definition snd_block_info := Liveness_sndD.snd_block_info_sub.
-    Definition liveness_info_snd := Liveness_sndD.snd_all_blocks_info_sub.
+    Definition snd_block_out_info := Liveness_checker_sndD.snd_block_out_info_sub.
+    Definition snd_block_in_info := Liveness_checker_sndD.snd_block_in_info_sub.
+    Definition snd_block_info := Liveness_checker_sndD.snd_block_info_sub.
+    Definition liveness_info_snd := Liveness_checker_sndD.snd_all_blocks_info_sub.
 
     (* The liveness checker (inclusions), as used in the paper and in the experiments *)
     Definition liveness_chk (p: CFGProgD.t) (r: prog_live_info_t) :=

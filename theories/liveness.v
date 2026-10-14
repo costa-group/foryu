@@ -1,6 +1,7 @@
 Require Import FORYU.state.
 Require Import FORYU.program.
 Require Import FORYU.semantics.
+Require Import FORYU.liveness_info.
 
 From Stdlib Require Import Orders.
 From Stdlib Require Import OrdersEx.
@@ -46,13 +47,10 @@ Module Liveness (D: DIALECT).
   Import ExitInfoD.
   Import SimpleExprD.
   
-  (* This module defines a set of variables. *)
-  Module VarSet := MSetAVL.Make(VarID.VarID_as_OT).
-
-  Definition VarSet_show (s: VarSet.t) : string :=
-    let vars := VarSet.elements s in
-    let var_strings := List.map VarID.show vars in
-    "{" ++ String.concat ", " var_strings ++ "}".
+  (* Sets of variables, and the liveness information types, are
+  defined in liveness_info.v; we re-export them here. *)
+  Module VarSet := liveness_info.VarSet.
+  Definition VarSet_show := liveness_info.VarSet_show.
   
   (* convert a list to a set *)
   Fixpoint list_to_set (l : list VarID.t) : VarSet.t :=
@@ -123,8 +121,8 @@ Module Liveness (D: DIALECT).
 
   (* The following types are used to define the result of a live-variable analysis *)
   (*Definition block_live_info_t := nat -> option VarSet.t.*)
-  Definition func_live_info_t := BlockID.t -> option (VarSet.t * VarSet.t).
-  Definition prog_live_info_t := FuncName.t -> option func_live_info_t.
+  Definition func_live_info_t := liveness_info.func_live_info_t.
+  Definition prog_live_info_t := liveness_info.prog_live_info_t.
 
 
   Definition show_block_live_info (b_info: func_live_info_t) (bid: BlockID.t) : string :=

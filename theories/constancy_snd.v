@@ -2,6 +2,7 @@ Require Import FORYU.state.
 Require Import FORYU.program.
 Require Import FORYU.semantics.
 Require Import FORYU.constancy_info.
+Require Import FORYU.constancy.
 
 From Stdlib Require Import List.
 Import ListNotations.
@@ -15,7 +16,8 @@ Module Constancy_snd (D: DIALECT) (E: CONST_SYMB D).
   (* Projected out of [Constancy_info(D)] so that everything built on
   this file (in particular the checker, constancy.v) shares one single
   [CFGProgD]/etc. lineage (see constancy_info.v). *)
-  Module InfoD := Constancy_info(D).
+  Module ConstD := Constancy(D)(E).
+  Module InfoD := ConstD.InfoD.
   Module SmallStepD := InfoD.SmallStepD.
   Module StateD := SmallStepD.StateD.
   Module CallStackD := StateD.CallStackD.
