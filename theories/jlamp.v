@@ -182,14 +182,24 @@ Module JLAMP (D: DIALECT).
     require. *)
     Definition liveness_info_snd := Liveness_sndD.snd_all_blocks_info.
 
-    (* This lemma states that sound liveness information provides a
-    sound under-approximation of dead variables: a variable that is not
+    (* The liveness conditions with inclusions instead of equations:
+    the live-in/live-out sets may over-approximate the propagated
+    sets. Exact solutions are a special case (see
+    liveness_info_snd_dead below). *)
+    Definition liveness_info_snd_sub := Liveness_sndD.snd_all_blocks_info_sub.
+
+    (* The checker for the inclusions, used in the experiments *)
+    Definition liveness_chk_sub (p: CFGProgD.t) (r: prog_live_info_t) :=
+      check_program_subset p r.
+
+    (* This lemma states that liveness information that satisfies the
+    inclusions provides a sound under-approximation of dead variables: a variable that is not
     in the in-set of a block is dead at the entry of the block. The
     proof uses the corresponding (more general) lemmas that appear in
     liveness_snd.v *)
-    Lemma liveness_info_snd_dead:
+    Lemma liveness_info_snd_sub_dead:
       forall (p: CFGProgD.t) (r: prog_live_info_t) fname bid b f_info b_in_info b_out_info,
-        liveness_info_snd p r ->
+        liveness_info_snd_sub p r ->
         CFGProgD.get_block p fname bid = Some b ->
         r fname = Some f_info ->
         f_info bid = Some (b_in_info, b_out_info) ->
@@ -200,7 +210,7 @@ Module JLAMP (D: DIALECT).
              v H_not_In_v_s st1 st2 st1' n H_st1_equiv_st2 H_eval.
 
       (* the in-set that r assigns to the block satisfies live_in *)
-      pose proof (snd_info p r H_snd fname bid b H_b_exists)
+      pose proof (snd_info_sub p r H_snd fname bid b H_b_exists)
         as [f_info' [b_in_info' [b_out_info' [H_r_f' [H_f_info' [H_live_in _]]]]]].
       rewrite H_r_f in H_r_f'. injection H_r_f' as H_r_f'. subst f_info'.
       rewrite H_f_info in H_f_info'. injection H_f_info' as H_in_eq _. subst b_in_info'.
@@ -242,6 +252,21 @@ Module JLAMP (D: DIALECT).
           apply (H_equiv_varmap v0 s0 b0 H_get_block H_acc H_In_v0_s0).
     Qed.
 
+    (* Soundness for exact solutions follows from the one for
+    inclusions, since equal sets are included in each other *)
+    Lemma liveness_info_snd_dead:
+      forall (p: CFGProgD.t) (r: prog_live_info_t) fname bid b f_info b_in_info b_out_info,
+        liveness_info_snd p r ->
+        CFGProgD.get_block p fname bid = Some b ->
+        r fname = Some f_info ->
+        f_info bid = Some (b_in_info, b_out_info) ->
+        forall v, ~ VarSet.In v b_in_info -> dead_variable p fname bid 0 v.
+    Proof.
+      intros p r fname bid b f_info b_in_info b_out_info H_snd.
+      apply (liveness_info_snd_sub_dead p r fname bid b f_info b_in_info b_out_info).
+      apply snd_all_blocks_info_imp_sub. exact H_snd.
+    Qed.
+
     (* This proves the soundness and completeness of the checker -- it
     uses the corresponding lemma that appears in liveness_snd.v *)
     Lemma liveness_chk_snd_cmp: 
@@ -250,6 +275,15 @@ Module JLAMP (D: DIALECT).
         (liveness_info_snd p r <-> liveness_chk p r = true).
     Proof.
       apply check_valid_prog_correct.
+    Qed.
+
+    (* Soundness and completeness of the checker for the inclusions *)
+    Lemma liveness_chk_sub_snd_cmp: 
+      forall (p: CFGProgD.t) (r: prog_live_info_t),
+        CFGProgD.valid_program p ->
+        (liveness_info_snd_sub p r <-> liveness_chk_sub p r = true).
+    Proof.
+      apply check_valid_prog_correct_subset.
     Qed.
 
   End Liveness_JLAMP.

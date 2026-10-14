@@ -341,9 +341,10 @@ Module Liveness (D: DIALECT).
                             match (f_info next_bid_if_false) with
                             | None => false
                             | Some (next_b_iff_in_info,next_b_iff_out_info) =>
-                                VarSet.subset b_out_info (VarSet.union
-                                                           (apply_inv_phi (fst next_b_if_true.(phi_function)) (snd next_b_if_true.(phi_function) b.(BlockD.bid)) next_b_ift_in_info)
-                                                           (apply_inv_phi (fst next_b_if_false.(phi_function)) (snd next_b_if_false.(phi_function) b.(BlockD.bid)) next_b_iff_in_info))
+                                VarSet.subset (VarSet.union
+                                                 (apply_inv_phi (fst next_b_if_true.(phi_function)) (snd next_b_if_true.(phi_function) b.(BlockD.bid)) next_b_ift_in_info)
+                                                 (apply_inv_phi (fst next_b_if_false.(phi_function)) (snd next_b_if_false.(phi_function) b.(BlockD.bid)) next_b_iff_in_info))
+                                              b_out_info
                             end
                         end
                     end
