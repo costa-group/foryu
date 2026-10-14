@@ -563,7 +563,9 @@ let extract_functions (flatjson: Yojson.Safe.t) : Checker.Checker.EVMCFGFun.t li
 
 
 let extract_prog (flatjson: Yojson.Safe.t) (sc_name: string) : Checker.Checker.EVMCFGProg.t =
-  let main_fun, _ = List.hd (to_assoc flatjson) in
+  let main_fun = match to_assoc flatjson with
+    | (fname, _) :: _ -> fname
+    | [] -> failwith "No yulCFGJson found in the input (solc probably failed to compile it)" in
   let funs = extract_functions flatjson in
   { Checker.Checker.EVMCFGProg.name = string_to_char_list sc_name;
     Checker.Checker.EVMCFGProg.functions = funs;
@@ -847,6 +849,34 @@ let time_call (f: unit -> 'a) : 'a * string =
   let t1 = Unix.gettimeofday () in
   (r, Printf.sprintf "%.0f" ((t1 -. t0) *. 1e9))
 
+(* Human-readable description of an exception raised while processing the input *)
+let describe_exn (e: exn) : string =
+  match e with
+  | Failure msg -> msg
+  | e -> Printexc.to_string e
+
+(* Reports a failure of the JSON processing shared by every analysis (parsing,
+   flattening, renaming, sizing and building the extracted program) and exits
+   with code 1, mirroring --csv's JSON_PROCESSING_ERROR: the verdict-style line
+   goes to stdout and the details to stderr. *)
+let json_processing_error (e: exn) =
+  print_endline "JSON_PROCESSING_ERROR";
+  prerr_endline ("Error while processing " ^ !input_file ^ ": " ^ describe_exn e);
+  exit 1
+
+(* Set when one of the requested analyses fails (LIVENESS_ERROR/CONSTANCY_ERROR),
+   so that the process exits with code 1 after running the other ones *)
+let analysis_failed = ref false
+
+(* Runs [f] for analysis [tag]; if it raises, prints "<TAG>_ERROR" (stdout) and
+   the details (stderr) instead of aborting, mirroring --csv's per-analysis
+   LIVENESS_ERROR/CONSTANCY_ERROR *)
+let run_analysis (tag: string) (f: unit -> unit) : unit =
+  try f () with e ->
+    analysis_failed := true;
+    print_endline (String.uppercase_ascii tag ^ "_ERROR");
+    prerr_endline ("Error in the " ^ tag ^ " analysis of " ^ !input_file ^ ": " ^ describe_exn e)
+
 let () =
   Arg.parse speclist anon_fun usage_msg;
 
@@ -862,8 +892,9 @@ let () =
   );
 
   if !size then (
-    let _, flat_d = read_json_to_flat !input_file in
-    let block_count, instr_count = get_size flat_d in
+    let block_count, instr_count =
+      try get_size (snd (read_json_to_flat !input_file))
+      with e -> json_processing_error e in
     Printf.printf "%d %d\n" block_count instr_count;
     exit 0
   );
@@ -924,43 +955,44 @@ let () =
     exit 0
   end;
 
-  let sc_main, flat_d = read_json_to_flat !input_file in
-  let flat_d' = rename_fun_calls flat_d in
-  (*let json_flatd' = Yojson.Safe.pretty_to_string flat_d' in
-  let _ = print_endline json_flatd' in *)
-  let prog = extract_prog flat_d' sc_main in
+  let flat_d', prog =
+    try
+      let sc_main, flat_d = read_json_to_flat !input_file in
+      let flat_d' = rename_fun_calls flat_d in
+      (*let json_flatd' = Yojson.Safe.pretty_to_string flat_d' in
+      let _ = print_endline json_flatd' in *)
+      (flat_d', extract_prog flat_d' sc_main)
+    with e -> json_processing_error e
+  in
 
   if !verbose then begin
     let prog_str = char_list_to_string (Checker.Checker.EVMCFGProg.show prog) in
     let prog_str = Str.global_replace (Str.regexp "\\\\n") "\n" prog_str in
     Printf.printf "Program:\n%s\n" prog_str;
-    if liveness_selected () then begin
+    if liveness_selected () then run_analysis "liveness" (fun () ->
       let liveness_info = extract_liveness_info flat_d' in
       let liveness_info_str = char_list_to_string (Checker.Checker.EVMLiveness.show_prog_live_info_t liveness_info prog) in
       let liveness_info_str = Str.global_replace (Str.regexp "\\\\n") "\n" liveness_info_str in
       Printf.printf "#####################################\n#####################################\n#####################################\n\n";
-      Printf.printf "Liveness info:\n%s\n" liveness_info_str
-    end;
-    if constancy_selected () then begin
+      Printf.printf "Liveness info:\n%s\n" liveness_info_str);
+    if constancy_selected () then run_analysis "constancy" (fun () ->
       let const_info = extract_const_info flat_d' in
       let const_info_str = show_prog_const_info const_info prog in
       Printf.printf "#####################################\n#####################################\n#####################################\n\n";
-      Printf.printf "Constancy info:\n%s\n" const_info_str
-    end
+      Printf.printf "Constancy info:\n%s\n" const_info_str)
   end else begin
-    if liveness_selected () then begin
+    if liveness_selected () then run_analysis "liveness" (fun () ->
       let liveness_info = extract_liveness_info flat_d' in
       let check_fn = if !liveness_mode = Some "subset" then Checker.Checker.EVMLiveness.check_program_subset
                      else Checker.Checker.EVMLiveness.check_program in
       let ok = check_fn prog liveness_info in
-      print_endline (if ok then "LIVENESS_VALID" else "LIVENESS_INVALID")
-    end;
-    if constancy_selected () then begin
+      print_endline (if ok then "LIVENESS_VALID" else "LIVENESS_INVALID"));
+    if constancy_selected () then run_analysis "constancy" (fun () ->
       let const_info = extract_const_info flat_d' in
       let ok = Checker.Checker.EVMConstancy.check_const_program (prog_for_constancy prog) const_info in
-      print_endline (if ok then "CONSTANCY_VALID" else "CONSTANCY_INVALID")
-    end
-  end
+      print_endline (if ok then "CONSTANCY_VALID" else "CONSTANCY_INVALID"))
+  end;
+  if !analysis_failed then exit 1
 
 
 (***** Examples of Program and Liveness Info  as OCaml expressions ******)
