@@ -309,7 +309,7 @@ Module Constancy_snd (D: DIALECT) (E: CONST_SYMB D).
         * (* ConditionalJump: same rsf *)
           left.
           unfold SmallStepD.handle_cond_jump.
-          destruct (D.is_true_value (LocalsD.get (StackFrameD.locals sf) cond_var_id));
+          destruct (D.is_true_value (SmallStepD.eval_cond cond_var_id sf));
             unfold SmallStepD.handle_jump;
             [ destruct (CFGProgD.get_block p (StackFrameD.fname sf) bid_if_true) as [next_b|] eqn:Hnb
             | destruct (CFGProgD.get_block p (StackFrameD.fname sf) bid_if_false) as [next_b|] eqn:Hnb ];
@@ -651,7 +651,7 @@ Module Constancy_snd (D: DIALECT) (E: CONST_SYMB D).
           -- (* ConditionalJump *)
              unfold SmallStepD.handle_cond_jump.
              simpl.
-             destruct (D.is_true_value (LocalsD.get (StackFrameD.locals sf) cond_var)).
+             destruct (D.is_true_value (SmallStepD.eval_cond cond_var sf)).
              ++ unfold SmallStepD.handle_jump.
                 destruct (CFGProgD.get_block p (StackFrameD.fname sf) bt) as [nb|] eqn:Hnb.
                 ** unfold SmallStepD.handle_jump_aux.
@@ -1198,7 +1198,7 @@ Module Constancy_snd (D: DIALECT) (E: CONST_SYMB D).
                    --- (* ConditionalJump: the target scenario *)
                        unfold SmallStepD.handle_cond_jump in Hsn.
                        simpl in Hsn.
-                       destruct (D.is_true_value (LocalsD.get (StackFrameD.locals sf_mid) cond_var_mid)) eqn:Hcond_mid.
+                       destruct (D.is_true_value (SmallStepD.eval_cond cond_var_mid sf_mid)) eqn:Hcond_mid.
                        +++ unfold SmallStepD.handle_jump in Hsn.
                            destruct (CFGProgD.get_block p (StackFrameD.fname sf_mid) bidt_mid) as [next_b_mid|] eqn:Hnb_mid.
                            *** unfold SmallStepD.handle_jump_aux in Hsn.
@@ -1450,7 +1450,7 @@ Module Constancy_snd (D: DIALECT) (E: CONST_SYMB D).
                      --- (* ConditionalJump: a successful jump always sets pc := 0 <> S pc2 *)
                          unfold SmallStepD.handle_cond_jump in Hsn.
                          simpl in Hsn.
-                         destruct (D.is_true_value (LocalsD.get (StackFrameD.locals sf_mid) cond_var_mid)) eqn:Hcond_mid.
+                         destruct (D.is_true_value (SmallStepD.eval_cond cond_var_mid sf_mid)) eqn:Hcond_mid.
                          +++ unfold SmallStepD.handle_jump in Hsn.
                              destruct (CFGProgD.get_block p (StackFrameD.fname sf_mid) bidt_mid) as [next_b_mid|] eqn:Hnb_mid.
                              *** unfold SmallStepD.handle_jump_aux in Hsn.
@@ -1709,7 +1709,7 @@ Module Constancy_snd (D: DIALECT) (E: CONST_SYMB D).
                      --- (* ConditionalJump: a successful jump always sets pc := 0, contradicting S pc3 <> 0 *)
                          unfold SmallStepD.handle_cond_jump in Hsn.
                          simpl in Hsn.
-                         destruct (D.is_true_value (LocalsD.get (StackFrameD.locals sf_mid) cond_var_mid)) eqn:Hcond_mid.
+                         destruct (D.is_true_value (SmallStepD.eval_cond cond_var_mid sf_mid)) eqn:Hcond_mid.
                          +++ unfold SmallStepD.handle_jump in Hsn.
                              destruct (CFGProgD.get_block p (StackFrameD.fname sf_mid) bidt_mid) as [next_b_mid|] eqn:Hnb_mid.
                              *** unfold SmallStepD.handle_jump_aux in Hsn.
@@ -1951,7 +1951,7 @@ Module Constancy_snd (D: DIALECT) (E: CONST_SYMB D).
                      --- (* ConditionalJump: a successful jump always sets pc := 0, contradicting S pc4 <> 0 *)
                          unfold SmallStepD.handle_cond_jump in Hsn.
                          simpl in Hsn.
-                         destruct (D.is_true_value (LocalsD.get (StackFrameD.locals sf_mid) cond_var_mid)) eqn:Hcond_mid.
+                         destruct (D.is_true_value (SmallStepD.eval_cond cond_var_mid sf_mid)) eqn:Hcond_mid.
                          +++ unfold SmallStepD.handle_jump in Hsn.
                              destruct (CFGProgD.get_block p (StackFrameD.fname sf_mid) bidt_mid) as [next_b_mid|] eqn:Hnb_mid.
                              *** unfold SmallStepD.handle_jump_aux in Hsn.

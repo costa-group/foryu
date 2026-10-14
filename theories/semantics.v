@@ -157,8 +157,15 @@ Module SmallStep (D: DIALECT).
       end
     end.
 
-  Definition handle_cond_jump (p: CFGProgD.t) (cond_var:  VarID.t) (bid_if_true bid_if_false: BlockID.t)  (sf: StackFrameD.t) (rsf: list StackFrameD.t) (s: StateD.t): StateD.t :=
-    let cond_val := LocalsD.get sf.(locals) cond_var in
+  (* Value of a conditional jump's condition, which is either a variable or a literal *)
+  Definition eval_cond (cond: SimpleExprD.t) (sf: StackFrameD.t) : D.value_t :=
+    match cond with
+    | inl var => LocalsD.get sf.(locals) var
+    | inr val => val
+    end.
+
+  Definition handle_cond_jump (p: CFGProgD.t) (cond: SimpleExprD.t) (bid_if_true bid_if_false: BlockID.t)  (sf: StackFrameD.t) (rsf: list StackFrameD.t) (s: StateD.t): StateD.t :=
+    let cond_val := eval_cond cond sf in
     if D.is_true_value cond_val
     then handle_jump p bid_if_true sf rsf s
     else handle_jump p bid_if_false sf rsf s.
@@ -195,8 +202,8 @@ Module SmallStep (D: DIALECT).
         | None => error s "Current block not found"
         | Some b =>
             match b.(exit_info) with
-            | ConditionalJump cond_var bid_if_true bid_if_false =>
-                handle_cond_jump p cond_var bid_if_true bid_if_false sf rsf s
+            | ConditionalJump cond bid_if_true bid_if_false =>
+                handle_cond_jump p cond bid_if_true bid_if_false sf rsf s
             | Jump bid =>
                 handle_jump p bid sf rsf s
             | ReturnBlock ret_sexprs => 

@@ -111,11 +111,12 @@ Module Liveness (D: DIALECT).
   Definition prop_live_set_bkw (l: list InstrD.t) (s: VarSet.t) : VarSet.t :=    
     prop_live_set_bkw_aux  (length l) (rev l) s.
 
-  (* Given a block [b], it adds the conditional variable of the block
-  is a conditional jump *)
+  (* Given a block [b], it adds the condition variable of the block if
+  it is a conditional jump whose condition is a variable (a literal
+  condition uses no variable) *)
   Definition add_jump_var_if_applicable (b: BlockD.t) (s: VarSet.t) :=
     match b.(BlockD.exit_info) with
-    | ExitInfoD.ConditionalJump cond_var _ _ => VarSet.add cond_var s
+    | ExitInfoD.ConditionalJump (inl cond_var) _ _ => VarSet.add cond_var s
     | _ => s
       end.
 

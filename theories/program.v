@@ -280,15 +280,15 @@ Module ExitInfo (D: DIALECT).
   Module SimpleExprD := SimpleExpr(D).
   
   Inductive t : Type := 
-  | ConditionalJump (cond_var_id : VarID.t) (bid_if_true : BlockID.t) (bid_if_false : BlockID.t)
+  | ConditionalJump (cond : SimpleExprD.t) (bid_if_true : BlockID.t) (bid_if_false : BlockID.t)
   | Jump (bid : BlockID.t)
   | ReturnBlock (ret_eexprs : list SimpleExprD.t)
   | Terminate.
 
   Definition show (e: t) : string :=
     match e with
-    | ConditionalJump cond_var_id bid_if_true bid_if_false =>
-        "ConditionalJump " ++ VarID.show cond_var_id ++ " " ++ BlockID.show bid_if_true ++ " " ++ BlockID.show bid_if_false
+    | ConditionalJump cond bid_if_true bid_if_false =>
+        "ConditionalJump " ++ SimpleExprD.show cond ++ " " ++ BlockID.show bid_if_true ++ " " ++ BlockID.show bid_if_false
     | Jump bid => "Jump " ++ BlockID.show bid
     | ReturnBlock ret_eexprs => "ReturnBlock " ++ String.concat ", " (List.map SimpleExprD.show ret_eexprs)
     | Terminate => "Terminate"

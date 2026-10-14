@@ -98,8 +98,8 @@ Module JLAMP (D: DIALECT).
     Definition accessed_vars (b: BlockD.t) (pc: nat) (s: VarSet.t) :=
       ( pc = (length b.(BlockD.instructions)) /\ (* end of block *)
           match b.(BlockD.exit_info) with
-          | ExitInfoD.ConditionalJump cv _ _ =>
-              VarSet.Equal s (VarSet.add cv VarSet.empty) (* cv is accessed *)
+          | ExitInfoD.ConditionalJump (inl cv) _ _ =>
+              VarSet.Equal s (VarSet.add cv VarSet.empty) (* cv is accessed (a literal condition accesses nothing) *)
           | ExitInfoD.ReturnBlock rvs =>
               VarSet.Equal s (list_sexp_to_varset rvs) (* rs are accessed *)
           | _ => VarSet.Equal s VarSet.empty (* nothing is accessed *)

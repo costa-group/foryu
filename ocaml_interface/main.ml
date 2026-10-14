@@ -461,9 +461,11 @@ let extract_exit_info (exit_info: Yojson.Safe.t) : Checker.Checker.ExitInfo.t =
   | "Terminated" -> Checker.Checker.ExitInfo.Terminate
   | "MainExit" -> Checker.Checker.ExitInfo.Terminate
   | "ConditionalJump" -> 
-      let cond = extract_var (to_string (member "cond" exit_info)) in
+      (* The condition is a variable ("vN"/"phiN") or, since solc 0.8.36, possibly a literal ("0x00") *)
+      let cond = extract_sexpr (to_string (member "cond" exit_info)) in
       (* solc's yulCFGJson lists the zero-condition target first: "targets": [if_false, if_true]
-         (checked against solc 0.8.34 -- the body of `if c { ... }` is targets[1]) *)
+         (checked against solc 0.8.34, 0.8.36 and 0.8.37 -- the body of `if c { ... }`, a `switch`'s
+         matching case and a `for` loop's body are all targets[1]) *)
       let btrue, bfalse = match to_list (member "targets" exit_info) with
         | [`String bfalse; `String btrue] -> (extract_bid btrue, extract_bid bfalse)
         | _ -> failwith "Invalid targets in ConditionalJump exit info (must be list of 2 strings)" in
@@ -496,11 +498,11 @@ let extract_instruction (instr: Yojson.Safe.t) : Checker.Checker.EVMInstr.t =
                            | Some opcode -> (Checker.Inl (Checker.Inr opcode))
                            | None -> (Checker.Inl (Checker.Inl (string_to_char_list s))))
       | _ -> failwith "Invalid 'op' field in instruction (must be string)" in
-    (* solc's yulCFGJson (0.8.34) stores every instruction's "in" in reverse textual order: sub(a, b)
-       is ["b", "a"], and a call f(a, b) is ["b", "a"] against f's "arguments" [x, y]. evm_dialect.v
-       (SUB [x; y] = x - y) and function calls take them in textual order. *)
-    let inp = List.rev inp in
-    { Checker.Checker.EVMInstr.input = inp; 
+    (* Since solc 0.8.36, yulCFGJson stores every instruction's "in" in textual order: sub(a, b) is
+       ["a", "b"], and a call f(a, b) is ["a", "b"] against f's "arguments" [x, y] -- the same order
+       evm_dialect.v (SUB [x; y] = x - y) and function calls expect, so "in" is used as-is.
+       solc 0.8.34 used the reverse order (sub(a, b) was ["b", "a"]) and is no longer supported. *)
+    { Checker.Checker.EVMInstr.input = inp;
       Checker.Checker.EVMInstr.output = outv;
       Checker.Checker.EVMInstr.op = op;
     }  
@@ -973,7 +975,7 @@ let varl : Checker.VarID.t list = [var42; var0]
 let sexpr1 : Checker.Checker.ExitInfo.SimpleExprD.t = Inr val7
 let sexpr2 : Checker.Checker.ExitInfo.SimpleExprD.t = Inl var42
 let fname : Checker.FuncName.t = string_to_char_list "my_function"
-let exit1 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.ConditionalJump (var42, bid, bid)
+let exit1 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.ConditionalJump (sexpr2, bid, bid)
 let exit2 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.Jump bid
 let exit3 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.ReturnBlock [sexpr1; sexpr2]
 let exit4 : Checker.Checker.ExitInfo.t = Checker.Checker.ExitInfo.Terminate
@@ -1035,7 +1037,7 @@ SUMMARY OF OCAML TYPES:
 * Checker.Checker.ExitInfo.SimpleExprD.t = Inl Checker.n | Inr Checker.z
 * Checker.FuncName.t = char list
 * Checker.Checker.ExitInfo.t = 
-    | Checker.Checker.ExitInfo.ConditionalJump of VarID.t * BlockID.t * BlockID.t
+    | Checker.Checker.ExitInfo.ConditionalJump of Checker.Checker.ExitInfo.SimpleExprD.t * BlockID.t * BlockID.t
     | Checker.Checker.ExitInfo.Jump of BlockID.t
     | Checker.Checker.ExitInfo.ReturnBlock of Checker.Checker.ExitInfo.SimpleExprD.t list
     | Checker.Checker.ExitInfo.Terminate
