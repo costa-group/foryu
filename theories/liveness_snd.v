@@ -405,6 +405,42 @@ Module Liveness_snd (D: DIALECT).
     apply H_not_In_v_s1.
   Qed.
 
+  (* [VarSet_Sup s1 s2] means that s1 is a superset of s2 (s1 ⊇ s2).
+     It is used in the definitions of live sets below, in place of
+     VarSet.Equal, so that any over-approximation of the live sets is
+     accepted. *)
+  Definition VarSet_Sup (s1 s2: VarSet.t) : Prop := VarSet.Subset s2 s1.
+
+  Lemma varset_eq_imp_sup:
+    forall s1 s2, VarSet.Equal s1 s2 -> VarSet_Sup s1 s2.
+  Proof.
+    intros s1 s2 H x Hx. apply H. exact Hx.
+  Qed.
+
+  (* Allows rewriting with a VarSet_Sup hypothesis [H: x ⊇ y] inside
+     another VarSet_Sup hypothesis [s ⊇ x], obtaining [s ⊇ y] *)
+  #[local] Instance VarSet_Sup_rewrite (s: VarSet.t) :
+    Morphisms.Proper (VarSet_Sup ==> Basics.impl) (VarSet_Sup s).
+  Proof.
+    intros x y H_xy H_sx a H_a. apply H_sx. apply H_xy. exact H_a.
+  Qed.
+
+  Lemma VarSet_Sup_trans:
+    forall s1 s2 s3, VarSet_Sup s1 s2 -> VarSet_Sup s2 s3 -> VarSet_Sup s1 s3.
+  Proof.
+    intros s1 s2 s3 H12 H23 a H_a. apply H12. apply H23. exact H_a.
+  Qed.
+
+  (* ~VarSet.In is preserved when going to a subset *)
+  Lemma not_In_preserves_sup:
+    forall s1 s2 v,
+      VarSet_Sup s1 s2 ->
+      ~VarSet.In v s1 ->
+      ~VarSet.In v s2.
+  Proof.
+    intros s1 s2 v H H_not_In H_In. apply H_not_In. apply H. exact H_In.
+  Qed.
+
   (* If [x] is in [s] and [y] is not then [x<>y] *)
   Lemma not_In_neq:
     forall x y s,
@@ -562,14 +598,14 @@ Module Liveness_snd (D: DIALECT).
   | lo_block_w_ret (fname : FuncName.t) (bid :  BlockID.t) (b: BlockD.t) (rs: list SimpleExprD.t) (sout: VarSet.t):
     CFGProgD.get_block p fname bid = Some b -> (* the block exists *)
     BlockD.is_return_block b = Some rs -> (* it is an exit block and rs is the list of returned expressions *)
-    VarSet.Equal sout (list_to_set (extract_yul_vars rs)) ->
+    VarSet_Sup sout (list_to_set (extract_yul_vars rs)) ->
     live_out p fname bid sout
 
   (* Terminate block *)
   | lo_block_w_ter (fname : FuncName.t) (bid :  BlockID.t) (b: BlockD.t) (sout: VarSet.t) :
     CFGProgD.get_block p fname bid = Some b -> (* the block exists *)
     BlockD.is_terminated_block b = true -> (* it is an terminate block *)
-    VarSet.Equal sout VarSet.empty ->
+    VarSet_Sup sout VarSet.empty ->
     live_out p fname bid sout
 
   (* A block with a with jump *)
@@ -578,7 +614,7 @@ Module Liveness_snd (D: DIALECT).
     BlockD.is_jump_block b = Some next_bid -> (* the block ends with a jump, and next_bid is the id of the next block *)
     live_in p fname next_bid s -> (* s is the set of live variables at the entry of p/fname/next_bid *)
     CFGProgD.get_block p fname next_bid = Some next_b -> (* next_b is the block with id next_bid *)
-    VarSet.Equal sout (apply_inv_phi (fst (next_b.(phi_function))) ((snd (next_b.(phi_function)) bid)) s) ->
+    VarSet_Sup sout (apply_inv_phi (fst (next_b.(phi_function))) ((snd (next_b.(phi_function)) bid)) s) ->
     live_out p fname bid sout  (* sout is the set of live variable at the exit of p/fname/bid *)
 
   (* A block with a conditional jump *)
@@ -589,7 +625,7 @@ Module Liveness_snd (D: DIALECT).
     live_in p fname next_bid_if_false s2 -> (* s2 is the set of live variables at the entry of p/fname/next_bid_if_false *)
     CFGProgD.get_block p fname next_bid_if_true = Some next_b_if_true -> (* next_b_if_true is the block with id next_bid_if_true *)
     CFGProgD.get_block p fname next_bid_if_false = Some next_b_if_false -> (* next_b_if_false is the block with id next_bid_if_false *)
-    VarSet.Equal sout (VarSet.union (apply_inv_phi (fst (next_b_if_true.(phi_function))) (snd next_b_if_true.(phi_function) bid) s1) 
+    VarSet_Sup sout (VarSet.union (apply_inv_phi (fst (next_b_if_true.(phi_function))) (snd next_b_if_true.(phi_function) bid) s1) 
                                     (apply_inv_phi (fst (next_b_if_false.(phi_function))) (snd next_b_if_false.(phi_function) bid) s2)) ->
     live_out p fname bid sout
   with
@@ -597,7 +633,7 @@ Module Liveness_snd (D: DIALECT).
   | li_block_any (fname : FuncName.t) (bid :  BlockID.t) (b: BlockD.t) (s sout: VarSet.t):
     CFGProgD.get_block p fname bid = Some b -> (* the block exists *)
     live_out p fname bid s -> (* s is the set of live variables at the exit of p/fname/bid *)
-    VarSet.Equal sout (prop_live_set_bkw b.(instructions) (add_jump_var_if_applicable b s)) ->
+    VarSet_Sup sout (prop_live_set_bkw b.(instructions) (add_jump_var_if_applicable b s)) ->
     live_in p fname bid sout.
 
   (* Defines the live variables set at every program point. It
@@ -609,14 +645,14 @@ Module Liveness_snd (D: DIALECT).
     CFGProgD.get_block p fname bid = Some b -> (* the block exists *)
     live_out p fname bid s ->
     pc = (length b.(BlockD.instructions)) ->
-    VarSet.Equal sout (add_jump_var_if_applicable b s) ->
+    VarSet_Sup sout (add_jump_var_if_applicable b s) ->
     live_at_pc p fname bid pc sout
   | live_at_pc_inb (fname : FuncName.t) (bid :  BlockID.t) (b: BlockD.t) (pc: nat) (s sout: VarSet.t) (i: InstrD.t):  
     CFGProgD.get_block p fname bid = Some b -> (* the block exists *)
     live_at_pc p fname bid (S pc) s ->
     Nat.lt pc (length b.(BlockD.instructions)) ->
     nth_error b.(BlockD.instructions) pc = Some i ->
-    VarSet.Equal sout (prop_live_set_bkw_instr i s) ->
+    VarSet_Sup sout (prop_live_set_bkw_instr i s) ->
     live_at_pc p fname bid pc sout.
 
   (* another way of defining live_at_pc, mainly used as a bridge to
@@ -627,7 +663,7 @@ Module Liveness_snd (D: DIALECT).
     CFGProgD.get_block p fname bid = Some b -> (* the block exists *)
     live_out p fname bid s ->
     Nat.le pc (length b.(BlockD.instructions)) ->
-    VarSet.Equal sout (prop_live_set_bkw_aux ((length b.(BlockD.instructions)) - pc) (rev b.(BlockD.instructions)) (add_jump_var_if_applicable b s)) ->
+    VarSet_Sup sout (prop_live_set_bkw_aux ((length b.(BlockD.instructions)) - pc) (rev b.(BlockD.instructions)) (add_jump_var_if_applicable b s)) ->
     live_at_pc' p fname bid pc sout.
 
   (* helper lemma for the one below *)
@@ -738,7 +774,7 @@ Module Liveness_snd (D: DIALECT).
       
       assert (H5: VarSet.Equal s' (prop_live_set_bkw_aux (length (BlockD.instructions b) - S pc) (rev (BlockD.instructions b)) (add_jump_var_if_applicable b s))). rewrite E_s'. apply varset_equal_refl.
       
-      pose proof (live_at_pc_1 p fname bid b (S pc) s s' H_b_exists H_live_out H3 H5) as H6.
+      pose proof (live_at_pc_1 p fname bid b (S pc) s s' H_b_exists H_live_out H3 (varset_eq_imp_sup _ _ H5)) as H6.
        
       rewrite <- H in H6.
       
@@ -826,17 +862,12 @@ Module Liveness_snd (D: DIALECT).
     split.
     - intros H_live_in_s1.
       destruct H_live_in_s1 as [fname bid b s sout H_b_exists H_live_out H_sout].
-      
-      rewrite varset_equal_sym in H_sout.
-      pose proof (varset_equal_trans (prop_live_set_bkw (BlockD.instructions b) (add_jump_var_if_applicable b s)) sout s2 H_sout H_s1_eq_s2) as H0.
-      rewrite varset_equal_sym in H0.
-      apply (@li_block_any p fname bid b s s2 H_b_exists H_live_out H0).
+      apply (@li_block_any p fname bid b s s2 H_b_exists H_live_out).
+      intros x Hx. apply H_s1_eq_s2. apply H_sout. exact Hx.
     - intros H_live_in_s1.
       destruct H_live_in_s1 as [fname bid b s sout H_b_exists H_live_out H_sout].
-
-      pose proof (varset_equal_trans s1 sout (prop_live_set_bkw (BlockD.instructions b) (add_jump_var_if_applicable b s)) H_s1_eq_s2 H_sout) as H0.
-
-      apply (@li_block_any p fname bid b s s1 H_b_exists H_live_out H0).
+      apply (@li_block_any p fname bid b s s1 H_b_exists H_live_out).
+      intros x Hx. apply H_s1_eq_s2. apply H_sout. exact Hx.
   Qed.
 
 
@@ -900,6 +931,73 @@ Module Liveness_snd (D: DIALECT).
       snd_block_info p r fname b. (* it has sound information *)
 
 
+  Definition snd_block_out_info_sub (p : CFGProgD.t) (r: prog_live_info_t) (fname: FuncName.t) (b: BlockD.t) : Prop :=
+    exists f_info b_in_info b_out_info,
+      (r fname) = Some f_info /\ (* The live-variable information of the function exists *)
+        f_info b.(bid) = Some (b_in_info,b_out_info) /\ (* The live-variable information of the block exists *)
+        match b.(exit_info) with
+        | ExitInfoD.Terminate =>
+            VarSet_Sup b_out_info  VarSet.empty 
+        | ExitInfoD.ReturnBlock rs => 
+            VarSet_Sup b_out_info (list_to_set (extract_yul_vars rs))
+        | ExitInfoD.Jump next_bid =>
+            exists next_b next_b_in_info next_b_out_info,
+            CFGProgD.get_block p fname next_bid = Some next_b /\ 
+              f_info next_bid = Some (next_b_in_info,next_b_out_info) /\
+              VarSet_Sup b_out_info (apply_inv_phi (fst next_b.(phi_function)) (snd next_b.(phi_function) b.(bid)) next_b_in_info)
+        | ExitInfoD.ConditionalJump cond_var next_bid_if_true next_bid_if_false => 
+            exists next_b_if_true next_b_ift_in_info next_b_ift_out_info next_b_if_false next_b_iff_in_info next_b_iff_out_info,
+            CFGProgD.get_block p fname next_bid_if_true = Some next_b_if_true /\ 
+            CFGProgD.get_block p fname next_bid_if_false = Some next_b_if_false /\ 
+              f_info next_bid_if_true = Some (next_b_ift_in_info,next_b_ift_out_info) /\
+              f_info next_bid_if_false = Some (next_b_iff_in_info,next_b_iff_out_info) /\
+              VarSet_Sup b_out_info (VarSet.union
+                                         (apply_inv_phi (fst next_b_if_true.(phi_function)) (snd next_b_if_true.(phi_function) b.(bid)) next_b_ift_in_info)
+                                         (apply_inv_phi (fst next_b_if_false.(phi_function)) (snd next_b_if_false.(phi_function) b.(bid)) next_b_iff_in_info))
+        end.
+ 
+  Definition snd_block_in_info_sub (r: prog_live_info_t) (fname: FuncName.t) (b: BlockD.t) : Prop :=
+    exists f_info b_in_info b_out_info,
+      (r fname) = Some f_info /\ (* The live-variable information of the function exists *)
+        f_info b.(bid) = Some (b_in_info,b_out_info) /\ (* The live-variable information of the block exists *)
+        VarSet_Sup b_in_info (prop_live_set_bkw b.(instructions) (add_jump_var_if_applicable b b_out_info)).
+  
+  Definition snd_block_info_sub (p: CFGProgD.t) (r: prog_live_info_t) (f: FuncName.t) (b: BlockD.t)
+    : Prop :=
+    snd_block_in_info_sub r f b /\ snd_block_out_info_sub p r f b.
+
+  Definition snd_all_blocks_info_sub (p : CFGProgD.t) (r: prog_live_info_t) : Prop :=
+    forall fname bid b,
+      CFGProgD.get_block p fname bid = Some b -> (* if the block exists *)
+      snd_block_info_sub p r fname b. (* it has sound information *)
+
+
+
+  (* The [_sub] versions above accept over-approximations: each
+     equation is replaced by an inclusion (VarSet_Sup). Exact solutions
+     are a special case. *)
+  Lemma snd_all_blocks_info_imp_sub:
+    forall p r, snd_all_blocks_info p r -> snd_all_blocks_info_sub p r.
+  Proof.
+    intros p r H fname bid b H_b.
+    destruct (H fname bid b H_b) as [H_in H_out].
+    split.
+    - destruct H_in as [f_info [b_in [b_out [H1 [H2 H3]]]]].
+      exists f_info, b_in, b_out. repeat split; try assumption.
+      apply varset_eq_imp_sup. exact H3.
+    - destruct H_out as [f_info [b_in [b_out [H1 [H2 H3]]]]].
+      exists f_info, b_in, b_out. repeat split; try assumption.
+      destruct (exit_info b).
+      + destruct H3 as [nt [nti [nto [nf [nfi [nfo [A [B [C [D E]]]]]]]]]].
+        exists nt, nti, nto, nf, nfi, nfo. repeat split; try assumption.
+        apply varset_eq_imp_sup. exact E.
+      + destruct H3 as [nb [nbi [nbo [A [B C]]]]].
+        exists nb, nbi, nbo. repeat split; try assumption.
+        apply varset_eq_imp_sup. exact C.
+      + apply varset_eq_imp_sup. exact H3.
+      + apply varset_eq_imp_sup. exact H3.
+  Qed.
+
   (* When get_block succeeds, it block it return indeed has the expected bid *)
   Lemma bid_b:
     forall p fname bid b,
@@ -959,19 +1057,19 @@ Module Liveness_snd (D: DIALECT).
 
   CoFixpoint build_live_in (p : CFGProgD.t) (fname: FuncName.t) (bid: BlockID.t) (b: BlockD.t)
     (r: prog_live_info_t) (f_info: func_live_info_t) (b_in_info b_out_info: VarSet.t)
-    (H_snd_info: snd_all_blocks_info p r) (H_b_exists: CFGProgD.get_block p fname bid = Some b)
+    (H_snd_info: snd_all_blocks_info_sub p r) (H_b_exists: CFGProgD.get_block p fname bid = Some b)
     (H_f_info: (r fname) = Some f_info) (H_b_info: f_info bid = Some (b_in_info,b_out_info)) : live_in p fname bid b_in_info
   with build_live_out (p : CFGProgD.t) (fname: FuncName.t) (bid: BlockID.t) (b: BlockD.t)
          (r: prog_live_info_t) (f_info: func_live_info_t) (b_in_info b_out_info: VarSet.t)
-                           (H_snd_info: snd_all_blocks_info p r) (H_b_exists: CFGProgD.get_block p fname bid = Some b)
+                           (H_snd_info: snd_all_blocks_info_sub p r) (H_b_exists: CFGProgD.get_block p fname bid = Some b)
                            (H_f_info: (r fname) = Some f_info) (H_b_info: f_info bid = Some (b_in_info,b_out_info)) : live_out p fname bid b_out_info.
   Proof.
     (* the case of live_in p fname bid b_in_info *)
-    - unfold snd_all_blocks_info in H_snd_info.
+    - unfold snd_all_blocks_info_sub in H_snd_info.
       pose proof (H_snd_info fname bid b H_b_exists) as H_snd_b_info.
-      unfold snd_block_info in H_snd_b_info.
+      unfold snd_block_info_sub in H_snd_b_info.
       destruct H_snd_b_info as [H_snd_b_in_info H_snd_b_out_info].
-      unfold snd_block_in_info in H_snd_b_in_info.
+      unfold snd_block_in_info_sub in H_snd_b_in_info.
       destruct H_snd_b_in_info as [f_info' [b_in_info' [b_out_info' [H_r_f [H_f_info' H_b_in_info']]]]].
       rewrite (bid_b p fname bid b H_b_exists) in H_f_info'.
       
@@ -1000,9 +1098,9 @@ Module Liveness_snd (D: DIALECT).
         
     (* the case of live_out p fname bid b_in_info *)
     - pose proof (H_snd_info fname bid b H_b_exists) as H_snd_b_info.
-      unfold snd_block_info in H_snd_b_info.
+      unfold snd_block_info_sub in H_snd_b_info.
       destruct H_snd_b_info as [H_snd_b_in_info H_snd_b_out_info].
-      unfold snd_block_out_info in H_snd_b_out_info.
+      unfold snd_block_out_info_sub in H_snd_b_out_info.
       destruct H_snd_b_out_info as [f_info' [b_in_info' [b_out_info' [H_r_f [H_f_info' H_b_out_info']]]]].
       rewrite (bid_b p fname bid b H_b_exists) in H_f_info'.
   
@@ -1043,6 +1141,51 @@ Module Liveness_snd (D: DIALECT).
         apply (@lo_block_w_ter p fname bid b b_out_info' H_b_exists (exit_info_vs_is_terminated b E_exit_info) H_b_out_info' ).
   Defined.
 
+  Lemma snd_all_blocks_info_to_bid_info_sub:
+    forall (p : CFGProgD.t) (r: prog_live_info_t),
+      snd_all_blocks_info_sub p r ->  
+      forall fname bid b,
+        CFGProgD.get_block p fname bid = Some b ->
+        exists f_info b_in_info b_out_info,
+          (r fname) = Some f_info /\
+            f_info bid = Some (b_in_info,b_out_info).
+  Proof.
+    intros p r H_snd_info fname bid b H_b_exists.
+    pose proof (H_snd_info fname bid b H_b_exists) as H_b_info_snd.
+    unfold snd_block_info_sub in H_b_info_snd.
+    destruct H_b_info_snd as [H_b_in_info_snd _].
+    unfold snd_block_in_info_sub in H_b_in_info_snd.
+    rewrite (bid_b p fname bid b H_b_exists) in H_b_in_info_snd.
+    destruct H_b_in_info_snd as [f_info [b_in_info [b_out_info [H_r_f [H_f_info _]]]]].
+    exists f_info, b_in_info, b_out_info.
+    split; assumption.
+  Qed.
+  
+  Lemma snd_info_sub:
+    forall (p : CFGProgD.t) (r: prog_live_info_t),
+      snd_all_blocks_info_sub p r ->  
+      forall fname bid b,
+        CFGProgD.get_block p fname bid = Some b ->
+        exists f_info b_in_info b_out_info,
+          (r fname) = Some f_info /\
+            f_info bid = Some (b_in_info,b_out_info) /\
+            live_in p fname bid b_in_info /\
+            live_out p fname bid b_out_info.
+  Proof.
+    intros p r H_snd_info fname bid b H_b_exists.
+    pose proof (H_snd_info fname bid b H_b_exists) as H_b_info_snd.
+    unfold snd_block_info_sub in  H_b_info_snd.
+    destruct H_b_info_snd as [H_b_in_info_snd H_b_out_info_snd].
+    pose proof (snd_all_blocks_info_to_bid_info_sub p r H_snd_info fname bid b H_b_exists) as H_snd_all_blocks_info_to_bid_info.
+    destruct H_snd_all_blocks_info_to_bid_info as [f_info [b_in_info [b_out_info [H_r_f H_f_info]]]].
+    exists f_info, b_in_info, b_out_info.
+    repeat split.
+    - assumption.
+    - assumption.
+    - apply (build_live_in p fname bid b r f_info b_in_info b_out_info H_snd_info H_b_exists H_r_f H_f_info).
+    - apply (build_live_out p fname bid b r f_info b_in_info b_out_info H_snd_info H_b_exists H_r_f H_f_info).
+  Qed.
+
   Lemma snd_all_blocks_info_to_bid_info:
     forall (p : CFGProgD.t) (r: prog_live_info_t),
       snd_all_blocks_info p r ->  
@@ -1074,18 +1217,10 @@ Module Liveness_snd (D: DIALECT).
             live_in p fname bid b_in_info /\
             live_out p fname bid b_out_info.
   Proof.
-    intros p r H_snd_info fname bid b H_b_exists.
-    pose proof (H_snd_info fname bid b H_b_exists) as H_b_info_snd.
-    unfold snd_block_info in  H_b_info_snd.
-    destruct H_b_info_snd as [H_b_in_info_snd H_b_out_info_snd].
-    pose proof (snd_all_blocks_info_to_bid_info p r H_snd_info fname bid b H_b_exists) as H_snd_all_blocks_info_to_bid_info.
-    destruct H_snd_all_blocks_info_to_bid_info as [f_info [b_in_info [b_out_info [H_r_f H_f_info]]]].
-    exists f_info, b_in_info, b_out_info.
-    repeat split.
-    - assumption.
-    - assumption.
-    - apply (build_live_in p fname bid b r f_info b_in_info b_out_info H_snd_info H_b_exists H_r_f H_f_info).
-    - apply (build_live_out p fname bid b r f_info b_in_info b_out_info H_snd_info H_b_exists H_r_f H_f_info).
+    intros p r H_snd_info.
+    apply snd_info_sub.
+    apply snd_all_blocks_info_imp_sub.
+    exact H_snd_info.
   Qed.
     
   Lemma check_live_in_snd:
@@ -1415,6 +1550,366 @@ Lemma check_live_out_complete:
     intros p r H_valid_p.
     rewrite <- check_program_correct.
     unfold snd_all_blocks_info.
+    split.
+    - intro H_get_block_imp_snd.
+      pose proof (CFGProgD.valid_p_vs_get_block p H_valid_p) as H_valid_p_vs_get_block.
+
+      intros f H_f_in_pfs b H_b_in_fbs.
+      apply (H_get_block_imp_snd f.(name) b.(bid) b).
+      rewrite H_valid_p_vs_get_block.
+      exists f.
+      
+      repeat split.
+      + apply H_f_in_pfs.
+      + apply H_b_in_fbs.
+      + rewrite FuncName.eqb_eq. reflexivity.
+      + rewrite BlockID.eqb_eq. reflexivity.          
+
+    - intros H_snd.
+      intros fname bid b H_get_block.
+
+      rewrite (CFGProgD.valid_p_vs_get_block p H_valid_p fname bid b) in H_get_block.
+
+      destruct H_get_block as [f [H_f_in_pfs [H_b_in_fbs [H_f_name_eqb_fname H_b_bid_eqb_bid]]]].
+      rewrite FuncName.eqb_eq in H_f_name_eqb_fname.
+      subst fname.
+      
+      apply (H_snd f H_f_in_pfs b H_b_in_fbs).
+  Qed.
+
+
+
+  (* Correctness of the subset version of the checker
+     ([check_program_subset]) wrt. the [_sub] versions of the
+     conditions, which use VarSet_Sup instead of VarSet.Equal. *)
+
+  Lemma check_live_in_snd_subset:
+    forall r fname b,
+      check_live_in_subset r fname b = true -> snd_block_in_info_sub r fname b.
+  Proof.
+    intros r fname b H_check_live_in.
+    unfold check_live_in_subset in H_check_live_in.
+    destruct (r fname) as [f_info|] eqn:E_r_f; try discriminate.
+    destruct (f_info (BlockD.bid b)) as [b_info|] eqn:E_f_info_b; try discriminate.
+    destruct b_info as [b_in_info b_out_info].
+    unfold snd_block_in_info_sub.
+    exists f_info, b_in_info, b_out_info.
+    split; try assumption.
+    split; try assumption.
+    unfold VarSet_Sup. rewrite <- VarSet.subset_spec.
+    apply H_check_live_in.
+  Qed.
+
+  Lemma check_live_in_complete_subset:
+    forall r fname b,
+      snd_block_in_info_sub r fname b -> check_live_in_subset r fname b = true.
+  Proof.
+    intros r fname b H_snd.
+    unfold snd_block_in_info_sub in H_snd.
+    destruct H_snd as [f_info [b_in_info [b_out_info [H_r_f [H_f_info H_eq]]]]].
+    unfold check_live_in_subset.
+    destruct (r fname) as [f_info'|]; try discriminate.
+    injection H_r_f as H_f_info_info'.
+    rewrite H_f_info_info'.
+    rewrite H_f_info.
+    rewrite VarSet.subset_spec.
+    apply H_eq.
+  Qed.
+
+  Lemma check_live_in_correct_subset:
+    forall r fname b,
+      snd_block_in_info_sub r fname b <-> check_live_in_subset r fname b = true.
+  Proof.
+    intros r fname b.
+    split.
+    + apply check_live_in_complete_subset.
+    + apply check_live_in_snd_subset.
+  Qed.
+
+
+  Lemma check_live_out_snd_subset:
+    forall p r fname b,
+      check_live_out_subset p r fname b = true -> snd_block_out_info_sub p r fname b.
+  Proof.
+    intros p r fname b H_check_live_out.
+    unfold check_live_out_subset in H_check_live_out.
+    destruct (r fname) as [f_info|] eqn:E_r_f; try discriminate.
+    destruct (f_info (BlockD.bid b)) as [b_info|] eqn:E_f_info_b; try discriminate.
+    destruct b_info as [b_in_info b_out_info].
+    unfold snd_block_out_info_sub.
+    exists f_info. exists b_in_info. exists b_out_info.
+    split; try assumption.
+    split; try assumption.
+    destruct (BlockD.exit_info b) as [cond_var bid_if_true bid_if_false|next_bid|rs|] eqn:E_b_exit_info.
+
+    + destruct (CFGProgD.get_block p fname bid_if_true) as [next_b_if_true|]; try discriminate.
+      destruct (CFGProgD.get_block p fname bid_if_false) as [next_b_if_false|]; try discriminate.
+      destruct (f_info bid_if_true) as [bid_if_true_info|]; try discriminate.
+      destruct bid_if_true_info as [next_b_ift_in_info next_b_ift_out_info].
+      destruct (f_info bid_if_false) as [target_if_false_info|]; try discriminate.
+      destruct target_if_false_info as [next_b_iff_in_info next_b_iff_out_info].
+
+      exists next_b_if_true, next_b_ift_in_info, next_b_ift_out_info, next_b_if_false, next_b_iff_in_info, next_b_iff_out_info.
+      split; try reflexivity.
+      split; try reflexivity.
+      split; try reflexivity.
+      split; try reflexivity.
+      unfold VarSet_Sup. rewrite <- VarSet.subset_spec.
+      apply H_check_live_out.
+
+    + destruct (CFGProgD.get_block p fname next_bid) as [next_b|]; try discriminate.
+      destruct (f_info next_bid) as [next_bid_info|]; try discriminate.
+      destruct next_bid_info as [next_b_in_info next_b_out_info].
+      exists next_b, next_b_in_info, next_b_out_info.
+      split; try reflexivity.
+      split; try reflexivity.
+      unfold VarSet_Sup. rewrite <- VarSet.subset_spec.
+      apply H_check_live_out.
+
+    + unfold VarSet_Sup. rewrite <- VarSet.subset_spec.
+      apply H_check_live_out.
+
+    + unfold VarSet_Sup. rewrite <- VarSet.subset_spec.
+      apply H_check_live_out.
+  Qed.
+  
+Lemma check_live_out_complete_subset:
+    forall p r fname b,
+      snd_block_out_info_sub p r fname b -> check_live_out_subset p r fname b = true.
+  Proof.
+    intros p r f b H_snd.
+    unfold snd_block_out_info_sub in H_snd.
+    destruct H_snd as [f_info [b_in_info [b_out_info [H_r_f [H_f_info H_eq]]]]].
+    unfold check_live_out_subset.
+    rewrite H_r_f.
+    rewrite H_f_info.
+
+    destruct b.(exit_info) as [cond_var bid_if_true bid_if_false|next_bid|rs|] eqn:E_b_exit_info.
+
+    + destruct H_eq as [next_b_if_true [next_b_ift_in_info [next_b_ift_out_info [next_b_if_false [next_b_iff_in_info [next_b_iff_out_info [H_b_true_exists [H_b_false_exists [if_true_info [if_false_info H_eq]]]]]]]]]].
+
+      rewrite H_b_true_exists.
+      rewrite H_b_false_exists.
+      rewrite if_true_info.
+      rewrite if_false_info.
+      rewrite VarSet.subset_spec.
+      apply H_eq.
+
+    + destruct H_eq as [next_b [next_b_in_info [next_b_out_info [H_b_next_exists [H_next_b_f_info' H_eq]]]]].
+      rewrite H_b_next_exists.
+      rewrite H_next_b_f_info'.
+      rewrite VarSet.subset_spec.
+      apply H_eq.
+
+    + rewrite VarSet.subset_spec.
+      apply H_eq.
+    + rewrite VarSet.subset_spec.
+      apply H_eq.
+  Qed.
+  
+  Lemma check_live_out_correct_subset:
+    forall p r fname b,
+      snd_block_out_info_sub p r fname b <-> check_live_out_subset p r fname b = true.
+  Proof.
+    intros p r fname b.
+    split.
+    + apply check_live_out_complete_subset.
+    + apply check_live_out_snd_subset.
+  Qed.
+
+  Lemma check_live_snd_subset:
+    forall p r fname b,
+      check_live_subset p r fname b = true -> snd_block_info_sub p r fname b.
+  Proof.
+    intros p r fname b H_check_live.
+    unfold check_live_subset in H_check_live.
+    destruct (check_live_in_subset r fname b) eqn:E_check_live; try discriminate.
+    unfold snd_block_info_sub.
+    split.
+    + apply (check_live_in_snd_subset r fname b E_check_live).
+    + apply (check_live_out_snd_subset p r fname b H_check_live).
+  Qed.
+
+  Lemma check_live_complete_subset:
+    forall p r fname b,
+      snd_block_info_sub p r fname b -> check_live_subset p r fname b = true.
+  Proof.
+    intros p r fname b H_snd.
+    unfold snd_block_info_sub in H_snd.
+    destruct H_snd as [H_snd_in H_snd_out].
+    unfold check_live_subset.
+    rewrite (check_live_in_complete_subset r fname b H_snd_in).
+    rewrite (check_live_out_complete_subset p r fname b H_snd_out).
+    reflexivity.
+  Qed.
+
+  Lemma check_live_correct_subset:
+    forall p r fname b,
+      snd_block_info_sub p r fname b <-> check_live_subset p r fname b = true.
+  Proof.
+    intros p r fname b.
+    split.
+    + apply check_live_complete_subset.
+    + apply check_live_snd_subset.
+  Qed.
+
+  Lemma check_blocks_snd_subset:
+    forall bs fname p r,
+      check_blocks_subset bs fname p r = true ->
+      forall b,
+        In b bs -> snd_block_info_sub p r fname b.
+  Proof.
+    induction bs as [|b bs' IHbs'].
+    - simpl. intros fname p r H_chk b H_False.
+      destruct H_False.
+    - intros fname p r H_chk b0 H_in_b0_bbs'.
+      simpl check_blocks_subset in H_chk.
+      destruct (check_live_subset p r fname b) eqn:E_check_live; try discriminate.
+      simpl in H_in_b0_bbs'.
+      destruct H_in_b0_bbs' as [H_b_eq_b0 | H_in_b0_bs'].
+
+      + subst b0.
+        apply (check_live_snd_subset p r fname b E_check_live).
+      + apply (IHbs' fname p r H_chk b0 H_in_b0_bs').
+  Qed.
+
+  (* If a [P e] holds for all [e] in a list, then it holds fro all elements in the tail *)
+  Lemma in_cons_if_prop_subset:
+    forall {A: Type} (b : A) (bs: list A) (P: A->Prop),
+      (forall e, List.In e (b::bs) -> P e) ->
+      (forall e, List.In e bs -> P e).
+  Proof.
+    intros A b bs P H.
+    intro f.
+    pose proof (H f) as H'.
+    simpl in H'.
+    intros H''.
+    apply H'.
+    right.
+    apply H''.
+  Qed.
+
+  Lemma check_blocks_complete_subset:
+    forall bs fname p r,
+      (forall b, In b bs -> snd_block_info_sub p r fname b) ->
+      check_blocks_subset bs fname p r = true.
+  Proof.
+    induction bs as [|b bs' IHbs'].    
+    - simpl. intros fname p r H_snd.
+      reflexivity.
+    - intros fname p r H_snd.
+      pose proof (H_snd b (in_eq b bs')) as H_snd_b.
+      simpl.
+      destruct (check_live_subset p r fname b) eqn:E_check_live.
+      + apply (IHbs' fname p r (@in_cons_if_prop_subset BlockD.t b bs' (fun b => snd_block_info_sub p r fname b) H_snd)).
+      + rewrite (check_live_complete_subset p r fname b H_snd_b) in E_check_live.
+        discriminate E_check_live.
+  Qed.
+  
+  Lemma check_blocks_correct_subset:
+    forall bs fname p r,
+      (forall b, In b bs -> snd_block_info_sub p r fname b) <->
+          check_blocks_subset bs fname p r = true.
+  Proof.
+    intros bs fname p r.
+    split.
+    - apply (check_blocks_complete_subset bs fname p r).
+    - apply (check_blocks_snd_subset bs fname p r).
+  Qed.
+
+  Lemma check_functions_snd_subset:
+    forall fs p r,
+    check_functions_subset fs p r = true ->
+      forall f,
+        In f fs -> forall b, In b f.(blocks) -> snd_block_info_sub p r f.(name) b.
+  Proof.
+    induction fs as [|f fs' IHfs'].
+    - simpl.
+      intros p r H_check_functions f H_False.
+      destruct H_False.
+    - intros p r H_check_functions f0 H_in_f0_ffs' b H_in_b_blocks_f0.
+      simpl in H_in_f0_ffs'.
+      destruct H_in_f0_ffs' as [H_f_eq_f0 | H_in_f0_fs'].
+      + subst f0.
+        simpl check_functions_subset in H_check_functions.
+        destruct (check_blocks_subset f.(blocks) f.(name) p r) eqn:E_check_f; try discriminate.
+        apply (check_blocks_snd_subset f.(blocks) f.(name) p r E_check_f b H_in_b_blocks_f0).
+      + simpl in H_check_functions.
+        destruct (check_blocks_subset f.(blocks) f.(name)); try discriminate.
+        apply (IHfs' p r H_check_functions f0 H_in_f0_fs' b H_in_b_blocks_f0).
+  Qed.
+
+  
+  Lemma check_functions_complete_subset:
+    forall fs p r,
+      (forall f, 
+          In f fs -> forall b, In b f.(blocks) -> snd_block_info_sub p r f.(name) b) ->
+      check_functions_subset fs p r = true.
+  Proof.
+    induction fs as [|f fs' IHfs'].
+    - simpl.
+      intros p r H_snd.
+      reflexivity.
+    - intros p r H_snd.
+      pose proof (H_snd f) as  H_snd_f.
+      simpl.
+      destruct (check_blocks_subset f.(blocks) f.(name) p r) eqn:E_check_f_blocks.
+      + apply IHfs'.
+        intros f0 H_in_f0_fs' b.
+        apply (H_snd f0 (in_cons f f0 fs' H_in_f0_fs') b).
+      + rewrite (check_blocks_complete_subset f.(blocks) f.(name) p r (H_snd_f (in_eq f fs'))) in E_check_f_blocks.
+        discriminate E_check_f_blocks.
+  Qed.
+  
+  Lemma check_program_snd_subset:
+    forall p r,
+    check_program_subset p r = true ->
+    forall f,
+        In f p.(functions) -> forall b, In b f.(blocks) -> snd_block_info_sub p r f.(name) b.
+  Proof.
+    intros p r H_check_sc.
+    intros f H_in_f_pfs b H_b_in_bsf.
+    unfold check_program_subset in H_check_sc.
+    apply (check_functions_snd_subset p.(functions) p r H_check_sc f H_in_f_pfs b H_b_in_bsf).
+  Qed.
+    
+
+  Lemma check_program_complete_subset:
+    forall p r,
+      (forall f,
+          In f p.(functions) -> forall b, In b f.(blocks) -> snd_block_info_sub p r f.(name) b) ->
+      check_program_subset p r = true.
+  Proof.
+    intros p r H_snd.
+    unfold check_program_subset.
+    apply (check_functions_complete_subset p.(functions) p r H_snd).
+  Qed.
+
+  Lemma check_program_correct_subset:
+    forall p r,
+      (forall f,
+          In f p.(functions) ->
+          forall b, In b f.(blocks) ->
+                    snd_block_info_sub p r f.(name) b) <-> check_program_subset p r = true.
+    Proof.
+      intros p r.
+      split.
+      - apply check_program_complete_subset.
+      - apply check_program_snd_subset.
+    Qed.
+
+  (* This is the main theorem about the livness checking procedure,
+  without refering to live_in and live_ot. Using snd_info, we can
+  replace snd_all_blocks_info_sub by one that is based on live_in and
+  live_out --- should be done later *)
+  Lemma check_valid_prog_correct_subset:
+    forall p r,
+      CFGProgD.valid_program p ->
+      snd_all_blocks_info_sub p r <-> check_program_subset p r = true.
+  Proof.
+    intros p r H_valid_p.
+    rewrite <- check_program_correct_subset.
+    unfold snd_all_blocks_info_sub.
     split.
     - intro H_get_block_imp_snd.
       pose proof (CFGProgD.valid_p_vs_get_block p H_valid_p) as H_valid_p_vs_get_block.
@@ -1913,7 +2408,7 @@ Lemma check_live_out_complete:
                  rewrite (VarSet.add_spec) in H.
                  destruct H.
                  **** subst v0.
-                      pose proof (not_In_preserves_eq sout (VarSet.add cv s) v H2 H_not_In_v_s) as H_not_In_v_add_cv_s.
+                      pose proof (not_In_preserves_sup sout (VarSet.add cv s) v H2 H_not_In_v_s) as H_not_In_v_add_cv_s.
                       rewrite VarSet.add_spec in H_not_In_v_add_cv_s.
                       apply Decidable.not_or in H_not_In_v_add_cv_s.
                       destruct H_not_In_v_add_cv_s.
@@ -1950,7 +2445,7 @@ Lemma check_live_out_complete:
                       rewrite H4 in H2.
 
                       pose proof (In_preserves_eq  s0 (list_to_set (extract_yul_vars rvs)) v0 H_match H_v0_not_In_s0).
-                      pose proof (not_In_preserves_eq  sout (list_to_set (extract_yul_vars rvs)) v H2 H_not_In_v_s).                      
+                      pose proof (not_In_preserves_sup  sout (list_to_set (extract_yul_vars rvs)) v H2 H_not_In_v_s).                      
                       pose proof (not_In_neq v0 v (list_to_set (extract_yul_vars rvs)) H H0).
                       apply (H_eq_assgin_up_to_v v0 H3).
                  **** unfold BlockD.is_terminated_block in H3.
@@ -2010,7 +2505,7 @@ Lemma check_live_out_complete:
              injection H1 as H1.
              subst i0.
              unfold prop_live_set_bkw_instr in H2.
-             pose proof (not_In_preserves_eq sout (VarSet.union (VarSet.diff s (list_to_set (InstrD.output instr))) (list_to_set (extract_yul_vars (InstrD.input instr)))) v H2 H_not_In_v_s).
+             pose proof (not_In_preserves_sup sout (VarSet.union (VarSet.diff s (list_to_set (InstrD.output instr))) (list_to_set (extract_yul_vars (InstrD.input instr)))) v H2 H_not_In_v_s).
              rewrite VarSet.union_spec in H.
              apply Decidable.not_or in H.
              destruct H.
@@ -2110,7 +2605,7 @@ Lemma check_live_out_complete:
         destruct (BlockD.exit_info b) as [cv | | rvs | ] eqn:E_exit_b.
         * unfold add_jump_var_if_applicable in H_sout.
           rewrite E_exit_b in H_sout.
-          pose proof (not_In_preserves_eq sout (VarSet.add cv s) v H_sout H_not_In_v_s) as H_not_In_v_add.
+          pose proof (not_In_preserves_sup sout (VarSet.add cv s) v H_sout H_not_In_v_s) as H_not_In_v_add.
           pose proof (In_preserves_eq s0 (VarSet.add cv VarSet.empty) v0 H_match H_In_v0_s0) as H_In_v0_add.
           rewrite VarSet.add_spec in H_not_In_v_add.
           rewrite VarSet.add_spec in H_In_v0_add.
@@ -2143,7 +2638,7 @@ Lemma check_live_out_complete:
              subst rs.
              rewrite H_sout0  in H_sout.
              
-             pose proof (not_In_preserves_eq sout (list_to_set (extract_yul_vars rvs)) v H_sout H_not_In_v_s) as H_not_in_v_rets.
+             pose proof (not_In_preserves_sup sout (list_to_set (extract_yul_vars rvs)) v H_sout H_not_In_v_s) as H_not_in_v_rets.
              pose proof (In_preserves_eq  s0 (list_to_set (extract_yul_vars rvs)) v0 H_match H_In_v0_s0) as H_in_v0_rets.
              apply (not_In_neq v0 v (list_to_set (extract_yul_vars rvs)) H_in_v0_rets H_not_in_v_rets).
 
@@ -2190,7 +2685,7 @@ Lemma check_live_out_complete:
         injection H_nth_err as H_nth_err.
         subst instr'.
         unfold prop_live_set_bkw_instr in H_sout.
-        pose proof (not_In_preserves_eq sout (VarSet.union (VarSet.diff s (list_to_set instr.(output))) (list_to_set (extract_yul_vars instr.(input)))) v H_sout H_not_In_v_s) as H_not_In_v_union.
+        pose proof (not_In_preserves_sup sout (VarSet.union (VarSet.diff s (list_to_set instr.(output))) (list_to_set (extract_yul_vars instr.(input)))) v H_sout H_not_In_v_s) as H_not_In_v_union.
         rewrite VarSet.union_spec in H_not_In_v_union.
         apply Decidable.not_or in H_not_In_v_union.
         destruct H_not_In_v_union as [_ H_not_in_args].
@@ -2394,14 +2889,14 @@ Lemma check_live_out_complete:
     argument, it must be dead before the bkw propagation already *)
     Lemma not_In_v_fwd:
       forall v s sout instr,
-        VarSet.Equal sout (prop_live_set_bkw_instr instr s) ->
+        VarSet_Sup sout (prop_live_set_bkw_instr instr s) ->
         ~ VarSet.In v sout ->
         ~ List.In v instr.(output) ->
         ~ VarSet.In v s.
     Proof.
       intros v s sout instr H_eq_sout H_not_In_v_sout H_not_in_v_output.
       unfold prop_live_set_bkw_instr in H_eq_sout.
-      pose proof (not_In_preserves_eq sout (VarSet.union (VarSet.diff s (list_to_set instr.(output))) (list_to_set (extract_yul_vars instr.(input)))) v H_eq_sout H_not_In_v_sout) as H_not_In_v_union.
+      pose proof (not_In_preserves_sup sout (VarSet.union (VarSet.diff s (list_to_set instr.(output))) (list_to_set (extract_yul_vars instr.(input)))) v H_eq_sout H_not_In_v_sout) as H_not_In_v_union.
       rewrite VarSet.union_spec in H_not_In_v_union.
       apply Decidable.not_or in H_not_In_v_union.
       destruct H_not_In_v_union as [H_not_In_v_diff _].
@@ -2507,7 +3002,7 @@ Lemma check_live_out_complete:
       rewrite H_pc_at_end in H_pc_lt_len. contradiction (Nat.lt_irrefl (length b.(instructions))).
     - subst_var_by_inj H_b_exists H_b0_exists b0.
       unfold prop_live_set_bkw_instr in H_sout.
-      pose proof (not_In_preserves_eq sout (VarSet.union (VarSet.diff s (list_to_set (output instr'))) (list_to_set (extract_yul_vars (input instr')))) v H_sout H_not_In_v_s) as H_not_In_v_union.
+      pose proof (not_In_preserves_sup sout (VarSet.union (VarSet.diff s (list_to_set (output instr'))) (list_to_set (extract_yul_vars (input instr')))) v H_sout H_not_In_v_s) as H_not_In_v_union.
       rewrite VarSet.union_spec in H_not_In_v_union.
       apply Decidable.not_or in H_not_In_v_union.
       destruct H_not_In_v_union as [_ H_not_In_v_union].
@@ -3668,12 +4163,12 @@ Lemma check_live_out_complete:
   (* The specification of function [list_to_set] *)
   Lemma add_jump_var_if_applicable_semi_spec:
     forall v s s' b,
-      ~VarSet.In v s -> VarSet.Equal s (add_jump_var_if_applicable b s') -> ~VarSet.In v s'.
+      ~VarSet.In v s -> VarSet_Sup s (add_jump_var_if_applicable b s') -> ~VarSet.In v s'.
   Proof.
     intros v s s' b H_not_In_v_s H_s.
     unfold add_jump_var_if_applicable in H_s.
-    destruct (exit_info b); try exact (not_In_preserves_eq s s' v H_s H_not_In_v_s).
-    pose proof (not_In_preserves_eq s (VarSet.add cond_var_id s') v H_s H_not_In_v_s) as H_not_In_v_add.
+    destruct (exit_info b); try exact (not_In_preserves_sup s s' v H_s H_not_In_v_s).
+    pose proof (not_In_preserves_sup s (VarSet.add cond_var_id s') v H_s H_not_In_v_s) as H_not_In_v_add.
     rewrite VarSet.add_spec in H_not_In_v_add.
     apply Decidable.not_or in H_not_In_v_add.
     destruct H_not_In_v_add as [_ H_not_In_v_s'].
@@ -3687,7 +4182,7 @@ Lemma check_live_out_complete:
       live_at_pc p fname bid pc s ->
       live_out p fname bid s' ->
       live_in p fname next_bid s'' ->
-      VarSet.Equal s (add_jump_var_if_applicable b s') ->
+      VarSet_Sup s (add_jump_var_if_applicable b s') ->
       VarSet.Subset (VarSet.union (VarSet.diff s'' (list_to_set out_vars)) (list_to_set (extract_yul_vars in_sexprs))) s' ->
       equiv_states_up_to_i_v p i fname bid pc v st1 st2 ->
       split_at_i i st1.(call_stack) [] tl sf1 ->
@@ -3976,8 +4471,8 @@ Lemma check_live_out_complete:
           
           rewrite E_phi in H_sout0.
 
-          rewrite <- varset_equal_sym in H_sout0.
-          pose proof (varset_eq_imp_subset (VarSet.union (VarSet.diff s' (list_to_set (phi_function next_b).1)) (list_to_set (extract_yul_vars in_sexprs))) sout0 H_sout0) as H_subset.          
+          unfold VarSet_Sup in H_sout0.
+          pose proof H_sout0 as H_subset.          
           apply (live_at_handle_jump_aux_1_snd p i fname bid next_bid b next_b pc sout sout0 s' st1 st2 st1' sf1 sf2 tl v (phi_function next_b).1 in_sexprs H_b_exists E_get_b_next H_live_at_pc H_live_out H_live_in_next_pc H_sout H_subset H_equiv_st1_st2 H_split_i_st1 H_split_i_st2 H_handle_jump_st1 H_not_In_v_s).
 
         * subst_var_by_inj H_b_exists H_b0_exists b0.                   
@@ -4178,7 +4673,7 @@ Qed.
       assert (H_sout' := H_sout).
       unfold add_jump_var_if_applicable in H_sout.
       rewrite H_exit_info in H_sout.
-      pose proof (not_In_preserves_eq sout (VarSet.add cv s) v H_sout H_not_In_v_s) as H_not_In_v_cv_sout.
+      pose proof (not_In_preserves_sup sout (VarSet.add cv s) v H_sout H_not_In_v_s) as H_not_In_v_cv_sout.
       rewrite VarSet.add_spec in H_not_In_v_cv_sout.
       apply Decidable.not_or in H_not_In_v_cv_sout.
       destruct H_not_In_v_cv_sout as [H_v_neq_cv H_not_In_v_s_aux].
@@ -4230,8 +4725,7 @@ Qed.
           destruct (next_b0_if_true.(phi_function).2 bid) as [in_sexprs_1] eqn:E_phi_1.
           destruct (next_b0_if_false.(phi_function).2 bid) as [in_sexprs_2] eqn:E_phi_2.
 
-          rewrite varset_equal_sym in H_sout0.
-          apply varset_eq_imp_subset in H_sout0.
+          unfold VarSet_Sup in H_sout0.
           apply varset_subset_union in H_sout0.
           destruct H_sout0 as [H_sout0_l H_sout0_r].
           unfold apply_inv_phi in H_sout0_l.
@@ -4356,8 +4850,8 @@ Qed.
                  
                  unfold add_jump_var_if_applicable in H_sout.
                  rewrite H_exit_info in H_sout.
-                 rewrite <- H_sout in H_sout0.
-                 pose proof (not_In_preserves_eq sout (list_to_set (extract_yul_vars rs)) v H_sout0 H_not_In_v_s) as H_not_In_v_rs.
+                 apply (VarSet_Sup_trans sout sout0 _ H_sout) in H_sout0.
+                 pose proof (not_In_preserves_sup sout (list_to_set (extract_yul_vars rs)) v H_sout0 H_not_In_v_s) as H_not_In_v_rs.
                  rewrite <- list_to_set_spec in H_not_In_v_rs.
                  rewrite <- extract_yul_vars_spec in H_not_In_v_rs.
 
@@ -4656,7 +5150,7 @@ Qed.
                                           ***** subst_var_by_inj H_b_exists H_b0_exists b0.
                                                     subst_var_by_inj E_nth H_get_instr' instr'.
                                                     unfold prop_live_set_bkw_instr in H_sout.
-                                                    pose proof (not_In_preserves_eq sout (VarSet.union (VarSet.diff s (list_to_set (output instr))) (list_to_set (extract_yul_vars (input instr)))) v H_sout H_not_In_v_s) as H_not_in_union.
+                                                    pose proof (not_In_preserves_sup sout (VarSet.union (VarSet.diff s (list_to_set (output instr))) (list_to_set (extract_yul_vars (input instr)))) v H_sout H_not_In_v_s) as H_not_in_union.
                                                     rewrite VarSet.union_spec in H_not_in_union.
                                                     apply Decidable.not_or in H_not_in_union.
                                                     destruct H_not_in_union as [H_not_in_union _].
@@ -4686,7 +5180,7 @@ Qed.
                                             subst_var_by_inj H_b_exists H_b1_exists b1.
                                             subst_var_by_inj E_nth H_get_instr' instr'.
                                             unfold prop_live_set_bkw_instr in H_sout.
-                                            pose proof (not_In_preserves_eq sout (VarSet.union (VarSet.diff s (list_to_set (output instr))) (list_to_set (extract_yul_vars (input instr)))) v H_sout H_not_In_v_s) as H_not_in_union.
+                                            pose proof (not_In_preserves_sup sout (VarSet.union (VarSet.diff s (list_to_set (output instr))) (list_to_set (extract_yul_vars (input instr)))) v H_sout H_not_In_v_s) as H_not_in_union.
                                             rewrite VarSet.union_spec in H_not_in_union.
                                             apply Decidable.not_or in H_not_in_union.
                                             destruct H_not_in_union as [H_not_in_union _].
