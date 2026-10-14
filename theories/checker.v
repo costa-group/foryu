@@ -2,7 +2,6 @@ Require Export FORYU.program.
 Require Export FORYU.semantics.
 Require Export FORYU.evm_dialect.
 Require Export FORYU.liveness.
-(*Require Export FORYU.liveness_subset.*)
 Require Export FORYU.constancy.
 Require Export FORYU.evm_constancy.
 
