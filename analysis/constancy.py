@@ -16,6 +16,12 @@ memory/storage/environment, or a call to another function, always yields
 that agree across every incoming edge (the meet operation over
 theories/constancy.v's subset/entailment order).
 
+Accepts either the full `solc --standard-json` output (every contract's
+yulCFGJson is found under "contracts") or a bare yulCFGJson object itself
+(e.g. what you get by extracting just contracts/<file>/<contract>/yulCFGJson
+out of the former) -- the input is used as-is if it has no top-level
+"contracts" key.
+
 Usage:
     python3 constancy.py -i input_cfg.json -o output_cfg.json
 """
@@ -170,9 +176,13 @@ def sym_exec_instr(instr, pp):
             if val is not None:
                 new_pp[v] = val
     elif op in FOLDABLE_OPS:
-        # solc 0.8.34 stores a non-phi instruction's "in" reversed with
-        # respect to the textual Yul order (sub(a, b) is ["b", "a"]).
-        vals = [_eval_sexpr(e, pp) for e in reversed(ins)]
+        # Since solc 0.8.36, a non-phi instruction's "in" lists its operands
+        # in textual Yul order (sub(a, b) is ["a", "b"]), the order the
+        # FOLDABLE_OPS functions expect, so "in" is used as-is. solc 0.8.34
+        # stored them reversed (sub(a, b) was ["b", "a"]) and is no longer
+        # supported -- this must stay in sync with ocaml_interface/main.ml's
+        # extract_instruction.
+        vals = [_eval_sexpr(e, pp) for e in ins]
         if all(v is not None for v in vals):
             result = FOLDABLE_OPS[op](*vals)
             for v in outs:
@@ -338,23 +348,34 @@ def discover_functions_in_yul_cfg_json(yul_cfg_json):
         yield from discover_functions(obj)
 
 
-def annotate_file(data):
-    """Adds a 'constancy' key to every block of every function of every
-    contract's yulCFGJson found in `data` (the parsed full solc
-    standard-json output), mutating `data` in place."""
-    contracts = data.get("contracts", {})
-    for file_contracts in contracts.values():
+def _find_yul_cfg_jsons(data):
+    """Returns every yulCFGJson object to annotate in `data`: one per
+    contract if `data` is a full solc standard-json output (has a
+    top-level "contracts" key), or `data` itself if it is already a bare
+    yulCFGJson object."""
+    if "contracts" not in data:
+        return [data]
+    yul_cfg_jsons = []
+    for file_contracts in data["contracts"].values():
         for contract_data in file_contracts.values():
             yul_cfg_json = contract_data.get("yulCFGJson")
-            if yul_cfg_json is None:
-                continue
-            for blocks, entry_bid in discover_functions_in_yul_cfg_json(yul_cfg_json):
-                pp_lists = analyze_function(blocks, entry_bid)
-                for block in blocks:
-                    block["constancy"] = [
-                        {v: hex(val) for v, val in pp.items()}
-                        for pp in pp_lists[block["id"]]
-                    ]
+            if yul_cfg_json is not None:
+                yul_cfg_jsons.append(yul_cfg_json)
+    return yul_cfg_jsons
+
+
+def annotate_file(data):
+    """Adds a 'constancy' key to every block of every function of every
+    yulCFGJson found in `data` (see `_find_yul_cfg_jsons`), mutating
+    `data` in place."""
+    for yul_cfg_json in _find_yul_cfg_jsons(data):
+        for blocks, entry_bid in discover_functions_in_yul_cfg_json(yul_cfg_json):
+            pp_lists = analyze_function(blocks, entry_bid)
+            for block in blocks:
+                block["constancy"] = [
+                    {v: hex(val) for v, val in pp.items()}
+                    for pp in pp_lists[block["id"]]
+                ]
 
 
 def main():

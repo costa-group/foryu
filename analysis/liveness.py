@@ -59,10 +59,11 @@ def prop_live_set_bkw(instrs, s):
 
 
 def add_jump_var_if_applicable(block, s):
-    """theories/liveness.v's add_jump_var_if_applicable."""
+    """theories/liveness.v's add_jump_var_if_applicable: a literal condition
+    (possible since solc 0.8.36, e.g. "0x00") makes nothing live."""
     exit_info = block["exit"]
     if exit_info["type"] == "ConditionalJump":
-        return s | {exit_info["cond"]}
+        return s | _vars([exit_info["cond"]])
     return s
 
 
