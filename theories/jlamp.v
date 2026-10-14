@@ -9,7 +9,7 @@ Require Import FORYU.constancy.
 Require Import FORYU.constancy_snd.
 Require Import FORYU.constancy_checker_snd.
 Require Import stdpp.prelude.
-Require Import Lia.
+From Stdlib Require Lia.
 
 (*
 
