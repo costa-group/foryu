@@ -10,8 +10,10 @@ theories/state.v
 
 theories/semantics.v
 
+theories/liveness_info.v
 theories/liveness.v
 theories/liveness_snd.v
+theories/liveness_checker_snd.v
 
 #tests.v
 #test_translation.v
@@ -19,8 +21,8 @@ theories/checker.v
 
 theories/constancy_info.v
 theories/evm_constancy.v
-theories/constancy_snd.v
 theories/constancy.v
+theories/constancy_snd.v
 theories/constancy_checker_snd.v
 
 theories/extract_ocaml.v

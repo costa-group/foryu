@@ -3,7 +3,6 @@ Require Import FORYU.program.
 Require Import FORYU.semantics.
 Require Import FORYU.list_functions.
 Require Import FORYU.constancy_info.
-Require Import FORYU.constancy_snd.
 
 From Stdlib Require Import Orders.
 From Stdlib Require Import OrdersEx.
@@ -26,12 +25,11 @@ From Stdlib Require Import Structures.OrdersEx.      (* Provides New Keys *)
 Module Constancy (D: DIALECT) (E: CONST_SYMB D).
 
   (* The program modules (and the constancy information types) are
-  projected out of the specification's own instance of
-  [Constancy_info(D)], via [ConstSndD], so that the checker and the
-  specification share one [CFGProgD]/etc. (see constancy_info.v); this
-  is the only reason the checker imports the specification. *)
-  Module ConstSndD := Constancy_snd(D)(E).
-  Module InfoD := ConstSndD.InfoD.
+  projected out of this instance of [Constancy_info(D)]. The
+  specification (constancy_snd.v) uses the same instance, via
+  [Constancy(D)(E)], so that both share one [CFGProgD]/etc. (see
+  constancy_info.v). *)
+  Module InfoD := Constancy_info(D).
   Module SmallStepD := InfoD.SmallStepD.
   Module StateD := SmallStepD.StateD.
   Module CallStackD := StateD.CallStackD.

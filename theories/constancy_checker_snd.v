@@ -17,8 +17,8 @@ Module Constancy_checker_snd (D: DIALECT) (E: CONST_SYMB D).
   (* [ConstSndD] is projected out of [ConstD], so that the checker and
   the specification share one [CFGProgD]/etc. lineage (see
   constancy_info.v). *)
-  Module ConstD := Constancy(D)(E).
-  Module ConstSndD := ConstD.ConstSndD.
+  Module ConstSndD := Constancy_snd(D)(E).
+  Module ConstD := ConstSndD.ConstD.
 
   Module SmallStepD := ConstD.SmallStepD.
   Module StateD := ConstD.StateD.
@@ -53,7 +53,7 @@ Module Constancy_checker_snd (D: DIALECT) (E: CONST_SYMB D).
   (* This file shows that the boolean checker [ConstD.check_const_program]
   only accepts valid constancy information, in the sense of
   [ConstSndD.const_in]/[const_out]/[const_at_pc] (constancy_snd.v) --
-  the counterpart of liveness_snd.v's [check_program_correct]. *)
+  the counterpart of liveness_checker_snd.v's [check_program_correct]. *)
 
   (* ** [VarMap]/[update_const_info]/[derive_pairs] plumbing **
 
