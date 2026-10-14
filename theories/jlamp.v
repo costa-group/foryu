@@ -168,28 +168,30 @@ Module JLAMP (D: DIALECT).
           apply (H_equiv_varmap v' H_neq_v'_v).
     Qed.
 
-    (* This function is the liveness checker, it simply uses the one
-    defined in liveness.v --- just to use the same name that is used in
-    the paper *)
-    Definition liveness_chk (p: CFGProgD.t) (r: prog_live_info_t) :=
+    (* The checker for exact solutions of the liveness equations,
+    defined in liveness.v. It can be used to check that the results
+    are exact solutions; the paper uses liveness_chk below. *)
+    Definition liveness_chk_eq (p: CFGProgD.t) (r: prog_live_info_t) :=
       check_program p r.
 
-    (* Just an aliasing of Liveness_sndD.snd_all_blocks_info -- just to
-    use the same name that is used in the paper. It states that the
-    liveness information [r] is a solution of the liveness equations,
+    (* It states that the liveness information [r] is an exact
+    solution of the liveness equations,
     taken as a whole: the in/out sets of every block are related to
     each other, and to those of its successors, as the equations
     require. *)
-    Definition liveness_info_snd := Liveness_sndD.snd_all_blocks_info.
+    Definition liveness_info_snd_eq := Liveness_sndD.snd_all_blocks_info.
 
     (* The liveness conditions with inclusions instead of equations:
     the live-in/live-out sets may over-approximate the propagated
     sets. Exact solutions are a special case (see
-    liveness_info_snd_dead below). *)
-    Definition liveness_info_snd_sub := Liveness_sndD.snd_all_blocks_info_sub.
+    liveness_info_snd_eq_dead below). *)
+    Definition snd_block_out_info := Liveness_sndD.snd_block_out_info_sub.
+    Definition snd_block_in_info := Liveness_sndD.snd_block_in_info_sub.
+    Definition snd_block_info := Liveness_sndD.snd_block_info_sub.
+    Definition liveness_info_snd := Liveness_sndD.snd_all_blocks_info_sub.
 
-    (* The checker for the inclusions, used in the experiments *)
-    Definition liveness_chk_sub (p: CFGProgD.t) (r: prog_live_info_t) :=
+    (* The liveness checker (inclusions), as used in the paper and in the experiments *)
+    Definition liveness_chk (p: CFGProgD.t) (r: prog_live_info_t) :=
       check_program_subset p r.
 
     (* This lemma states that liveness information that satisfies the
@@ -197,9 +199,9 @@ Module JLAMP (D: DIALECT).
     in the in-set of a block is dead at the entry of the block. The
     proof uses the corresponding (more general) lemmas that appear in
     liveness_snd.v *)
-    Lemma liveness_info_snd_sub_dead:
+    Lemma liveness_info_snd_dead:
       forall (p: CFGProgD.t) (r: prog_live_info_t) fname bid b f_info b_in_info b_out_info,
-        liveness_info_snd_sub p r ->
+        liveness_info_snd p r ->
         CFGProgD.get_block p fname bid = Some b ->
         r fname = Some f_info ->
         f_info bid = Some (b_in_info, b_out_info) ->
@@ -254,34 +256,33 @@ Module JLAMP (D: DIALECT).
 
     (* Soundness for exact solutions follows from the one for
     inclusions, since equal sets are included in each other *)
-    Lemma liveness_info_snd_dead:
+    Lemma liveness_info_snd_eq_dead:
       forall (p: CFGProgD.t) (r: prog_live_info_t) fname bid b f_info b_in_info b_out_info,
-        liveness_info_snd p r ->
+        liveness_info_snd_eq p r ->
         CFGProgD.get_block p fname bid = Some b ->
         r fname = Some f_info ->
         f_info bid = Some (b_in_info, b_out_info) ->
         forall v, ~ VarSet.In v b_in_info -> dead_variable p fname bid 0 v.
     Proof.
       intros p r fname bid b f_info b_in_info b_out_info H_snd.
-      apply (liveness_info_snd_sub_dead p r fname bid b f_info b_in_info b_out_info).
+      apply (liveness_info_snd_dead p r fname bid b f_info b_in_info b_out_info).
       apply snd_all_blocks_info_imp_sub. exact H_snd.
     Qed.
 
-    (* This proves the soundness and completeness of the checker -- it
-    uses the corresponding lemma that appears in liveness_snd.v *)
-    Lemma liveness_chk_snd_cmp: 
+    (* Soundness and completeness of the checker for exact solutions *)
+    Lemma liveness_chk_eq_snd_cmp: 
       forall (p: CFGProgD.t) (r: prog_live_info_t),
         CFGProgD.valid_program p ->
-        (liveness_info_snd p r <-> liveness_chk p r = true).
+        (liveness_info_snd_eq p r <-> liveness_chk_eq p r = true).
     Proof.
       apply check_valid_prog_correct.
     Qed.
 
-    (* Soundness and completeness of the checker for the inclusions *)
-    Lemma liveness_chk_sub_snd_cmp: 
+    (* Soundness and completeness of the liveness checker (inclusions) *)
+    Lemma liveness_chk_snd_cmp: 
       forall (p: CFGProgD.t) (r: prog_live_info_t),
         CFGProgD.valid_program p ->
-        (liveness_info_snd_sub p r <-> liveness_chk_sub p r = true).
+        (liveness_info_snd p r <-> liveness_chk p r = true).
     Proof.
       apply check_valid_prog_correct_subset.
     Qed.
