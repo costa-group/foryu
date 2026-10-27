@@ -48,22 +48,22 @@ class TestMatchScope:
         # claims it too.
         baseline = [
             {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
-             "instructions": [defining_instr, {"in": ["v17", "0x00"], "op": "mstore", "out": []}]},
+             "instructions": [defining_instr, {"in": ["0x00", "v17"], "op": "mstore", "out": []}]},
             {"id": "B1", "exit": {"type": "Terminated", "targets": []},
-             "instructions": [{"in": ["v17", "0x20"], "op": "mstore", "out": []}]},
+             "instructions": [{"in": ["0x20", "v17"], "op": "mstore", "out": []}]},
         ]
         probe = [
             {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
-             "instructions": [{"in": ["0x64", "0x00"], "op": "mstore", "out": []}]},
+             "instructions": [{"in": ["0x00", "0x64"], "op": "mstore", "out": []}]},
             {"id": "B1", "exit": {"type": "Terminated", "targets": []},
-             "instructions": [{"in": ["0x64", "0x20"], "op": "mstore", "out": []}]},
+             "instructions": [{"in": ["0x20", "0x64"], "op": "mstore", "out": []}]},
         ]
         return baseline, probe
 
     def test_an_unverifiable_claim_is_marked_unverified_in_every_block(self):
         # B1's live-in claim is only as verifiable as B0's definition: B1 alone would treat it as
         # an ordinary live-in fact, so marking has to be scope-wide (per variable).
-        baseline, probe = self._two_block_scope({"in": ["v98", "v99"], "op": "add", "out": ["v17"]})
+        baseline, probe = self._two_block_scope({"in": ["v99", "v98"], "op": "add", "out": ["v17"]})
         unverified = set()
 
         _, _, facts_by_block = _match_scope(baseline, probe, unverified_out=unverified)
@@ -96,16 +96,16 @@ class TestMatchScope:
             {"id": "B1", "entries": ["B0", "B0"], "exit": {"type": "Terminated", "targets": []},
              "instructions": [{"in": ["0x07", "v9"], "op": "PhiFunction", "out": ["phi0"]},
                               {"in": ["0x07", "0x07"], "op": "PhiFunction", "out": ["phi1"]},
-                              {"in": ["phi0", "0x00"], "op": "mstore", "out": []},
-                              {"in": ["phi1", "0x20"], "op": "mstore", "out": []},
-                              {"in": ["v1", "0x40"], "op": "mstore", "out": []}]},
+                              {"in": ["0x00", "phi0"], "op": "mstore", "out": []},
+                              {"in": ["0x20", "phi1"], "op": "mstore", "out": []},
+                              {"in": ["0x40", "v1"], "op": "mstore", "out": []}]},
         ]
         probe = [
             {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]}, "instructions": []},
             {"id": "B1", "entries": ["B0", "B0"], "exit": {"type": "Terminated", "targets": []},
-             "instructions": [{"in": ["0x07", "0x00"], "op": "mstore", "out": []},
-                              {"in": ["0x07", "0x20"], "op": "mstore", "out": []},
-                              {"in": ["0x09", "0x40"], "op": "mstore", "out": []}]},
+             "instructions": [{"in": ["0x00", "0x07"], "op": "mstore", "out": []},
+                              {"in": ["0x20", "0x07"], "op": "mstore", "out": []},
+                              {"in": ["0x40", "0x09"], "op": "mstore", "out": []}]},
         ]
         unverified = set()
 
@@ -122,12 +122,12 @@ class TestMatchScope:
             {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
              "instructions": [{"in": ["0xffffffff"], "op": "LiteralAssignment", "out": ["v1"]}]},
             {"id": "B1", "exit": {"type": "FunctionReturn", "returnValues": ["v4"]},
-             "instructions": [{"in": ["v1", "v0"], "op": "and", "out": ["v4"]}]},
+             "instructions": [{"in": ["v0", "v1"], "op": "and", "out": ["v4"]}]},
         ]
         probe = [
             {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]}, "instructions": []},
             {"id": "B1", "exit": {"type": "FunctionReturn", "returnValues": ["v4"]},
-             "instructions": [{"in": ["0x7fffffff", "v9"], "op": "and", "out": ["v4"]}]},
+             "instructions": [{"in": ["v9", "0x7fffffff"], "op": "and", "out": ["v4"]}]},
         ]
 
         _, _, facts_by_block = _match_scope(baseline, probe)
@@ -142,17 +142,58 @@ class TestMatchScope:
         baseline = [
             {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]}, "instructions": [v1_definition]},
             {"id": "B1", "exit": {"type": "Jump", "targets": ["B2"]},
-             "instructions": [{"in": ["0x40", "v1"], "op": "add", "out": ["v32"]}]},
+             "instructions": [{"in": ["v1", "0x40"], "op": "add", "out": ["v32"]}]},
             {"id": "B2", "exit": {"type": "Terminated", "targets": []},
-             "instructions": [{"in": ["v32", "0x00"], "op": "mstore", "out": []}]},
+             "instructions": [{"in": ["0x00", "v32"], "op": "mstore", "out": []}]},
         ]
         probe = [
             {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]}, "instructions": []},
             {"id": "B1", "exit": {"type": "Jump", "targets": ["B2"]}, "instructions": []},
             {"id": "B2", "exit": {"type": "Terminated", "targets": []},
-             "instructions": [{"in": [folded_use, "0x00"], "op": "mstore", "out": []}]},
+             "instructions": [{"in": ["0x00", folded_use], "op": "mstore", "out": []}]},
         ]
         return baseline, probe
+
+    @staticmethod
+    def _loop_header_phi_scope(back_edge_def):
+        # B0 -> B1 (loop header, phi0 = phi(v0 from B0, v5 from B2)) -> B2 (body, back to B1) or B3
+        # (after the loop), where the probe removed phi0 and folded it to 0x00. Mirrors real cases
+        # (fun_transfer, occurrence c10): only blocks after the loop claim the phi.
+        def scope(header_phis, after_loop_store):
+            return [
+                {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
+                 "instructions": [{"in": ["0x00"], "op": "LiteralAssignment", "out": ["v0"]}]},
+                {"id": "B1", "entries": ["B0", "B2"],
+                 "exit": {"type": "ConditionalJump", "cond": "v1", "targets": ["B3", "B2"]},
+                 "instructions": header_phis + [{"in": ["0x20"], "op": "calldataload", "out": ["v1"]}]},
+                {"id": "B2", "exit": {"type": "Jump", "targets": ["B1"]}, "instructions": [back_edge_def]},
+                {"id": "B3", "exit": {"type": "Terminated", "targets": []},
+                 "instructions": [after_loop_store]},
+            ]
+        baseline = scope([{"in": ["v0", "v5"], "op": "PhiFunction", "out": ["phi0"]}],
+                         {"in": ["0x40", "phi0"], "op": "mstore", "out": []})
+        probe = scope([], {"in": ["0x40", "0x00"], "op": "mstore", "out": []})
+        return baseline, probe
+
+    def test_a_loop_header_phi_claimed_after_the_loop_is_recorded_at_the_header(self):
+        baseline, probe = self._loop_header_phi_scope({"in": ["0x00"], "op": "LiteralAssignment", "out": ["v5"]})
+        unverified = set()
+
+        _, _, facts_by_block = _match_scope(baseline, probe, unverified_out=unverified)
+
+        assert facts_by_block["B3"][0] == {"phi0": "0x00"}
+        assert facts_by_block["B1"][0] == {"phi0": "0x00"}
+        assert unverified == set()
+
+    def test_a_loop_header_phi_failing_the_phi_rule_is_unverified_and_not_recorded_at_the_header(self):
+        baseline, probe = self._loop_header_phi_scope({"in": ["0x00"], "op": "calldataload", "out": ["v5"]})
+        unverified = set()
+
+        _, _, facts_by_block = _match_scope(baseline, probe, unverified_out=unverified)
+
+        assert facts_by_block["B3"][0] == {"phi0": "0x00"}
+        assert "B1" not in facts_by_block
+        assert unverified == {"phi0"}
 
     def test_a_later_claim_is_grounded_in_the_defining_block(self):
         # The checker only accepts B2's live-in claim if B1's exit carries it: v1 is a literal
@@ -283,7 +324,7 @@ class TestMatchScope:
         # the falls_to (cond == 0) target, targets[1] the jump_to (cond != 0) target -- see
         # parser.cfg_block.CFGBlock.set_jump_info -- so negating the condition means what was
         # falls_to becomes jump_to and vice versa.
-        lt_instr = {"in": ["0x0f", "s0"], "op": "lt", "out": ["v0"]}
+        lt_instr = {"in": ["s0", "0x0f"], "op": "lt", "out": ["v0"]}
         baseline = [
             {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B1", "B2"]},
              "instructions": [lt_instr, {"in": ["v0"], "op": "iszero", "out": ["c"]}]},
@@ -292,7 +333,7 @@ class TestMatchScope:
         ]
         probe = [
             {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "x", "targets": ["P_B2", "P_B1"]},
-             "instructions": [{"in": ["0x0f", "s0"], "op": "lt", "out": ["x"]}]},
+             "instructions": [{"in": ["s0", "0x0f"], "op": "lt", "out": ["x"]}]},
             {"id": "P_B1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
             {"id": "P_B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
         ]
@@ -308,14 +349,14 @@ class TestMatchScope:
         # above -- target order stays untouched.
         baseline = [
             {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "c", "targets": ["B1", "B2"]},
-             "instructions": [{"in": ["0x0f", "s0"], "op": "lt", "out": ["v0"]},
-                               {"in": ["0x00", "v0"], "op": "eq", "out": ["c"]}]},
+             "instructions": [{"in": ["s0", "0x0f"], "op": "lt", "out": ["v0"]},
+                               {"in": ["v0", "0x00"], "op": "eq", "out": ["c"]}]},
             {"id": "B1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
             {"id": "B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
         ]
         probe = [
             {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "x", "targets": ["P_B1", "P_B2"]},
-             "instructions": [{"in": ["0x0f", "s0"], "op": "lt", "out": ["y"]},
+             "instructions": [{"in": ["s0", "0x0f"], "op": "lt", "out": ["y"]},
                                {"in": ["y"], "op": "iszero", "out": ["x"]}]},
             {"id": "P_B1", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
             {"id": "P_B2", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
@@ -344,7 +385,7 @@ class TestMatchScope:
              "instructions": []},
             {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
             {"id": "B2", "exit": {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]},
-             "instructions": [{"in": ["0x0f", "x"], "op": "lt", "out": ["c2"]}]},
+             "instructions": [{"in": ["x", "0x0f"], "op": "lt", "out": ["c2"]}]},
             {"id": "B6", "exit": {"type": "Jump", "targets": ["B3"]}, "instructions": []},
             {"id": "B5", "exit": {"type": "Jump", "targets": ["B4"]}, "instructions": []},
             {"id": "B3", "exit": {"type": "Jump", "targets": ["B1"]}, "instructions": []},  # back edge
@@ -353,7 +394,7 @@ class TestMatchScope:
             {"id": "B0", "exit": {"type": "Jump", "targets": ["B2"]},
              "instructions": [{"in": ["0x00"], "op": "LiteralAssignment", "out": ["v2"]}]},
             {"id": "B2", "exit": {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]},
-             "instructions": [{"in": ["0x0f", "x"], "op": "lt", "out": ["c2"]}]},
+             "instructions": [{"in": ["x", "0x0f"], "op": "lt", "out": ["c2"]}]},
             {"id": "B6", "exit": {"type": "Jump", "targets": ["B3"]}, "instructions": []},
             {"id": "B5", "exit": {"type": "Jump", "targets": ["B4"]}, "instructions": []},
             {"id": "B3", "exit": {"type": "Jump", "targets": ["B2"]}, "instructions": []},  # loop header now B2
@@ -405,7 +446,7 @@ class TestMatchScope:
         # var_map, threaded forward from A through B, can.
         baseline = [
             {"id": "A", "exit": {"type": "Jump", "targets": ["B"]},
-             "instructions": [{"in": ["0x0f", "s0"], "op": "lt", "out": ["v3"]}]},
+             "instructions": [{"in": ["s0", "0x0f"], "op": "lt", "out": ["v3"]}]},
             {"id": "B", "exit": {"type": "Jump", "targets": ["C"]}, "instructions": []},
             {"id": "C", "exit": {"type": "ConditionalJump", "cond": "v3", "targets": ["T1", "T2"]},
              "instructions": []},
@@ -414,7 +455,7 @@ class TestMatchScope:
         ]
         probe = [
             {"id": "A", "exit": {"type": "Jump", "targets": ["B"]},
-             "instructions": [{"in": ["0x0f", "s0"], "op": "lt", "out": ["w3"]}]},
+             "instructions": [{"in": ["s0", "0x0f"], "op": "lt", "out": ["w3"]}]},
             {"id": "B", "exit": {"type": "Jump", "targets": ["C"]}, "instructions": []},
             {"id": "C", "exit": {"type": "ConditionalJump", "cond": "w3", "targets": ["U1", "U2"]},
              "instructions": []},
@@ -527,9 +568,9 @@ class TestLiteralValueTable:
         blocks = [
             {"id": "B0", "exit": {"type": "Terminated", "targets": []},
              "instructions": [
-                 {"in": ["0x01", "0x40"], "op": "shl", "out": ["v0"]},
-                 {"in": ["0x01", "v0"], "op": "sub", "out": ["v1"]},
-                 {"in": ["v1", "0x27"], "op": "gt", "out": ["v2"]},
+                 {"in": ["0x40", "0x01"], "op": "shl", "out": ["v0"]},
+                 {"in": ["v0", "0x01"], "op": "sub", "out": ["v1"]},
+                 {"in": ["0x27", "v1"], "op": "gt", "out": ["v2"]},
              ]},
         ]
         assert _literal_value_table(blocks)["B0"] == {
@@ -586,11 +627,11 @@ class TestSameOperandIdentityFolding:
     def _multicall_shape(load_op="calldataload"):
         return [
             {"id": "B0", "exit": {"type": "ConditionalJump", "cond": "v23", "targets": ["B1", "B2"]},
-             "instructions": [{"in": ["0x80", "v17"], "op": "add", "out": ["v18"]},
+             "instructions": [{"in": ["v17", "0x80"], "op": "add", "out": ["v18"]},
                               {"in": ["v18"], "op": load_op, "out": ["v19"]},
-                              {"in": ["0x80", "v17"], "op": "add", "out": ["v20"]},
+                              {"in": ["v17", "0x80"], "op": "add", "out": ["v20"]},
                               {"in": ["v20"], "op": load_op, "out": ["v21"]},
-                              {"in": ["v19", "v21"], "op": "eq", "out": ["v22"]},
+                              {"in": ["v21", "v19"], "op": "eq", "out": ["v22"]},
                               {"in": ["v22"], "op": "iszero", "out": ["v23"]}]},
             {"id": "B1", "exit": {"type": "Terminated", "targets": []},
              "instructions": [{"in": ["v19"], "op": "iszero", "out": ["v30"]}]},
@@ -633,7 +674,7 @@ class TestMergeTrivialBlocks:
              "instructions": []},
             {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
             {"id": "B2", "exit": {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]},
-             "instructions": [{"in": ["0x0f", "x"], "op": "lt", "out": ["c2"]}]},
+             "instructions": [{"in": ["x", "0x0f"], "op": "lt", "out": ["c2"]}]},
             {"id": "B6", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
             {"id": "B5", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
         ]
@@ -659,7 +700,7 @@ class TestMergeTrivialBlocks:
              ]},
             {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
             {"id": "B2", "exit": {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]},
-             "instructions": [{"in": ["0x0f", "x"], "op": "lt", "out": ["c2"]}]},
+             "instructions": [{"in": ["x", "0x0f"], "op": "lt", "out": ["c2"]}]},
             {"id": "B6", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
             {"id": "B5", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
         ]
@@ -692,9 +733,9 @@ class TestMergeTrivialBlocks:
         # otherwise-ambiguous instruction (see the module docstring)
         blocks = [
             {"id": "B0", "exit": {"type": "Jump", "targets": ["B1"]},
-             "instructions": [{"in": ["v9", "v0"], "op": "sub", "out": ["v10"]}]},
+             "instructions": [{"in": ["v0", "v9"], "op": "sub", "out": ["v10"]}]},
             {"id": "B1", "exit": {"type": "Terminated", "targets": []},
-             "instructions": [{"in": ["v9", "v100"], "op": "sub", "out": ["v60"]}]},
+             "instructions": [{"in": ["v100", "v9"], "op": "sub", "out": ["v60"]}]},
         ]
 
         working = _merge_trivial_blocks(blocks)
@@ -757,8 +798,8 @@ class TestExtractSeedFactsForContractNormalization:
                      "instructions": []},
                     {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
                     {"id": "B2", "exit": {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]},
-                     "instructions": [{"in": ["0x0f", "x"], "op": "lt", "out": ["c2"]},
-                                       {"in": ["v3", "x"], "op": "add", "out": ["v13"]}]},
+                     "instructions": [{"in": ["x", "0x0f"], "op": "lt", "out": ["c2"]},
+                                       {"in": ["x", "v3"], "op": "add", "out": ["v13"]}]},
                     {"id": "B6", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
                     {"id": "B5", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
                 ],
@@ -772,8 +813,8 @@ class TestExtractSeedFactsForContractNormalization:
                     {"id": "A", "exit": {"type": "Jump", "targets": ["B2"]},
                      "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v2"]}]},
                     {"id": "B2", "exit": {"type": "ConditionalJump", "cond": "c2", "targets": ["B6", "B5"]},
-                     "instructions": [{"in": ["0x0f", "x"], "op": "lt", "out": ["c2"]},
-                                       {"in": ["0x01", "x"], "op": "add", "out": ["v13"]}]},
+                     "instructions": [{"in": ["x", "0x0f"], "op": "lt", "out": ["c2"]},
+                                       {"in": ["x", "0x01"], "op": "add", "out": ["v13"]}]},
                     {"id": "B6", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
                     {"id": "B5", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
                     {"id": "B4", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
@@ -859,13 +900,13 @@ class TestExtractSeedFactsForContractNormalization:
                 "blocks": [
                     {"id": "A", "exit": {"type": "Jump", "targets": ["B"]},
                      "instructions": [
-                         {"in": ["0x01", "0x40"], "op": "shl", "out": ["v5"]},
-                         {"in": ["0x01", "v5"], "op": "sub", "out": ["v6"]},
+                         {"in": ["0x40", "0x01"], "op": "shl", "out": ["v5"]},
+                         {"in": ["v5", "0x01"], "op": "sub", "out": ["v6"]},
                      ]},
                     {"id": "B", "exit": {"type": "ConditionalJump", "cond": "v8", "targets": ["C", "D"]},
                      "instructions": [
                          {"in": ["0x00"], "op": "mload", "out": ["v7"]},
-                         {"in": ["v6", "v7"], "op": "gt", "out": ["v8"]},
+                         {"in": ["v7", "v6"], "op": "gt", "out": ["v8"]},
                      ]},
                     {"id": "C", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
                     {"id": "D", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
@@ -879,15 +920,15 @@ class TestExtractSeedFactsForContractNormalization:
                 "blocks": [
                     {"id": "A", "exit": {"type": "Jump", "targets": ["B"]},
                      "instructions": [
-                         {"in": ["0x01", "0x40"], "op": "shl", "out": ["v5"]},
-                         {"in": ["0x01", "v5"], "op": "sub", "out": ["v6"]},
+                         {"in": ["0x40", "0x01"], "op": "shl", "out": ["v5"]},
+                         {"in": ["v5", "0x01"], "op": "sub", "out": ["v6"]},
                      ]},
                     {"id": "B", "exit": {"type": "ConditionalJump", "cond": "v12", "targets": ["C", "D"]},
                      "instructions": [
                          {"in": ["0x00"], "op": "mload", "out": ["v9"]},
-                         {"in": ["0x01", "0x40"], "op": "shl", "out": ["v10"]},
-                         {"in": ["0x01", "v10"], "op": "sub", "out": ["v11"]},
-                         {"in": ["v11", "v9"], "op": "gt", "out": ["v12"]},
+                         {"in": ["0x40", "0x01"], "op": "shl", "out": ["v10"]},
+                         {"in": ["v10", "0x01"], "op": "sub", "out": ["v11"]},
+                         {"in": ["v9", "v11"], "op": "gt", "out": ["v12"]},
                      ]},
                     {"id": "C", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
                     {"id": "D", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
@@ -913,7 +954,7 @@ class TestExtractSeedFactsForContractNormalization:
                 "blocks": [
                     {"id": "A", "exit": {"type": "Jump", "targets": ["B"]}, "instructions": []},
                     {"id": "B", "exit": {"type": "ConditionalJump", "cond": "v3", "targets": ["C", "D"]},
-                     "instructions": [{"in": ["0x00", "v2"], "op": "slt", "out": ["v3"]}]},
+                     "instructions": [{"in": ["v2", "0x00"], "op": "slt", "out": ["v3"]}]},
                     {"id": "C", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
                     {"id": "D", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
                 ],
@@ -927,7 +968,7 @@ class TestExtractSeedFactsForContractNormalization:
                     {"id": "A", "exit": {"type": "Jump", "targets": ["B"]},
                      "instructions": [{"in": ["0x00"], "op": "LiteralAssignment", "out": ["v1"]}]},
                     {"id": "B", "exit": {"type": "ConditionalJump", "cond": "v4", "targets": ["C", "D"]},
-                     "instructions": [{"in": ["v1", "v2"], "op": "slt", "out": ["v4"]}]},
+                     "instructions": [{"in": ["v2", "v1"], "op": "slt", "out": ["v4"]}]},
                     {"id": "C", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
                     {"id": "D", "exit": {"type": "Terminated", "targets": []}, "instructions": []},
                 ],
@@ -958,7 +999,7 @@ class TestScopeDefiningInstructions:
     def test_builds_a_flat_map_across_multiple_blocks(self):
         blocks = [
             {"id": "B0", "instructions": [{"in": ["0x01"], "op": "LiteralAssignment", "out": ["v1"]}]},
-            {"id": "B1", "instructions": [{"in": ["v1", "0x02"], "op": "add", "out": ["v2", "v3"]}]},
+            {"id": "B1", "instructions": [{"in": ["0x02", "v1"], "op": "add", "out": ["v2", "v3"]}]},
         ]
         defs = _scope_defining_instructions(blocks)
 
@@ -976,19 +1017,19 @@ class TestValuesProvablyEqual:
     def test_same_movable_op_same_literal_args_is_equal(self):
         # The T1 pattern: a pure compile-time constant, recomputed under a different name
         defs = {
-            "v8": {"op": "sub", "in": ["0x01", "v7"]}, "v7": {"op": "shl", "in": ["0x01", "0x40"]},
-            "v15": {"op": "sub", "in": ["0x01", "v14"]}, "v14": {"op": "shl", "in": ["0x01", "0x40"]},
+            "v8": {"op": "sub", "in": ["v7", "0x01"]}, "v7": {"op": "shl", "in": ["0x40", "0x01"]},
+            "v15": {"op": "sub", "in": ["v14", "0x01"]}, "v14": {"op": "shl", "in": ["0x40", "0x01"]},
         }
         assert _values_provably_equal("v15", "v8", defs)
 
     def test_same_movable_op_one_arg_recursively_equal_the_other_already_confirmed(self):
         # The c3 pattern: and(0x01, v15) recomputed, where v15 is already the same name on both
         # sides (an already-confirmed identity, not itself needing further resolution)
-        defs = {"v18": {"op": "and", "in": ["0x01", "v15"]}, "v23": {"op": "and", "in": ["0x01", "v15"]}}
+        defs = {"v18": {"op": "and", "in": ["v15", "0x01"]}, "v23": {"op": "and", "in": ["v15", "0x01"]}}
         assert _values_provably_equal("v23", "v18", defs)
 
     def test_same_movable_op_but_a_genuinely_different_argument_is_not_equal(self):
-        defs = {"v18": {"op": "and", "in": ["0x01", "v15"]}, "v23": {"op": "and", "in": ["0x01", "v16"]}}
+        defs = {"v18": {"op": "and", "in": ["v15", "0x01"]}, "v23": {"op": "and", "in": ["v16", "0x01"]}}
         assert not _values_provably_equal("v23", "v18", defs)
 
     def test_a_non_movable_op_requires_exact_name_match_and_does_not_recurse(self):
@@ -996,15 +1037,15 @@ class TestValuesProvablyEqual:
         assert not _values_provably_equal("v16", "v15", defs)
 
     def test_a_commutative_op_resolves_equal_with_swapped_arguments(self):
-        defs = {"v1": {"op": "add", "in": ["v9", "v10"]}, "v2": {"op": "add", "in": ["v10", "v9"]}}
+        defs = {"v1": {"op": "add", "in": ["v10", "v9"]}, "v2": {"op": "add", "in": ["v9", "v10"]}}
         assert _values_provably_equal("v2", "v1", defs)
 
     def test_different_ops_are_not_equal(self):
-        defs = {"v1": {"op": "add", "in": ["v9", "v10"]}, "v2": {"op": "sub", "in": ["v9", "v10"]}}
+        defs = {"v1": {"op": "add", "in": ["v10", "v9"]}, "v2": {"op": "sub", "in": ["v10", "v9"]}}
         assert not _values_provably_equal("v2", "v1", defs)
 
     def test_mismatched_argument_counts_are_not_equal(self):
-        defs = {"v1": {"op": "and", "in": ["v9", "v10"]}, "v2": {"op": "and", "in": ["v9", "v10", "v11"]}}
+        defs = {"v1": {"op": "and", "in": ["v10", "v9"]}, "v2": {"op": "and", "in": ["v11", "v10", "v9"]}}
         assert not _values_provably_equal("v2", "v1", defs)
 
 
@@ -1012,10 +1053,10 @@ class TestMatchBlockInstructions:
     def test_matches_by_output_variable_even_if_another_instruction_vanished(self):
         baseline = [
             {"in": ["0x20"], "op": "LiteralAssignment", "out": ["v0"]},
-            {"in": ["v2", "v0"], "op": "add", "out": ["v1"]},
+            {"in": ["v0", "v2"], "op": "add", "out": ["v1"]},
         ]
         # The LiteralAssignment defining v0 is now dead and gone in the probe
-        probe = [{"in": ["v2", "0x20"], "op": "add", "out": ["v1"]}]
+        probe = [{"in": ["0x20", "v2"], "op": "add", "out": ["v1"]}]
 
         facts, var_map = match_block_instructions(baseline, probe)
 
@@ -1024,12 +1065,12 @@ class TestMatchBlockInstructions:
 
     def test_matches_no_output_instructions_consistently(self):
         baseline = [
-            {"in": ["v1", "0x00"], "op": "mstore", "out": []},
-            {"in": ["v2", "0x20"], "op": "mstore", "out": []},
+            {"in": ["0x00", "v1"], "op": "mstore", "out": []},
+            {"in": ["0x20", "v2"], "op": "mstore", "out": []},
         ]
         probe = [
-            {"in": ["v1", "0x00"], "op": "mstore", "out": []},
-            {"in": ["0x2a", "0x20"], "op": "mstore", "out": []},
+            {"in": ["0x00", "v1"], "op": "mstore", "out": []},
+            {"in": ["0x20", "0x2a"], "op": "mstore", "out": []},
         ]
 
         facts, _ = match_block_instructions(baseline, probe)
@@ -1046,15 +1087,15 @@ class TestMatchBlockInstructions:
         # tentative v0 <-> v4 that pairing would need already contradicts it, and the whole
         # instruction is rejected rather than reported as a (wrong) fact
         baseline = [
-            {"in": ["0x00", "v0"], "op": "add", "out": ["v5"]},   # idx0: eliminated in probe
+            {"in": ["v0", "0x00"], "op": "add", "out": ["v5"]},   # idx0: eliminated in probe
             {"in": ["v5"], "op": "use", "out": ["v6"]},            # idx1
-            {"in": ["v9", "v0"], "op": "add", "out": ["v10"]},     # idx2: collision-prone
-            {"in": ["v10", "v0"], "op": "mstore", "out": []},      # idx3: anchors v0 <-> v0
+            {"in": ["v0", "v9"], "op": "add", "out": ["v10"]},     # idx2: collision-prone
+            {"in": ["v0", "v10"], "op": "mstore", "out": []},      # idx3: anchors v0 <-> v0
         ]
         probe = [
             {"in": ["v0"], "op": "use", "out": ["v6"]},            # idx0: matches baseline idx1
-            {"in": ["0x80", "v4"], "op": "add", "out": ["v10"]},   # idx1: coincidence with baseline idx2
-            {"in": ["v10", "v0"], "op": "mstore", "out": []},      # idx2: matches baseline idx3
+            {"in": ["v4", "0x80"], "op": "add", "out": ["v10"]},   # idx1: coincidence with baseline idx2
+            {"in": ["v0", "v10"], "op": "mstore", "out": []},      # idx2: matches baseline idx3
         ]
 
         facts, _ = match_block_instructions(baseline, probe)
@@ -1068,17 +1109,17 @@ class TestMatchBlockInstructions:
         # constant +1 offset; everything before it aligns at offset 0. The walk must find the
         # unique resync point where that transition happens
         baseline = [
-            {"in": ["v20", "v0"], "op": "add", "out": ["v21"]},        # idx0: before the insertion
+            {"in": ["v0", "v20"], "op": "add", "out": ["v21"]},        # idx0: before the insertion
             {"in": ["0x55"], "op": "LiteralAssignment", "out": ["v22"]},  # idx1: before the insertion
-            {"in": ["v9", "v0"], "op": "add", "out": ["v10"]},          # idx2: after the insertion
-            {"in": ["v10", "v0"], "op": "mstore", "out": []},           # idx3: after the insertion
+            {"in": ["v0", "v9"], "op": "add", "out": ["v10"]},          # idx2: after the insertion
+            {"in": ["v0", "v10"], "op": "mstore", "out": []},           # idx3: after the insertion
         ]
         probe = [
-            {"in": ["v20", "v0"], "op": "add", "out": ["v21"]},        # idx0: matches baseline idx0
+            {"in": ["v0", "v20"], "op": "add", "out": ["v21"]},        # idx0: matches baseline idx0
             {"in": ["0x55"], "op": "LiteralAssignment", "out": ["v22"]},  # idx1: matches baseline idx1
             {"in": ["0x77"], "op": "LiteralAssignment", "out": ["v99"]},  # idx2: INSERTED
-            {"in": ["0x2a", "v0"], "op": "add", "out": ["v10"]},        # idx3: matches baseline idx2
-            {"in": ["v10", "v0"], "op": "mstore", "out": []},           # idx4: matches baseline idx3
+            {"in": ["v0", "0x2a"], "op": "add", "out": ["v10"]},        # idx3: matches baseline idx2
+            {"in": ["v0", "v10"], "op": "mstore", "out": []},           # idx4: matches baseline idx3
         ]
 
         facts, _ = match_block_instructions(baseline, probe)
@@ -1097,22 +1138,22 @@ class TestMatchBlockInstructions:
         # substitution it briefly proposed, since it was never actually confirmed
         baseline = [
             {"in": ["0x20"], "op": "LiteralAssignment", "out": ["v2"]},   # idx0: true value of v2
-            {"in": ["v2", "v0"], "op": "add", "out": ["v3"]},              # idx1
-            {"in": ["v3", "v1"], "op": "mstore", "out": []},               # idx2
-            {"in": ["v2", "v3"], "op": "add", "out": ["v4"]},              # idx3
-            {"in": ["v4", "v1"], "op": "mstore", "out": []},               # idx4
-            {"in": ["v2", "v4"], "op": "add", "out": ["v5"]},              # idx5
-            {"in": ["v5", "v1"], "op": "mstore", "out": []},               # idx6
+            {"in": ["v0", "v2"], "op": "add", "out": ["v3"]},              # idx1
+            {"in": ["v1", "v3"], "op": "mstore", "out": []},               # idx2
+            {"in": ["v3", "v2"], "op": "add", "out": ["v4"]},              # idx3
+            {"in": ["v1", "v4"], "op": "mstore", "out": []},               # idx4
+            {"in": ["v4", "v2"], "op": "add", "out": ["v5"]},              # idx5
+            {"in": ["v1", "v5"], "op": "mstore", "out": []},               # idx6
         ]
         probe = [
             {"in": ["0x20"], "op": "LiteralAssignment", "out": ["v2"]},   # idx0: matches baseline idx0
-            {"in": ["0x20", "v0"], "op": "add", "out": ["v3"]},            # idx1: matches baseline idx1
-            {"in": ["v3", "v1"], "op": "mstore", "out": []},               # idx2: matches baseline idx2
-            {"in": ["0x40", "v0"], "op": "add", "out": ["v4"]},            # idx3: folded, no longer uses v3
-            {"in": ["v4", "v1"], "op": "mstore", "out": []},               # idx4: matches baseline idx4
-            {"in": ["0x60", "v0"], "op": "add", "out": ["v5"]},            # idx5: folded, coincidentally
+            {"in": ["v0", "0x20"], "op": "add", "out": ["v3"]},            # idx1: matches baseline idx1
+            {"in": ["v1", "v3"], "op": "mstore", "out": []},               # idx2: matches baseline idx2
+            {"in": ["v0", "0x40"], "op": "add", "out": ["v4"]},            # idx3: folded, no longer uses v3
+            {"in": ["v1", "v4"], "op": "mstore", "out": []},               # idx4: matches baseline idx4
+            {"in": ["v0", "0x60"], "op": "add", "out": ["v5"]},            # idx5: folded, coincidentally
                                                                             # pairs baseline's "v4" with "v0"
-            {"in": ["v5", "v1"], "op": "mstore", "out": []},               # idx6: proves that pairing wrong
+            {"in": ["v1", "v5"], "op": "mstore", "out": []},               # idx6: proves that pairing wrong
         ]
 
         facts, _ = match_block_instructions(baseline, probe)
@@ -1124,11 +1165,11 @@ class TestMatchBlockInstructions:
     def test_ambiguous_resync_stops_rather_than_guessing(self):
         # Two candidates are equally plausible with no further context to distinguish them --
         # nothing should be inferred rather than guessing which one is real
-        baseline = [{"in": ["v9", "v0"], "op": "sub", "out": ["v10"]}]
+        baseline = [{"in": ["v0", "v9"], "op": "sub", "out": ["v10"]}]
         probe = [
-            {"in": ["0x11", "v0"], "op": "sub", "out": ["v50"]},   # candidate A
-            {"in": ["0x22", "v0"], "op": "sub", "out": ["v51"]},   # candidate B
-            {"in": ["0x99", "v2"], "op": "mul", "out": ["v60"]},   # natural start -- wrong op, forces resync
+            {"in": ["v0", "0x11"], "op": "sub", "out": ["v50"]},   # candidate A
+            {"in": ["v0", "0x22"], "op": "sub", "out": ["v51"]},   # candidate B
+            {"in": ["v2", "0x99"], "op": "mul", "out": ["v60"]},   # natural start -- wrong op, forces resync
         ]
 
         facts, _ = match_block_instructions(baseline, probe)
@@ -1147,17 +1188,17 @@ class TestMatchBlockInstructions:
         # own, correct, symbolic correspondent (v19)
         baseline = [
             {"in": ["v16"], "op": "array_length_bytes", "out": ["v23"]},
-            {"in": ["0x20", "v16"], "op": "add", "out": ["v24"]},
-            {"in": ["v23", "v24"], "op": "add", "out": ["v25"]},
-            {"in": ["0x20", "v16"], "op": "add", "out": ["v26"]},
-            {"in": ["v25", "v26"], "op": "abi_decode_uint256_fromMemory", "out": ["v27"]},
+            {"in": ["v16", "0x20"], "op": "add", "out": ["v24"]},
+            {"in": ["v24", "v23"], "op": "add", "out": ["v25"]},
+            {"in": ["v16", "0x20"], "op": "add", "out": ["v26"]},
+            {"in": ["v26", "v25"], "op": "abi_decode_uint256_fromMemory", "out": ["v27"]},
         ]
         probe = [
             {"in": ["v14"], "op": "array_length_bytes", "out": ["v19"]},
-            {"in": ["v19", "v14"], "op": "add", "out": ["v20"]},
-            {"in": ["0x20", "v20"], "op": "add", "out": ["v21"]},
-            {"in": ["0x20", "v14"], "op": "add", "out": ["v22"]},
-            {"in": ["v21", "v22"], "op": "abi_decode_uint256_fromMemory", "out": ["v23"]},
+            {"in": ["v14", "v19"], "op": "add", "out": ["v20"]},
+            {"in": ["v20", "0x20"], "op": "add", "out": ["v21"]},
+            {"in": ["v14", "0x20"], "op": "add", "out": ["v22"]},
+            {"in": ["v22", "v21"], "op": "abi_decode_uint256_fromMemory", "out": ["v23"]},
         ]
 
         facts, var_map = match_block_instructions(baseline, probe)
@@ -1172,10 +1213,10 @@ class TestMatchBlockInstructions:
         # syntactic identity -- valid under SSA) is filled in, so v17 is locally verifiable too.
         baseline = [
             {"in": ["v0", "v0"], "op": "sub", "out": ["v16"]},
-            {"in": ["0x64", "v16"], "op": "add", "out": ["v17"]},
-            {"in": ["v17", "v0"], "op": "revert", "out": []},
+            {"in": ["v16", "0x64"], "op": "add", "out": ["v17"]},
+            {"in": ["v0", "v17"], "op": "revert", "out": []},
         ]
-        probe = [{"in": ["0x64", "0x80"], "op": "revert", "out": []}]
+        probe = [{"in": ["0x80", "0x64"], "op": "revert", "out": []}]
         unverified = set()
 
         facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
@@ -1189,10 +1230,10 @@ class TestMatchBlockInstructions:
         # but it comes from a unique, consistent correspondence, so it is sound and kept --
         # marked unverified so a checker rejection can be traced to this, not to a wrong fact.
         baseline = [
-            {"in": ["v98", "v99"], "op": "add", "out": ["v17"]},
-            {"in": ["v17", "v0"], "op": "revert", "out": []},
+            {"in": ["v99", "v98"], "op": "add", "out": ["v17"]},
+            {"in": ["v0", "v17"], "op": "revert", "out": []},
         ]
-        probe = [{"in": ["0x64", "0x80"], "op": "revert", "out": []}]
+        probe = [{"in": ["0x80", "0x64"], "op": "revert", "out": []}]
         unverified = set()
 
         facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
@@ -1206,10 +1247,10 @@ class TestMatchBlockInstructions:
         # memory, so v6's chain can't be completed -- but the fact is still sound and kept.
         baseline = [
             {"in": ["0x40"], "op": "mload", "out": ["v5"]},
-            {"in": ["v5", "0x20"], "op": "add", "out": ["v6"]},
-            {"in": ["v6", "0x00"], "op": "revert", "out": []},
+            {"in": ["0x20", "v5"], "op": "add", "out": ["v6"]},
+            {"in": ["0x00", "v6"], "op": "revert", "out": []},
         ]
-        probe = [{"in": ["0xa0", "0x00"], "op": "revert", "out": []}]
+        probe = [{"in": ["0x00", "0xa0"], "op": "revert", "out": []}]
         unverified = set()
 
         facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
@@ -1224,10 +1265,10 @@ class TestMatchBlockInstructions:
         # dropped -- the one case where a probe-derived claim is removed rather than kept.
         baseline = [
             {"in": ["v0", "v0"], "op": "mul", "out": ["v16"]},
-            {"in": ["0x64", "v16"], "op": "add", "out": ["v17"]},
-            {"in": ["v17", "v0"], "op": "revert", "out": []},
+            {"in": ["v16", "0x64"], "op": "add", "out": ["v17"]},
+            {"in": ["v0", "v17"], "op": "revert", "out": []},
         ]
-        probe = [{"in": ["0x64", "0x80"], "op": "revert", "out": []}]
+        probe = [{"in": ["0x80", "0x64"], "op": "revert", "out": []}]
         distrusted, unverified = set(), set()
 
         facts, _ = match_block_instructions(baseline, probe, distrusted=distrusted, unverified=unverified)
@@ -1243,13 +1284,13 @@ class TestMatchBlockInstructions:
         # unverified.
         baseline = [
             {"in": ["v0", "v0"], "op": "sub", "out": ["v16"]},
-            {"in": ["v16", "0x99"], "op": "mstore", "out": []},
-            {"in": ["0x64", "v16"], "op": "add", "out": ["v17"]},
-            {"in": ["v17", "v0"], "op": "revert", "out": []},
+            {"in": ["0x99", "v16"], "op": "mstore", "out": []},
+            {"in": ["v16", "0x64"], "op": "add", "out": ["v17"]},
+            {"in": ["v0", "v17"], "op": "revert", "out": []},
         ]
         probe = [
-            {"in": ["0x05", "0x99"], "op": "mstore", "out": []},
-            {"in": ["0x64", "0x80"], "op": "revert", "out": []},
+            {"in": ["0x99", "0x05"], "op": "mstore", "out": []},
+            {"in": ["0x80", "0x64"], "op": "revert", "out": []},
         ]
         distrusted, unverified = set(), set()
 
@@ -1265,11 +1306,11 @@ class TestMatchBlockInstructions:
         # either, so no intermediate is invented: v17 is kept (sound), unverified, and v16 gets no
         # fact.
         baseline = [
-            {"in": ["v0", "0x05"], "op": "add", "out": ["v16"]},
-            {"in": ["0x64", "v16"], "op": "add", "out": ["v17"]},
-            {"in": ["v17", "v0"], "op": "revert", "out": []},
+            {"in": ["0x05", "v0"], "op": "add", "out": ["v16"]},
+            {"in": ["v16", "0x64"], "op": "add", "out": ["v17"]},
+            {"in": ["v0", "v17"], "op": "revert", "out": []},
         ]
-        probe = [{"in": ["0x64", "v99"], "op": "revert", "out": []}]
+        probe = [{"in": ["v99", "0x64"], "op": "revert", "out": []}]
         unverified = set()
 
         facts, var_map = match_block_instructions(baseline, probe, unverified=unverified)
@@ -1285,11 +1326,11 @@ class TestMatchBlockInstructions:
         # previously-valid files in the 1000-contract sweep, so it is passed through untouched.
         baseline = [
             {"in": ["v3", "v4"], "op": "PhiFunction", "out": ["phi1"]},
-            {"in": ["phi1", "0x00"], "op": "mstore", "out": []},
+            {"in": ["0x00", "phi1"], "op": "mstore", "out": []},
         ]
         probe = [
             {"in": ["v3", "v4"], "op": "PhiFunction", "out": ["phi1"]},
-            {"in": ["0x05", "0x00"], "op": "mstore", "out": []},
+            {"in": ["0x00", "0x05"], "op": "mstore", "out": []},
         ]
         unverified = set()
 
@@ -1302,12 +1343,12 @@ class TestMatchBlockInstructions:
         # sub(0x01, 0x10) is foldable, but solc never showed v1 as a literal in the probe -- this
         # module reports what the probe comparison found, not every literal fold it could do.
         baseline = [
-            {"in": ["0x01", "0x10"], "op": "sub", "out": ["v1"]},
-            {"in": ["v1", "v2"], "op": "mstore", "out": []},
+            {"in": ["0x10", "0x01"], "op": "sub", "out": ["v1"]},
+            {"in": ["v2", "v1"], "op": "mstore", "out": []},
         ]
         probe = [
-            {"in": ["0x01", "0x10"], "op": "sub", "out": ["w1"]},
-            {"in": ["w1", "v2"], "op": "mstore", "out": []},
+            {"in": ["0x10", "0x01"], "op": "sub", "out": ["w1"]},
+            {"in": ["v2", "w1"], "op": "mstore", "out": []},
         ]
 
         facts, _ = match_block_instructions(baseline, probe)
@@ -1320,12 +1361,12 @@ class TestMatchBlockInstructions:
         # (Also the shape that hung an earlier fixpoint-based version against SocketGateway,
         # 0x3a23f943181408eac424116af7b7790c94cb97a5.)
         baseline = [
-            {"in": ["vA", "vB"], "op": "add", "out": ["vBottom"]},
-            {"in": ["0x05", "vBottom"], "op": "add", "out": ["vMiddle"]},
-            {"in": ["0x64", "vMiddle"], "op": "add", "out": ["vTop"]},
-            {"in": ["vTop", "v0"], "op": "revert", "out": []},
+            {"in": ["vB", "vA"], "op": "add", "out": ["vBottom"]},
+            {"in": ["vBottom", "0x05"], "op": "add", "out": ["vMiddle"]},
+            {"in": ["vMiddle", "0x64"], "op": "add", "out": ["vTop"]},
+            {"in": ["v0", "vTop"], "op": "revert", "out": []},
         ]
-        probe = [{"in": ["0x64", "0x80"], "op": "revert", "out": []}]
+        probe = [{"in": ["0x80", "0x64"], "op": "revert", "out": []}]
         unverified = set()
 
         facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
@@ -1341,7 +1382,7 @@ class TestMatchBlockInstructions:
         baseline = [
             {"in": ["0x40"], "op": "mload", "out": ["v100"]},
             {"in": ["v100", "v100"], "op": "sub", "out": ["v109"]},
-            {"in": ["v109", "v100"], "op": "return", "out": []},
+            {"in": ["v100", "v109"], "op": "return", "out": []},
         ]
         probe = [{"in": ["0x00", "0x00"], "op": "return", "out": []}]
 
@@ -1355,7 +1396,7 @@ class TestMatchBlockInstructions:
         # sub(v21, v21) away, and in the full block an address mask's sub(0x01, v18) was the only
         # candidate left for it, claiming v21 = 0x01 (v21 is mload(0x40)).
         baseline = {"in": ["v21", "v21"], "op": "sub", "out": ["v24"]}
-        probe = {"in": ["0x01", "v18"], "op": "sub", "out": ["v19"]}
+        probe = {"in": ["v18", "0x01"], "op": "sub", "out": ["v19"]}
 
         assert _try_unify_instructions(baseline, probe, {}, {}) is None
         assert _try_unify_instructions(baseline, {"in": ["v7", "v7"], "op": "sub", "out": ["v8"]}, {}, {}) \
@@ -1368,13 +1409,13 @@ class TestMatchBlockInstructions:
         # of the two correspondences is wrong and the claim is dropped.
         baseline = [
             {"in": ["v213"], "op": "calldataload", "out": ["v214"]},
-            {"in": ["v214", "0x00"], "op": "mstore", "out": []},
-            {"in": ["v214", "0x20"], "op": "mstore", "out": []},
+            {"in": ["0x00", "v214"], "op": "mstore", "out": []},
+            {"in": ["0x20", "v214"], "op": "mstore", "out": []},
         ]
         probe = [
             {"in": ["v213"], "op": "calldataload", "out": ["v206"]},
-            {"in": ["0x24", "0x00"], "op": "mstore", "out": []},
-            {"in": ["v206", "0x20"], "op": "mstore", "out": []},
+            {"in": ["0x00", "0x24"], "op": "mstore", "out": []},
+            {"in": ["0x20", "v206"], "op": "mstore", "out": []},
         ]
 
         facts, var_map = match_block_instructions(baseline, probe, seed_var_map={"v213": "v213"})
@@ -1388,17 +1429,17 @@ class TestMatchBlockInstructions:
         # yet a reassociated add claimed v584 = 0x84.
         baseline = [
             {"in": ["0x1f"], "op": "not", "out": ["v582"]},
-            {"in": ["0x1f", "v558"], "op": "add", "out": ["v583"]},
-            {"in": ["v582", "v583"], "op": "and", "out": ["v584"]},
-            {"in": ["v584", "0x00"], "op": "mstore", "out": []},
-            {"in": ["v584", "0x20"], "op": "mstore", "out": []},
+            {"in": ["v558", "0x1f"], "op": "add", "out": ["v583"]},
+            {"in": ["v583", "v582"], "op": "and", "out": ["v584"]},
+            {"in": ["0x00", "v584"], "op": "mstore", "out": []},
+            {"in": ["0x20", "v584"], "op": "mstore", "out": []},
         ]
         probe = [
             {"in": ["0x1f"], "op": "not", "out": ["v1"]},
-            {"in": ["0x1f", "v558"], "op": "add", "out": ["v2"]},
-            {"in": ["v1", "v2"], "op": "and", "out": ["v3"]},
-            {"in": ["0x84", "0x00"], "op": "mstore", "out": []},
-            {"in": ["v3", "0x20"], "op": "mstore", "out": []},
+            {"in": ["v558", "0x1f"], "op": "add", "out": ["v2"]},
+            {"in": ["v2", "v1"], "op": "and", "out": ["v3"]},
+            {"in": ["0x00", "0x84"], "op": "mstore", "out": []},
+            {"in": ["0x20", "v3"], "op": "mstore", "out": []},
         ]
         unverified = set()
 
@@ -1414,12 +1455,12 @@ class TestMatchBlockInstructions:
         # literals, so the whole chain is emitted (the external checker doesn't replay and(x, 0) for
         # an unknown x). Raw "in" lists are reversed.
         baseline = [
-            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v0"]},
-            {"in": ["0x01", "v0"], "op": "sub", "out": ["v1"]},
-            {"in": ["v1", "0x00"], "op": "and", "out": ["v2"]},
-            {"in": ["v2", "0x40"], "op": "mstore", "out": []},
+            {"in": ["0xa0", "0x01"], "op": "shl", "out": ["v0"]},
+            {"in": ["v0", "0x01"], "op": "sub", "out": ["v1"]},
+            {"in": ["0x00", "v1"], "op": "and", "out": ["v2"]},
+            {"in": ["0x40", "v2"], "op": "mstore", "out": []},
         ]
-        probe = [{"in": ["0x00", "0x40"], "op": "mstore", "out": []}]
+        probe = [{"in": ["0x40", "0x00"], "op": "mstore", "out": []}]
         unverified = set()
 
         facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
@@ -1432,17 +1473,17 @@ class TestMatchBlockInstructions:
         # Same shape, but the mask is also used elsewhere, so the probe keeps it and it is matched
         # (it has a var_map entry, no claim of its own): it is still evaluated from the baseline.
         baseline = [
-            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v0"]},
-            {"in": ["0x01", "v0"], "op": "sub", "out": ["v1"]},
-            {"in": ["v1", "0x00"], "op": "and", "out": ["v2"]},
-            {"in": ["v2", "0x40"], "op": "mstore", "out": []},
-            {"in": ["v1", "0x60"], "op": "mstore", "out": []},
+            {"in": ["0xa0", "0x01"], "op": "shl", "out": ["v0"]},
+            {"in": ["v0", "0x01"], "op": "sub", "out": ["v1"]},
+            {"in": ["0x00", "v1"], "op": "and", "out": ["v2"]},
+            {"in": ["0x40", "v2"], "op": "mstore", "out": []},
+            {"in": ["0x60", "v1"], "op": "mstore", "out": []},
         ]
         probe = [
-            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v0"]},
-            {"in": ["0x01", "v0"], "op": "sub", "out": ["v1"]},
-            {"in": ["0x00", "0x40"], "op": "mstore", "out": []},
-            {"in": ["v1", "0x60"], "op": "mstore", "out": []},
+            {"in": ["0xa0", "0x01"], "op": "shl", "out": ["v0"]},
+            {"in": ["v0", "0x01"], "op": "sub", "out": ["v1"]},
+            {"in": ["0x40", "0x00"], "op": "mstore", "out": []},
+            {"in": ["0x60", "v1"], "op": "mstore", "out": []},
         ]
         unverified = set()
 
@@ -1457,11 +1498,11 @@ class TestMatchBlockInstructions:
         # sub(x, x) and mul(x, 0) for an unknown x: the fact is kept and marked unverified.
         baseline = [
             {"in": ["0x00"], "op": "calldataload", "out": ["v0"]},
-            {"in": ["v0", "0x00"], "op": "and", "out": ["v1"]},
-            {"in": ["v1", "0x40"], "op": "mstore", "out": []},
+            {"in": ["0x00", "v0"], "op": "and", "out": ["v1"]},
+            {"in": ["0x40", "v1"], "op": "mstore", "out": []},
         ]
         probe = [{"in": ["0x00"], "op": "calldataload", "out": ["v0"]},
-                 {"in": ["0x00", "0x40"], "op": "mstore", "out": []}]
+                 {"in": ["0x40", "0x00"], "op": "mstore", "out": []}]
         unverified = set()
 
         facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
@@ -1472,11 +1513,11 @@ class TestMatchBlockInstructions:
     def test_a_mul_by_zero_of_an_unknown_value_is_verified(self):
         baseline = [
             {"in": ["0x00"], "op": "calldataload", "out": ["v0"]},
-            {"in": ["v0", "0x00"], "op": "mul", "out": ["v1"]},
-            {"in": ["v1", "0x40"], "op": "mstore", "out": []},
+            {"in": ["0x00", "v0"], "op": "mul", "out": ["v1"]},
+            {"in": ["0x40", "v1"], "op": "mstore", "out": []},
         ]
         probe = [{"in": ["0x00"], "op": "calldataload", "out": ["v0"]},
-                 {"in": ["0x00", "0x40"], "op": "mstore", "out": []}]
+                 {"in": ["0x40", "0x00"], "op": "mstore", "out": []}]
         unverified = set()
 
         facts, _ = match_block_instructions(baseline, probe, unverified=unverified)
@@ -1491,13 +1532,13 @@ class TestMatchBlockInstructions:
         # down to the one remaining option -- per the user's guidance, align whatever's
         # unambiguously determinable rather than giving up on the whole block
         baseline = [
-            {"in": ["v9", "v0"], "op": "mstore", "out": []},    # anchor 0: pinned via order once anchor 2 resolves
-            {"in": ["0x22", "v1"], "op": "sstore", "out": []},  # anchor 1: extra -- no probe counterpart
-            {"in": ["0x99", "v0"], "op": "mstore", "out": []},  # anchor 2: distinctive literal resolves first
+            {"in": ["v0", "v9"], "op": "mstore", "out": []},    # anchor 0: pinned via order once anchor 2 resolves
+            {"in": ["v1", "0x22"], "op": "sstore", "out": []},  # anchor 1: extra -- no probe counterpart
+            {"in": ["v0", "0x99"], "op": "mstore", "out": []},  # anchor 2: distinctive literal resolves first
         ]
         probe = [
-            {"in": ["0x11", "v0"], "op": "mstore", "out": []},
-            {"in": ["0x99", "v0"], "op": "mstore", "out": []},
+            {"in": ["v0", "0x11"], "op": "mstore", "out": []},
+            {"in": ["v0", "0x99"], "op": "mstore", "out": []},
         ]
 
         facts, _ = match_block_instructions(baseline, probe)
@@ -1513,20 +1554,20 @@ class TestMatchBlockInstructions:
         # the first shl/sub pair from before the sload to after it, since neither touches
         # storage -- a fixed "segment strictly between two anchors" model would miss this
         baseline = [
-            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v1"]},
-            {"in": ["0x01", "v1"], "op": "sub", "out": ["v2"]},
+            {"in": ["0xa0", "0x01"], "op": "shl", "out": ["v1"]},
+            {"in": ["v1", "0x01"], "op": "sub", "out": ["v2"]},
             {"in": ["0x00"], "op": "sload", "out": ["v3"]},
-            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v4"]},
-            {"in": ["0x01", "v4"], "op": "sub", "out": ["v5"]},
-            {"in": ["v5", "v28"], "op": "and", "out": ["v6"]},
+            {"in": ["0xa0", "0x01"], "op": "shl", "out": ["v4"]},
+            {"in": ["v4", "0x01"], "op": "sub", "out": ["v5"]},
+            {"in": ["v28", "v5"], "op": "and", "out": ["v6"]},
         ]
         probe = [
             {"in": ["0x00"], "op": "sload", "out": ["v10"]},
-            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v11"]},
-            {"in": ["0x01", "v11"], "op": "sub", "out": ["v12"]},
-            {"in": ["0x01", "0xa0"], "op": "shl", "out": ["v13"]},
-            {"in": ["0x01", "v13"], "op": "sub", "out": ["v14"]},
-            {"in": ["v14", "v28"], "op": "and", "out": ["v15"]},
+            {"in": ["0xa0", "0x01"], "op": "shl", "out": ["v11"]},
+            {"in": ["v11", "0x01"], "op": "sub", "out": ["v12"]},
+            {"in": ["0xa0", "0x01"], "op": "shl", "out": ["v13"]},
+            {"in": ["v13", "0x01"], "op": "sub", "out": ["v14"]},
+            {"in": ["v28", "v14"], "op": "and", "out": ["v15"]},
         ]
 
         _, var_map = match_block_instructions(baseline, probe)
@@ -1540,8 +1581,8 @@ class TestMatchBlockInstructions:
         # solc is free to reorder a commutative op's operands; the natural (positional) order
         # here hard-fails (two different literals at the literal-vs-literal position), so the
         # swap is unambiguously the only viable interpretation, not just a preference
-        baseline = [{"in": ["0x05", "v9"], "op": "add", "out": ["v1"]}]
-        probe = [{"in": ["0x2a", "0x05"], "op": "add", "out": ["v1"]}]
+        baseline = [{"in": ["v9", "0x05"], "op": "add", "out": ["v1"]}]
+        probe = [{"in": ["0x05", "0x2a"], "op": "add", "out": ["v1"]}]
 
         facts, _ = match_block_instructions(baseline, probe)
 
@@ -1556,18 +1597,18 @@ class TestMatchBlockInstructions:
         # no constant to find either way); a genuinely unrelated fact elsewhere in the same
         # block is still found cleanly
         baseline = [
-            {"in": ["0x20", "v9"], "op": "add", "out": ["v2"]},
-            {"in": ["v10", "v2"], "op": "add", "out": ["v3"]},
-            {"in": ["v3", "v0"], "op": "mstore", "out": []},
-            {"in": ["v20", "0x07"], "op": "add", "out": ["v21"]},  # unrelated -- v20 becomes a literal in probe
-            {"in": ["v21", "v1"], "op": "mstore", "out": []},
+            {"in": ["v9", "0x20"], "op": "add", "out": ["v2"]},
+            {"in": ["v2", "v10"], "op": "add", "out": ["v3"]},
+            {"in": ["v0", "v3"], "op": "mstore", "out": []},
+            {"in": ["0x07", "v20"], "op": "add", "out": ["v21"]},  # unrelated -- v20 becomes a literal in probe
+            {"in": ["v1", "v21"], "op": "mstore", "out": []},
         ]
         probe = [
-            {"in": ["v10", "v9"], "op": "add", "out": ["v2b"]},   # reassociated: (v10+v9) computed first
-            {"in": ["0x20", "v2b"], "op": "add", "out": ["v3b"]},  # same final value, different grouping
-            {"in": ["v3b", "v0"], "op": "mstore", "out": []},
-            {"in": ["0x99", "0x07"], "op": "add", "out": ["v21b"]},
-            {"in": ["v21b", "v1"], "op": "mstore", "out": []},
+            {"in": ["v9", "v10"], "op": "add", "out": ["v2b"]},   # reassociated: (v10+v9) computed first
+            {"in": ["v2b", "0x20"], "op": "add", "out": ["v3b"]},  # same final value, different grouping
+            {"in": ["v0", "v3b"], "op": "mstore", "out": []},
+            {"in": ["0x07", "0x99"], "op": "add", "out": ["v21b"]},
+            {"in": ["v1", "v21b"], "op": "mstore", "out": []},
         ]
 
         facts, _ = match_block_instructions(baseline, probe)
@@ -1581,18 +1622,18 @@ class TestMatchBlockInstructions:
         # reassociated-region variables are pre-seeded in var_map in this fixture -- but this
         # locks that in directly rather than relying on that reasoning alone.
         baseline = [
-            {"in": ["0x20", "v9"], "op": "add", "out": ["v2"]},
-            {"in": ["v10", "v2"], "op": "add", "out": ["v3"]},
-            {"in": ["v3", "v0"], "op": "mstore", "out": []},
-            {"in": ["v20", "0x07"], "op": "add", "out": ["v21"]},
-            {"in": ["v21", "v1"], "op": "mstore", "out": []},
+            {"in": ["v9", "0x20"], "op": "add", "out": ["v2"]},
+            {"in": ["v2", "v10"], "op": "add", "out": ["v3"]},
+            {"in": ["v0", "v3"], "op": "mstore", "out": []},
+            {"in": ["0x07", "v20"], "op": "add", "out": ["v21"]},
+            {"in": ["v1", "v21"], "op": "mstore", "out": []},
         ]
         probe = [
-            {"in": ["v10", "v9"], "op": "add", "out": ["v2b"]},
-            {"in": ["0x20", "v2b"], "op": "add", "out": ["v3b"]},
-            {"in": ["v3b", "v0"], "op": "mstore", "out": []},
-            {"in": ["0x99", "0x07"], "op": "add", "out": ["v21b"]},
-            {"in": ["v21b", "v1"], "op": "mstore", "out": []},
+            {"in": ["v9", "v10"], "op": "add", "out": ["v2b"]},
+            {"in": ["v2b", "0x20"], "op": "add", "out": ["v3b"]},
+            {"in": ["v0", "v3b"], "op": "mstore", "out": []},
+            {"in": ["0x07", "0x99"], "op": "add", "out": ["v21b"]},
+            {"in": ["v1", "v21b"], "op": "mstore", "out": []},
         ]
         probe_defs = _scope_defining_instructions([{"instructions": probe}])
 
@@ -1606,13 +1647,13 @@ class TestMatchBlockInstructions:
         # and(0x01, v15) fresh at the use site instead of reusing its own v18. Without probe_defs
         # this positional conflict (var_map already says v18 -> v18, but probe's actual argument
         # here is v23) would reject the whole instruction outright.
-        baseline = [{"in": ["v21", "v18"], "op": "eq", "out": ["v22"]}]
+        baseline = [{"in": ["v18", "v21"], "op": "eq", "out": ["v22"]}]
         probe = [
-            {"in": ["0x01", "v15"], "op": "and", "out": ["v23"]},
-            {"in": ["v21", "v23"], "op": "eq", "out": ["v24"]},
+            {"in": ["v15", "0x01"], "op": "and", "out": ["v23"]},
+            {"in": ["v23", "v21"], "op": "eq", "out": ["v24"]},
         ]
         probe_defs = _scope_defining_instructions([
-            {"instructions": [{"in": ["0x01", "v15"], "op": "and", "out": ["v18"]}]},  # ancestor block
+            {"instructions": [{"in": ["v15", "0x01"], "op": "and", "out": ["v18"]}]},  # ancestor block
             {"instructions": probe},
         ])
         seed_var_map = {"v18": "v18", "v21": "v21"}
@@ -1626,10 +1667,10 @@ class TestMatchBlockInstructions:
         # be several per-call-site literal copies into one shared, named variable -- so baseline
         # can inline a literal directly (slt(0x00, ...)) while probe references an earlier
         # same-block LiteralAssignment with the identical value at that same argument position.
-        baseline = [{"in": ["0x00", "v2"], "op": "slt", "out": ["v3"]}]
+        baseline = [{"in": ["v2", "0x00"], "op": "slt", "out": ["v3"]}]
         probe = [
             {"in": ["0x00"], "op": "LiteralAssignment", "out": ["v1"]},
-            {"in": ["v1", "v4"], "op": "slt", "out": ["v3b"]},
+            {"in": ["v4", "v1"], "op": "slt", "out": ["v3b"]},
         ]
 
         facts, var_map = match_block_instructions(baseline, probe)
@@ -1644,19 +1685,19 @@ class TestMatchBlockInstructions:
         # lock alongside the new probe-side resolution above.
         baseline = [
             {"in": ["0x00"], "op": "LiteralAssignment", "out": ["v1"]},
-            {"in": ["v1", "v2"], "op": "slt", "out": ["v3"]},
+            {"in": ["v2", "v1"], "op": "slt", "out": ["v3"]},
         ]
-        probe = [{"in": ["0x00", "v4"], "op": "slt", "out": ["v3b"]}]
+        probe = [{"in": ["v4", "0x00"], "op": "slt", "out": ["v3b"]}]
 
         facts, _ = match_block_instructions(baseline, probe)
 
         assert facts == {1: {"v1": "0x00"}}
 
     def test_a_materialized_literal_that_genuinely_differs_is_not_matched(self):
-        baseline = [{"in": ["0x00", "v2"], "op": "slt", "out": ["v3"]}]
+        baseline = [{"in": ["v2", "0x00"], "op": "slt", "out": ["v3"]}]
         probe = [
             {"in": ["0x01"], "op": "LiteralAssignment", "out": ["v1"]},
-            {"in": ["v1", "v4"], "op": "slt", "out": ["v3b"]},
+            {"in": ["v4", "v1"], "op": "slt", "out": ["v3b"]},
         ]
 
         facts, var_map = match_block_instructions(baseline, probe)
@@ -1671,8 +1712,8 @@ class TestMatchBlockInstructions:
         # probe_literal_table's block-local scan (_direct_literal_table only sees this block's
         # own instructions), so probe_defs (_scope_defining_instructions, scope-wide) is needed
         # to still recognize it via _resolve_scope_literal.
-        baseline = [{"in": ["0x00", "v2"], "op": "slt", "out": ["v3"]}]
-        probe = [{"in": ["v1", "v4"], "op": "slt", "out": ["v3b"]}]
+        baseline = [{"in": ["v2", "0x00"], "op": "slt", "out": ["v3"]}]
+        probe = [{"in": ["v4", "v1"], "op": "slt", "out": ["v3b"]}]
         probe_defs = _scope_defining_instructions([
             {"instructions": [{"in": ["0x00"], "op": "LiteralAssignment", "out": ["v1"]}]},  # ancestor block
             {"instructions": probe},
@@ -1687,8 +1728,8 @@ class TestMatchBlockInstructions:
         # _resolve_scope_literal must not misfire for a variable that merely happens to be
         # findable in probe_defs but isn't a LiteralAssignment (e.g. it's a runtime SLOAD) --
         # the instruction should still fail to unify, same as with no probe_defs at all.
-        baseline = [{"in": ["0x00", "v2"], "op": "slt", "out": ["v3"]}]
-        probe = [{"in": ["v1", "v4"], "op": "slt", "out": ["v3b"]}]
+        baseline = [{"in": ["v2", "0x00"], "op": "slt", "out": ["v3"]}]
+        probe = [{"in": ["v4", "v1"], "op": "slt", "out": ["v3b"]}]
         probe_defs = _scope_defining_instructions([
             {"instructions": [{"in": ["0x03"], "op": "sload", "out": ["v1"]}]},
             {"instructions": probe},
@@ -1704,24 +1745,24 @@ class TestExtractSeedFactsForInstructions:
     def test_finds_variable_to_literal_substitution(self):
         baseline = [
             {"in": ["0x20"], "op": "LiteralAssignment", "out": ["v0"]},
-            {"in": ["v2", "v0"], "op": "add", "out": ["v1"]},
+            {"in": ["v0", "v2"], "op": "add", "out": ["v1"]},
         ]
-        probe = [{"in": ["v2", "0x20"], "op": "add", "out": ["v1"]}]
+        probe = [{"in": ["0x20", "v2"], "op": "add", "out": ["v1"]}]
 
         facts = extract_seed_facts_for_instructions(baseline, probe)
 
         assert facts == {1: {"v0": "0x20"}}
 
     def test_no_facts_when_nothing_changes(self):
-        baseline = [{"in": ["v1", "v2"], "op": "add", "out": ["v3"]}]
-        probe = [{"in": ["v1", "v2"], "op": "add", "out": ["v3"]}]
+        baseline = [{"in": ["v2", "v1"], "op": "add", "out": ["v3"]}]
+        probe = [{"in": ["v2", "v1"], "op": "add", "out": ["v3"]}]
 
         assert extract_seed_facts_for_instructions(baseline, probe) == {}
 
     def test_argument_count_change_is_ignored(self):
         # Not a pure literal substitution (e.g. an argument was dropped by some other
         # optimization); must not be reported as a fact
-        baseline = [{"in": ["v1", "v2"], "op": "add", "out": ["v3"]}]
+        baseline = [{"in": ["v2", "v1"], "op": "add", "out": ["v3"]}]
         probe = [{"in": ["v1"], "op": "add", "out": ["v3"]}]
 
         assert extract_seed_facts_for_instructions(baseline, probe) == {}
@@ -1788,7 +1829,7 @@ class TestExtractSeedFactsForContract:
             "Main": {
                 "blocks": [{"id": "Block0", "exit": {"type": "Terminated", "targets": []}, "instructions": [
                     {"in": ["0x20"], "op": "LiteralAssignment", "out": ["v0"]},
-                    {"in": ["v2", "v0"], "op": "add", "out": ["v1"]},
+                    {"in": ["v0", "v2"], "op": "add", "out": ["v1"]},
                 ]}],
                 "functions": {},
                 "subObjects": {},
@@ -1798,7 +1839,7 @@ class TestExtractSeedFactsForContract:
             "type": "Object",
             "Main": {
                 "blocks": [{"id": "Block0", "exit": {"type": "Terminated", "targets": []}, "instructions": [
-                    {"in": ["v2", "0x20"], "op": "add", "out": ["v1"]},
+                    {"in": ["0x20", "v2"], "op": "add", "out": ["v1"]},
                 ]}],
                 "functions": {},
                 "subObjects": {},
@@ -1815,9 +1856,9 @@ class TestExtractSeedFactsForContract:
             "Main": {
                 "blocks": [
                     {"id": "Block0", "exit": {"type": "Jump", "targets": ["Block1"]},
-                     "instructions": [{"in": ["v9", "v0"], "op": "sub", "out": ["v10"]}]},
+                     "instructions": [{"in": ["v0", "v9"], "op": "sub", "out": ["v10"]}]},
                     {"id": "Block1", "exit": {"type": "Terminated", "targets": []},
-                     "instructions": [{"in": ["v9", "v100"], "op": "sub", "out": ["v60"]}]},
+                     "instructions": [{"in": ["v100", "v9"], "op": "sub", "out": ["v60"]}]},
                 ],
                 "functions": {}, "subObjects": {},
             },
@@ -1827,12 +1868,12 @@ class TestExtractSeedFactsForContract:
             "Main": {
                 "blocks": [
                     {"id": "Block0", "exit": {"type": "Jump", "targets": ["Block1"]},
-                     "instructions": [{"in": ["v88", "v0"], "op": "sub", "out": ["v10"]}]},
+                     "instructions": [{"in": ["v0", "v88"], "op": "sub", "out": ["v10"]}]},
                     {"id": "Block1", "exit": {"type": "Terminated", "targets": []},
                      "instructions": [
-                         {"in": ["v77", "0x55"], "op": "sub", "out": ["v70"]},   # wrong candidate
-                         {"in": ["v88", "0x66"], "op": "sub", "out": ["v71"]},   # matches Block0's v9<->v88
-                         {"in": ["0x99", "v5"], "op": "mul", "out": ["v40"]},    # natural start -- forces resync
+                         {"in": ["0x55", "v77"], "op": "sub", "out": ["v70"]},   # wrong candidate
+                         {"in": ["0x66", "v88"], "op": "sub", "out": ["v71"]},   # matches Block0's v9<->v88
+                         {"in": ["v5", "0x99"], "op": "mul", "out": ["v40"]},    # natural start -- forces resync
                      ]},
                 ],
                 "functions": {}, "subObjects": {},

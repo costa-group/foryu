@@ -15,7 +15,7 @@ def _baseline_and_probe():
                             "liveness": {"in": [], "out": []},
                             "instructions": [
                                 {"in": ["0x20"], "op": "LiteralAssignment", "out": ["v0"]},
-                                {"in": ["v2", "v0"], "op": "add", "out": ["v1"]},
+                                {"in": ["v0", "v2"], "op": "add", "out": ["v1"]},
                             ]}],
                 "functions": {}, "subObjects": {},
             },
@@ -28,7 +28,7 @@ def _baseline_and_probe():
                 "blocks": [{"id": "Block0", "exit": {"type": "Terminated", "targets": []},
                             "liveness": {"in": [], "out": []},
                             "instructions": [
-                                {"in": ["v2", "0x20"], "op": "add", "out": ["v1"]},
+                                {"in": ["0x20", "v2"], "op": "add", "out": ["v1"]},
                             ]}],
                 "functions": {}, "subObjects": {},
             },
@@ -108,11 +108,11 @@ def test_an_unverified_fact_stays_in_constancy_and_is_marked_wherever_it_propaga
                  "liveness": {"in": ["v17"], "out": []}, "instructions": block1_instrs},
             ],
             "functions": {}, "subObjects": {}}}}
-    baseline = scope([{"in": ["v98", "v99"], "op": "add", "out": ["v17"]},
-                      {"in": ["v17", "0x00"], "op": "mstore", "out": []}],
-                     [{"in": ["v17", "0x20"], "op": "mstore", "out": []}])
-    probe = scope([{"in": ["0x64", "0x00"], "op": "mstore", "out": []}],
-                  [{"in": ["0x64", "0x20"], "op": "mstore", "out": []}])
+    baseline = scope([{"in": ["v99", "v98"], "op": "add", "out": ["v17"]},
+                      {"in": ["0x00", "v17"], "op": "mstore", "out": []}],
+                     [{"in": ["0x20", "v17"], "op": "mstore", "out": []}])
+    probe = scope([{"in": ["0x00", "0x64"], "op": "mstore", "out": []}],
+                  [{"in": ["0x20", "0x64"], "op": "mstore", "out": []}])
 
     annotated, _ = annotate_constancy_between(baseline, probe)
 

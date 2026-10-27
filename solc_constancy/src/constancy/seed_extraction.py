@@ -332,18 +332,17 @@ def _unused_arg_positions(op: Optional[str], baseline_in: List[var_id_T],
     """
     Raw ("in"-list) positions of op's arguments that the instruction never reads, because the
     size of the region they describe is 0 on either side (a baseline literal 0, or a probe argument
-    resolving to 0). Raw "in" lists are reversed relative to textual Yul order (see
-    evm_arithmetic.evaluate), hence the index flip.
+    resolving to 0). Raw "in" lists are in textual Yul order (solc 0.8.36+, see
+    evm_arithmetic.evaluate), so the indices apply to them directly.
     """
     n = len(baseline_in)
     unused: Set[int] = set()
     for size_idx, dependent in _ZERO_SIZE_UNUSED_ARGS.get(op, []):
         if size_idx >= n:
             continue
-        raw_size = n - 1 - size_idx
-        sizes = [baseline_in[raw_size] if is_literal(baseline_in[raw_size]) else None, probe_resolved[raw_size]]
+        sizes = [baseline_in[size_idx] if is_literal(baseline_in[size_idx]) else None, probe_resolved[size_idx]]
         if any(size is not None and int(size, 16) == 0 for size in sizes):
-            unused.update(n - 1 - idx for idx in dependent)
+            unused.update(idx for idx in dependent if idx < n)
     return unused
 
 
@@ -1671,8 +1670,14 @@ def _match_scope_once(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[
     # definition in the scope, the output of an op it doesn't fold (calldataload, mload, calls, ...),
     # or a phi output with an input not known to be that same constant (the checker's phi rule).
     # Foldable-op outputs are sorted by _ground_locally_derived_facts, in their defining block.
+    # A phi claim that passes the phi rule is also recorded at the phi itself when only later
+    # blocks make it: at a loop header, propagation's single pass resolves the phi before the
+    # back-edge predecessor is known, so its block would lack the fact the later claims rely on.
     definitions = {out: instr for block in baseline_blocks for instr in block.get("instructions", [])
                    for out in instr.get("out", [])}
+    phi_home = {out: (block["id"], idx) for block in baseline_blocks
+                for idx, instr in enumerate(block.get("instructions", []))
+                if instr.get("op") == "PhiFunction" for out in instr.get("out", [])}
 
     def same_constant(arg: var_id_T, value: int) -> bool:
         if is_literal(arg):
@@ -1685,6 +1690,10 @@ def _match_scope_once(baseline_blocks: List[Dict[str, Any]], probe_blocks: List[
         if op == "PhiFunction":
             if not all(same_constant(arg, next(iter(values[var]))) for arg in instr.get("in", [])):
                 unverified.add(var)
+            elif var in phi_home:
+                home_id, phi_idx = phi_home[var]
+                if not any(var in var_facts for var_facts in facts_by_block.get(home_id, {}).values()):
+                    facts_by_block.setdefault(home_id, {}).setdefault(phi_idx, {})[var] = claimed[var]
         elif op != "LiteralAssignment" and op not in _FOLDABLE_OPS:
             unverified.add(var)
 

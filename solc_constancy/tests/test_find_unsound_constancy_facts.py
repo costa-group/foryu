@@ -227,7 +227,7 @@ def test_end_to_end_against_the_real_binary_finds_the_self_subtraction_fact():
                                 "liveness": {"in": ["v0"], "out": []},
                                 "instructions": [
                                     {"in": ["v0", "v0"], "op": "sub", "out": ["v40"]},
-                                    {"in": ["0x20", "v40"], "op": "add", "out": ["v41"]},
+                                    {"in": ["v40", "0x20"], "op": "add", "out": ["v41"]},
                                     {"in": ["v41"], "op": "pop", "out": []},
                                 ],
                                 "constancy": [{}, {}, {"v41": "0x20"}, {}],

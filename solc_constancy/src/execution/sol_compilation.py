@@ -13,6 +13,7 @@ import subprocess
 import shlex
 import logging
 import tempfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Any, Tuple, List, Optional, Callable, Union
 from global_params.types import Yul_CFG_T
@@ -67,6 +68,13 @@ def extract_version_from_output(output_sol: str) -> str:
         return match.group(1)
     else:
         raise ValueError(f"{output_sol} does not contain solc version in proper format")
+
+
+@lru_cache(maxsize=None)
+def solc_version(solc_command: str) -> Tuple[int, ...]:
+    """The (major, minor, patch) version of the given solc binary, from its --version output."""
+    output, _ = run_command(f"{solc_command} --version", timeout=60)
+    return tuple(int(part) for part in extract_version_from_output(output).split("."))
 
 
 def change_pragma(initial_contract: str, pragma_name: str = "0.8.17"):
@@ -456,6 +464,11 @@ class SolidityCompilation:
         json_input["settings"]["metadata"]["appendCBOR"] = False
         json_input["settings"]["metadata"]["useLiteralContent"] = False
         json_input["settings"]["metadata"]["bytecodeHash"] = "none"
+
+        # From 0.8.35 on, solc only emits yulCFGJson (an experimental output) with this enabled;
+        # earlier versions reject the key
+        if solc_version(str(self._solc_command)) >= (0, 8, 35):
+            json_input["settings"]["experimental"] = True
 
         # Force a fixed Yul optimizer step sequence if one was requested
         if self._optimizer_steps is not None:

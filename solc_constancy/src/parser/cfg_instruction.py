@@ -282,6 +282,9 @@ class CFGInstruction:
 
 
     def translate_memoryguard(self) :
+        # solc 0.8.36+ emits memoryguard without literal args: nothing to push, keep it as is
+        if not self.literal_args:
+            return
         #It is translated as a push directly
         self.op = "push"
         new_literals = []

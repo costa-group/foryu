@@ -108,15 +108,15 @@ FOLDABLE_OPS = {
 
 def evaluate(op: str, in_args: List[str]) -> Optional[str]:
     """
-    The result of applying op to in_args -- an instruction's raw "in" list, exactly as read
-    (this function owns the reversal, see the module docstring) -- as a lowercase hex string, or
-    None if op isn't one of FOLDABLE_OPS or in_args doesn't match its arity.
+    The result of applying op to in_args -- an instruction's raw "in" list, exactly as read: since
+    solc 0.8.36 it is in textual Yul order (sub(a, b) is ["a", "b"]) -- as a lowercase hex string,
+    or None if op isn't one of FOLDABLE_OPS or in_args doesn't match its arity.
     """
     func = FOLDABLE_OPS.get(op)
     if func is None:
         return None
     try:
-        operands = [int(v, 16) for v in reversed(in_args)]
+        operands = [int(v, 16) for v in in_args]
         return _to_hex(func(*operands))
     except (TypeError, ValueError):
         return None
